@@ -1,32 +1,37 @@
 const { DataTypes } = require('sequelize');
 const sequelize = require('../config/database');
 
-const File = sequelize.define(
-  'File',
+const SheetData = sequelize.define(
+  'SheetData',
   {
     id: {
       type: DataTypes.UUID,
       defaultValue: DataTypes.UUIDV4,
       primaryKey: true,
     },
-    filename: {
-      type: DataTypes.STRING(255),
+    rowIndex: {
+      type: DataTypes.INTEGER,
       allowNull: false,
     },
-    templateId: {
+    value: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+    headerId: {
       type: DataTypes.UUID,
       allowNull: false,
     },
   },
   {
-    tableName: 'File',
+    tableName: 'SheetData',
     timestamps: false,
     indexes: [
       {
-        fields: ['templateId'],
+        unique: true,
+        fields: ['headerId', 'rowIndex'],
       },
     ],
   }
 );
 
-module.exports = File;
+module.exports = SheetData;

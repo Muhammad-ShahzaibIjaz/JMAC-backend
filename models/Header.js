@@ -1,17 +1,27 @@
 const { DataTypes } = require('sequelize');
 const sequelize = require('../config/database');
 
-const File = sequelize.define(
-  'File',
+const Header = sequelize.define(
+  'Header',
   {
     id: {
       type: DataTypes.UUID,
       defaultValue: DataTypes.UUIDV4,
       primaryKey: true,
     },
-    filename: {
+    name: {
       type: DataTypes.STRING(255),
       allowNull: false,
+    },
+    criticalityLevel: {
+      type: DataTypes.ENUM('1', '2', '3'),
+      allowNull: false,
+      defaultValue: '3',
+    },
+    columnType: {
+      type: DataTypes.ENUM('text', 'integer', 'decimal', 'Date', 'Y/N', 'character'),
+      allowNull: false,
+      defaultValue: 'text',
     },
     templateId: {
       type: DataTypes.UUID,
@@ -19,14 +29,14 @@ const File = sequelize.define(
     },
   },
   {
-    tableName: 'File',
+    tableName: 'Header',
     timestamps: false,
     indexes: [
       {
-        fields: ['templateId'],
+        fields: ['id'],
       },
     ],
   }
 );
 
-module.exports = File;
+module.exports = Header;

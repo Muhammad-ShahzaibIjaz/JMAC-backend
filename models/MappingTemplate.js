@@ -2,8 +2,8 @@ const { DataTypes } = require("sequelize");
 const sequelize = require("../config/database");
 
 
-const Template = sequelize.define(
-  'Template',
+const Mapping_Template = sequelize.define(
+  'MappingTemplate',
   {
     id: {
       type: DataTypes.UUID,
@@ -14,9 +14,13 @@ const Template = sequelize.define(
       type: DataTypes.STRING(255),
       allowNull: false,
     },
+    templateId: {
+      type: DataTypes.UUID,
+      allowNull: false, 
+    }
   },
   {
-    tableName: 'Template',
+    tableName: 'MappingTemplate',
     timestamps: true,
     indexes: [
       {
@@ -28,5 +32,5 @@ const Template = sequelize.define(
 );
 
 
-module.exports = Template;
+module.exports = Mapping_Template;
 

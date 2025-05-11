@@ -1,32 +1,32 @@
 const { DataTypes } = require('sequelize');
 const sequelize = require('../config/database');
 
-const File = sequelize.define(
-  'File',
+const MapHeader = sequelize.define(
+  'MapHeader',
   {
     id: {
       type: DataTypes.UUID,
       defaultValue: DataTypes.UUIDV4,
       primaryKey: true,
     },
-    filename: {
+    name: {
       type: DataTypes.STRING(255),
       allowNull: false,
     },
-    templateId: {
+    mappingTemplateId: {
       type: DataTypes.UUID,
       allowNull: false,
     },
+    headerId: {
+      type: DataTypes.UUID,
+      allowNull: false,
+    }
   },
   {
-    tableName: 'File',
+    tableName: 'MapHeader',
     timestamps: false,
-    indexes: [
-      {
-        fields: ['templateId'],
-      },
-    ],
+    indexes: [{ fields: ["mappingTemplateId", "headerId"] }],
   }
 );
 
-module.exports = File;
+module.exports = MapHeader;

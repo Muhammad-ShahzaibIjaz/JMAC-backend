@@ -1,4 +1,5 @@
 const sequelize = require('../config/database');
+const models = require('../models');
 
 sequelize.sync({ alter: true })
 .then(() => {

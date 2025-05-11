@@ -1,12 +1,13 @@
 const express = require("express");
 const router = express.Router();
-const { handleHeaderProcessing, deleteUploadedFile, deleteUploadedFiles } = require('../controllers/excelController');
+const { uploadAndGetHeaders, getFileSheets, processAndSaveSelectedSheets} = require('../controllers/excelController');
 const upload = require('../middlewares/fileUpload');
 
 
-router.post('/upload/header', upload.any(), handleHeaderProcessing);
-router.delete('/upload/file', deleteUploadedFile );
-router.delete('/upload/files', deleteUploadedFiles);
+
+router.post('/upload-and-get-headers', upload ,uploadAndGetHeaders);
+router.post('/get-sheets', upload ,getFileSheets);
+router.post('/upload-and-get-selected-headers', upload ,processAndSaveSelectedSheets);
 
 
 module.exports = router;
