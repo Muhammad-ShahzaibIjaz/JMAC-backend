@@ -24,7 +24,7 @@ const MapHeader = sequelize.define(
   },
   {
     tableName: 'MapHeader',
-    timestamps: false,
+    timestamps: true,
     indexes: [{ fields: ["mappingTemplateId", "headerId"] }],
   }
 );

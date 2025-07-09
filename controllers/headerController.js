@@ -1,4 +1,4 @@
-const { Header, Template } = require('../models');
+const { Header, Template, SheetData, SheetDataSnapshot, OperationLog } = require('../models');
 const MapHeader = require('../models/MapHeader');
 const MappingTemplate = require('../models/MappingTemplate');
 const sequelize = require('../config/database');
@@ -296,6 +296,121 @@ async function getMapHeaders({ templateId, mappingTemplateId, fileHeaders }) {
 }
 
 
+async function getHeaderID(templateId) {
+  try {
+    const header = await Header.findOne({
+      where: {
+        name: "MatrixPop",
+        templateId: templateId
+      },
+      attributes: ['id']
+    });
+    
+    return header ? header.id : null;
+  } catch (error) {
+    console.error('Error fetching header ID:', error);
+    throw error;
+  }
+}
+
+
+async function createRunTimeHeader(req, res) {
+  const transaction = await sequelize.transaction();
+  try {
+    const { templateId, name, criticalityLevel, columnType } = req.body;
+
+    // Validate inputs
+    if (!name || typeof name !== 'string' || name.trim().length === 0) {
+      throw new Error('Name is required and must be a non-empty string');
+    }
+    if (!criticalityLevel || !['1', '2', '3'].includes(criticalityLevel)) {
+      throw new Error("Criticality level must be one of '1', '2', '3'");
+    }
+    if (!columnType || !['text', 'integer', 'decimal', 'Date', 'Y/N', 'number', 'character'].includes(columnType)) {
+      throw new Error("Column type must be one of 'text', 'integer', 'decimal', 'Date', 'Y/N', 'number', 'character'");
+    }
+
+    // Create OperationLog entry
+    const operationLog = await OperationLog.create(
+      {
+        id: uuidv4(),
+        templateId,
+        operationType: 'ADD_HEADER',
+      },
+      { transaction }
+    );
+
+    // Create new Header
+    const header = await Header.create(
+      {
+        id: uuidv4(),
+        name: name.trim(),
+        criticalityLevel,
+        columnType,
+        templateId,
+      },
+      { transaction }
+    );
+
+    // Find maximum rowIndex for the template by joining with Header
+    const [result] = await sequelize.query(
+      `
+      SELECT MAX(sd."rowIndex") as "maxRow"
+      FROM "SheetData" sd
+      JOIN "Header" h ON sd."headerId" = h.id
+      WHERE h."templateId" = :templateId
+      `,
+      {
+        replacements: { templateId },
+        type: sequelize.QueryTypes.SELECT,
+        transaction,
+      }
+    );
+
+    const maxRow = result?.maxRow - 1 || 0;
+
+    // Create empty SheetData entries for all rows for the new header
+    const sheetDataEntries = [];
+    const snapshotEntries = [];
+
+    for (let i = 0; i <= maxRow; i++) {
+      const sheetDataId = uuidv4();
+      sheetDataEntries.push({
+        id: sheetDataId,
+        rowIndex: i+1,
+        value: null,
+        headerId: header.id,
+      });
+
+      // Create snapshot for potential revert
+      snapshotEntries.push({
+        id: uuidv4(),
+        operationLogId: operationLog.id,
+        headerId: header.id,
+        rowIndex: i,
+        originalValue: null,
+        newValue: null,
+        changeType: 'INSERT',
+      });
+    }
+
+    // Bulk create SheetData entries
+    await SheetData.bulkCreate(sheetDataEntries, { transaction });
+
+    // Bulk create SheetDataSnapshot entries
+    await SheetDataSnapshot.bulkCreate(snapshotEntries, { transaction });
+
+    await transaction.commit();
+    res.status(200).json({
+      message: "Header created successfully",
+      headerId: header.id,
+      operationLogId: operationLog.id,
+    });
+  } catch (error) {
+    await transaction.rollback();
+    res.status(500).json({ error: error.message });
+  }
+}
 
 
 module.exports = {
@@ -305,5 +420,7 @@ module.exports = {
   getHeader,
   exportHeaders,
   getHeadersWithMapHeaders,
-  getMapHeaders
+  getMapHeaders,
+  getHeaderID,
+  createRunTimeHeader
 };

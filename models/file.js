@@ -20,7 +20,7 @@ const File = sequelize.define(
   },
   {
     tableName: 'File',
-    timestamps: false,
+    timestamps: true,
     indexes: [
       {
         fields: ['templateId'],

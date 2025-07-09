@@ -7,38 +7,156 @@ function isRowEmpty(row) {
   return row.every((cell) => cell === null || cell === undefined || cell === "");
 }
 
-function processDataRows(jsonData, maxConsecutiveEmptyRows = 10) {
-  if (!jsonData || jsonData.length < 1) {
-    return { data: [], rowsSkipped: 0 };
-  }
+// function processDataRows(jsonData, maxConsecutiveEmptyRows = 10) {
+//   if (!jsonData || jsonData.length < 1) {
+//     return { data: [], rowsSkipped: 0 };
+//   }
   
-  const headers = jsonData[0] || [];
-  const dataRows = jsonData.slice(1) || [];
-  const cleanedRows = [];
-  let consecutiveEmptyRows = 0;
+//   const headers = jsonData[0] || [];
+//   const dataRows = jsonData.slice(1) || [];
+//   const cleanedRows = [];
+//   let consecutiveEmptyRows = 0;
 
-  for (const row of dataRows) {
-    if (isRowEmpty(row)) {
-      consecutiveEmptyRows++;
-      if (consecutiveEmptyRows >= maxConsecutiveEmptyRows) break;
-      continue;
-    }
-    consecutiveEmptyRows = 0;
-    cleanedRows.push(row);
-  }
+//   for (const row of dataRows) {
+//     if (isRowEmpty(row)) {
+//       consecutiveEmptyRows++;
+//       if (consecutiveEmptyRows >= maxConsecutiveEmptyRows) break;
+//       continue;
+//     }
+//     consecutiveEmptyRows = 0;
+//     cleanedRows.push(row);
+//   }
   
-  const processedData = headers.length > 0 ? [headers, ...cleanedRows] : cleanedRows;
-  return { data: processedData };
+//   const processedData = headers.length > 0 ? [headers, ...cleanedRows] : cleanedRows;
+//   return { data: processedData };
+// }
+
+function findFirstNonEmptyRow(jsonData, startFrom = 0) {
+  for (let i = startFrom; i < jsonData.length; i++) {
+    if (!isRowEmpty(jsonData[i])) {
+      return i;
+    }
+  }
+  return -1;
 }
 
-async function headerProcessor(files) {
-  if (!Array.isArray(files)) {
-    throw new Error("No files provided for processing or files is not an array");
+function processDataRows(jsonData, headerOrientation='horizontal', headerPosition=null, maxConsecutiveEmptyRows=10) {
+  if (!jsonData || !Array.isArray(jsonData) || jsonData.length < 1) {
+    return { headers: [], data: [] };
   }
 
-  if (files.length === 0) {
-    throw new Error("No files provided for processing");
+  let headers = [];
+  let data = [];
+
+  if (headerOrientation === 'horizontal') {
+    // Handle horizontal headers (normal row)
+    const headerRowIndex = headerPosition !== null ? headerPosition : findFirstNonEmptyRow(jsonData);
+    
+    if (headerRowIndex === -1 || headerRowIndex >= jsonData.length || !Array.isArray(jsonData[headerRowIndex])) {
+      return { headers: [], data: [] };
+    }
+
+    headers = jsonData[headerRowIndex].filter(cell => cell !== null && cell !== undefined);
+    
+    // Process data rows
+    let consecutiveEmptyRows = 0;
+    for (let i = headerRowIndex + 1; i < jsonData.length; i++) {
+      const row = jsonData[i];
+      if (!Array.isArray(row) || isRowEmpty(row)) {
+        consecutiveEmptyRows++;
+        if (consecutiveEmptyRows >= maxConsecutiveEmptyRows) break;
+        continue;
+      }
+      consecutiveEmptyRows = 0;
+      data.push(row);
+    }
+  } else {
+    // Handle vertical headers (column)
+    if (!jsonData[0] || !Array.isArray(jsonData[0])) {
+      return { headers: [], data: [] };
+    }
+    // Handle vertical headers (column)
+    const headerColIndex = headerPosition !== null ? headerPosition : (() => {
+      let firstNonEmptyCol = 0;
+      while (firstNonEmptyCol < jsonData[0].length && 
+             jsonData.every(row => isRowEmpty([row[firstNonEmptyCol]]))) {
+        firstNonEmptyCol++;
+      }
+      return firstNonEmptyCol < jsonData[0].length ? firstNonEmptyCol : -1;
+    })();
+
+    if (headerColIndex === -1 || headerColIndex >= jsonData[0].length) {
+      return { headers: [], data: [] };
+    }
+
+    headers = jsonData.map(row => row[headerColIndex]).filter(h => h !== null && h !== undefined);
+    
+    // Process data columns
+    for (let i = headerColIndex + 1; i < jsonData[0].length; i++) {
+      const column = jsonData.map(row => row[i]);
+      if (!isRowEmpty(column)) {
+        data.push(column);
+      }
+    }
   }
+
+  return { 
+    headers,
+    data
+  };
+}
+
+// async function headerProcessor(files) {
+
+//   const processedFiles = [];
+
+//   for (const file of files) {
+//     if (!file.path) {
+//       throw new Error(`File path is undefined for ${file.originalname}`);
+//     }
+
+//     try {
+//       // Read file from disk
+//       let workbook;
+//       if (file.originalname.endsWith(".csv")) {
+//         const csvData = fs.readFileSync(file.path, "utf8");
+//         workbook = XLSX.read(csvData, { type: "string", raw: true });
+//       } else {
+//         workbook = XLSX.readFile(file.path); // Reads .xlsx/.xls directly from disk
+//       }
+
+//       const sheets = workbook.SheetNames.map((sheetName) => {
+//         const worksheet = workbook.Sheets[sheetName];
+//         const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+
+//         const { data: processedData } = processDataRows(jsonData);
+//         const headers = processedData[0] || [];
+
+//         return {
+//           sheetName,
+//           headers,
+//           data: headers.length > 0 ? processedData.slice(1) : [],
+//         };
+//       }).filter((sheet) => sheet.headers.length > 0);
+
+//       if (sheets.length === 0) {
+//         throw new Error(`No valid sheets with headers found in ${file.originalname}`);
+//       }
+
+//       processedFiles.push({
+//         id: uuidv4(),
+//         fileName: file.originalname,
+//         sheets,
+//       });
+//     } catch (error) {
+//       throw new Error(`Failed to process file ${file.originalname}: ${error.message}`);
+//     }
+//   }
+
+//   return processedFiles;
+// }
+
+async function headerProcessor(files, headerOrientation='horizontal', headerPosition=0) {
 
   const processedFiles = [];
 
@@ -54,27 +172,31 @@ async function headerProcessor(files) {
         const csvData = fs.readFileSync(file.path, "utf8");
         workbook = XLSX.read(csvData, { type: "string", raw: true });
       } else {
-        workbook = XLSX.readFile(file.path); // Reads .xlsx/.xls directly from disk
+        workbook = XLSX.readFile(file.path);
+      }
+
+      if(!workbook || !workbook.SheetNames || !workbook.SheetNames.length) {
+        throw new Error(`No valid sheets found in ${file.originalname}`);
       }
 
       const sheets = workbook.SheetNames.map((sheetName) => {
         const worksheet = workbook.Sheets[sheetName];
-        const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+        if (!worksheet) {
+          return null;
+        }
+        const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: null});
 
-        const { data: processedData } = processDataRows(jsonData);
-        const headers = processedData[0] || [];
-
+        const { headers, data } = processDataRows(jsonData, headerOrientation, headerPosition);
         return {
           sheetName,
           headers,
-          data: headers.length > 0 ? processedData.slice(1) : [],
+          data: headers.length > 0 ? data : [],
         };
       }).filter((sheet) => sheet.headers.length > 0);
 
       if (sheets.length === 0) {
         throw new Error(`No valid sheets with headers found in ${file.originalname}`);
       }
-
       processedFiles.push({
         id: uuidv4(),
         fileName: file.originalname,
@@ -167,8 +289,8 @@ async function selectedHeaderProcessor(files, selectedSheetsData) {
 }
 
 
-async function getFileSheet(files) {
-  const processedFiles = await headerProcessor(files);
+async function getFileSheet(files, headerOrientation, headerPosition) {
+  const processedFiles = await headerProcessor(files, headerOrientation, headerPosition);
   const totalFiles = processedFiles.length;
   const totalSheets = processedFiles.reduce((sum, file) => sum + file.sheets.length, 0);
   if (totalFiles === 1 && totalSheets === 1) {
@@ -339,93 +461,5 @@ async function exportHeader(templateName, headers) {
 }
 
 
-async function generateExcelFile({ headers, totalRows, totalErrorRows, errorRows }) {
-  // Create a new workbook
-  const workbook = XLSX.utils.book_new();
 
-  // --- Sheet 1: Data with Validated Values ---
-  // Prepare data for Sheet 1
-  const sheet1Data = [];
-  // Add headers
-  const headerRow = headers.map(h => h.name);
-  sheet1Data.push(headerRow);
-
-  // Find max rowIndex
-  const maxRowIndex = Math.max(...headers.flatMap(h => h.data.map(d => d.rowIndex)), 0);
-
-  // Fill data rows
-  for (let rowIndex = 1; rowIndex <= maxRowIndex; rowIndex++) {
-    const row = headers.map(header => {
-      const data = header.data.find(d => d.rowIndex === rowIndex);
-      return data ? data.value || '' : '';
-    });
-    sheet1Data.push(row);
-  }
-
-  // Create Sheet 1
-  const sheet1 = XLSX.utils.aoa_to_sheet(sheet1Data);
-
-  // Apply styling (red for invalid cells)
-  for (let rowIndex = 1; rowIndex <= maxRowIndex; rowIndex++) {
-    headers.forEach((header, colIndex) => {
-      const data = header.data.find(d => d.rowIndex === rowIndex);
-      if (data && !data.valid) {
-        const cellAddress = XLSX.utils.encode_cell({ r: rowIndex, c: colIndex });
-        if (!sheet1[cellAddress]) sheet1[cellAddress] = { v: data.value || '' };
-        sheet1[cellAddress].s = {
-          font: { color: { rgb: 'FF0000' } }, // Red font
-        };
-      }
-    });
-  }
-
-  // Set column widths
-  const colWidths = headers.map(header => ({
-    wch: Math.max(header.name.length, 15),
-  }));
-  sheet1['!cols'] = colWidths;
-
-  // Add Sheet 1 to workbook
-  XLSX.utils.book_append_sheet(workbook, sheet1, 'Data');
-
-  // --- Sheet 2: Error Summary ---
-  const sheet2Data = [
-    ['Summary'],
-    ['Total Rows', totalRows],
-    ['Rows with Errors', totalErrorRows],
-    [],
-    ['Error Details'],
-    ['Row Number', 'Issues'],
-  ];
-
-  // Add error details
-  const sortedErrorRows = Array.from(errorRows.entries()).sort((a, b) => a[0] - b[0]);
-  sortedErrorRows.forEach(([rowIndex, headerNames]) => {
-    const issueText = headerNames.length > 1
-      ? `Issues in ${headerNames.join(', ')}`
-      : `Issue in ${headerNames[0]}`;
-    sheet2Data.push([rowIndex, issueText]);
-  });
-
-  // Create Sheet 2
-  const sheet2 = XLSX.utils.aoa_to_sheet(sheet2Data);
-
-  // Set column widths for Sheet 2
-  sheet2['!cols'] = [
-    { wch: 12 }, // Row Number
-    { wch: 50 }, // Issues
-  ];
-
-  // Add Sheet 2 to workbook
-  XLSX.utils.book_append_sheet(workbook, sheet2, 'Errors');
-
-  // Write workbook to buffer
-  const buffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'buffer' });
-
-  return buffer;
-}
-
-
-
-
-module.exports = { headerProcessor, exportHeader, getFileSheet, selectedHeaderProcessor, generateExcelFile }
+module.exports = { headerProcessor, exportHeader, getFileSheet, selectedHeaderProcessor }

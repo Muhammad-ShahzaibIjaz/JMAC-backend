@@ -26,11 +26,10 @@ async function deleteFile(req, res) {
         transaction,
       });
 
-      if (!fileRecord) {
-        throw new Error(`File record not found for ${fileName} with templateId ${templateId}`);
+      if (fileRecord) {
+        await fileRecord.destroy({ transaction });
       }
 
-      await fileRecord.destroy({ transaction });
 
       if (fs.existsSync(filePath)) {
         fs.unlinkSync(filePath);
@@ -152,6 +151,23 @@ async function processFiles(files) {
 }
 
 
+async function getFiles(req, res) {
+  try {
+    const { templateId } = req.params;
+    
+    const files = await File.findAll({
+      where: {
+        templateId: templateId
+      },
+      attributes: ['filename']
+    });
+    
+    res.status(200).json(files || []);
+  } catch(error) {
+    res.status(500).json({ error: error.message });
+  }
+}
 
 
-module.exports = { deleteFile, deleteFiles, processFiles };
+
+module.exports = { deleteFile, deleteFiles, processFiles, getFiles };

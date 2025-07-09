@@ -127,8 +127,38 @@ async function getMappingTemplates(req, res) {
   }
 }
 
+
+async function updateMappingTemplate(req, res) {
+  try {
+    const { id, name } = req.query;
+
+    if (!id || !name) {
+      return res.status(400).json({ error: "mappingId and name are required" });
+    }
+
+    const [updatedCount, updatedTemplates] = await Mapping_Template.update(
+      { name },
+      {
+        where: { id },
+        returning: true, // Return the updated record(s)
+      }
+    );
+
+    if (updatedCount === 0) {
+      return res.status(404).json({ error: "No template found with the provided templateId" });
+    }
+    res.status(200).json({
+      message: "ok"
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+}
+
+
 module.exports = {
   createMappingTemplate,
   deleteMappingTemplate,
   getMappingTemplates,
+  updateMappingTemplate
 };

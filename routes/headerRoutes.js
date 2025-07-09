@@ -8,6 +8,6 @@ router.put('/headers/:id', headerController.updateHeader);
 router.get('/headers/:id', headerController.getHeader);
 router.post('/headers/export', headerController.exportHeaders);
 router.get('/headers-with-mapping', headerController.getHeadersWithMapHeaders);
-
+router.post('/runtimeheaders', headerController.createRunTimeHeader);
 
 module.exports = router;

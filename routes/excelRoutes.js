@@ -1,13 +1,20 @@
 const express = require("express");
 const router = express.Router();
-const { uploadAndGetHeaders, getFileSheets, processAndSaveSelectedSheets} = require('../controllers/excelController');
+const { uploadAndGetHeaders, getFileSheets, uploadAndProcessData ,getExtractedHeadersByTemplateId, processAndGetHeaderSelectedSheets ,processAndSaveSelectedSheets, processAndCompareHeaders, processAndGetSheetMapHeaders} = require('../controllers/excelController');
 const upload = require('../middlewares/fileUpload');
+const { parseAPI } = require("../services/parseService");
 
 
 
-router.post('/upload-and-get-headers', upload ,uploadAndGetHeaders);
+router.post('/upload-and-get-headers', uploadAndGetHeaders);
+router.post('/upload-and-process-data', uploadAndProcessData);
 router.post('/get-sheets', upload ,getFileSheets);
-router.post('/upload-and-get-selected-headers', upload ,processAndSaveSelectedSheets);
+router.post('/upload-and-get-selected-headers', processAndGetHeaderSelectedSheets);
+router.post('/upload-and-get-selected-data', processAndSaveSelectedSheets);
+router.post('/extract-map-headers/:mappingTemplateId', processAndCompareHeaders);
+router.post('/extract-sheets-map-headers/:mappingTemplateId', processAndGetSheetMapHeaders);
+router.get('/get-extracted-headers', getExtractedHeadersByTemplateId);
+router.post('/parse-rule', parseAPI);
 
 
 module.exports = router;

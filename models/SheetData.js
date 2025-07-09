@@ -24,7 +24,7 @@ const SheetData = sequelize.define(
   },
   {
     tableName: 'SheetData',
-    timestamps: false,
+    timestamps: true,
     indexes: [
       {
         unique: true,

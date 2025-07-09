@@ -2,183 +2,17 @@ const File = require('../models/File');
 const Template = require('../models/Template');
 const SheetData = require('../models/SheetData');
 const Header = require('../models/Header');
+const ExtractedHeader = require('../models/ExtractedHeader');
+const MapHeader = require("../models/MapHeader");
+const MappingTemplate = require('../models/MappingTemplate');
 const sequelize = require('../config/database');
 const { v4: uuidv4 } = require('uuid');
 const { headerProcessor, getFileSheet, selectedHeaderProcessor }  = require('../services/excelService');
 const { Op } = require('sequelize');
 const fs = require("fs");
+const fsSync = require("fs").promises;
 const path = require("path");
-
-
-async function deleteFile(req, res) {
-  try {
-    const { fileId } = req.params;
-
-    if (!fileId) {
-      return res.status(400).json({ error: 'fileId is required' });
-    }
-
-    const result = await sequelize.transaction(async (t) => {
-      const originalFile = await File.findOne({
-        where: { id: fileId, isOriginal: true },
-        transaction: t,
-      });
-
-      if (!originalFile) {
-        return { deleted: false, message: 'Original file not found' };
-      }
-
-      const deletedCount = await File.destroy({
-        where: { filePath: originalFile.filePath },
-        transaction: t,
-      });
-
-      return {
-        deleted: true,
-        message: `Successfully deleted ${deletedCount} file(s) and associated data`,
-      };
-    });
-
-    if (!result.deleted) {
-      return res.status(404).json({ error: result.message });
-    }
-
-    res.json(result);
-  } catch (error) {
-    console.error('Error deleting file:', error);
-    res.status(500).json({ error: error.message });
-  }
-}
-
-async function deleteMultipleFiles(req, res) {
-  try {
-    const { fileIds } = req.body;
-
-    if (!Array.isArray(fileIds) || fileIds.length === 0) {
-      return res.status(400).json({ error: 'fileIds must be a non-empty array' });
-    }
-
-    const result = await sequelize.transaction(async (t) => {
-      const deletedFiles = [];
-
-      for (const fileId of fileIds) {
-        const originalFile = await File.findOne({
-          where: { id: fileId, isOriginal: true },
-          transaction: t,
-        });
-
-        if (originalFile) {
-          const deletedCount = await File.destroy({
-            where: { filePath: originalFile.filePath },
-            transaction: t,
-          });
-
-          deletedFiles.push({
-            fileId,
-            deleted: true,
-            message: `Successfully deleted ${deletedCount} file(s)`,
-          });
-        } else {
-          deletedFiles.push({
-            fileId,
-            deleted: false,
-            message: 'Original file not found',
-          });
-        }
-      }
-
-      return deletedFiles;
-    });
-
-    const allDeleted = result.every((r) => r.deleted);
-    const statusCode = allDeleted ? 200 : 207;
-
-    res.status(statusCode).json(result);
-  } catch (error) {
-    console.error('Error deleting multiple files:', error);
-    res.status(500).json({ error: error.message });
-  }
-}
-
-async function deleteOriginalFile(req, res) {
-  try {
-    const { fileId } = req.params;
-
-    if (!fileId) {
-      return res.status(400).json({ error: 'fileId is required' });
-    }
-
-    const result = await sequelize.transaction(async (t) => {
-      const deletedCount = await File.destroy({
-        where: { id: fileId, isOriginal: true },
-        transaction: t,
-      });
-
-      if (deletedCount === 0) {
-        return { deleted: false, message: 'Original file not found' };
-      }
-
-      return {
-        deleted: true,
-        message: `Successfully deleted original file and associated data`,
-      };
-    });
-
-    if (!result.deleted) {
-      return res.status(404).json({ error: result.message });
-    }
-
-    res.json(result);
-  } catch (error) {
-    console.error('Error deleting original file:', error);
-    res.status(500).json({ error: error.message });
-  }
-}
-
-async function deleteMultipleOriginalFiles(req, res) {
-  try {
-    const { fileIds } = req.body;
-
-    if (!Array.isArray(fileIds) || fileIds.length === 0) {
-      return res.status(400).json({ error: 'fileIds must be a non-empty array' });
-    }
-
-    const result = await sequelize.transaction(async (t) => {
-      const deletedFiles = [];
-
-      for (const fileId of fileIds) {
-        const deletedCount = await File.destroy({
-          where: { id: fileId, isOriginal: true },
-          transaction: t,
-        });
-
-        if (deletedCount > 0) {
-          deletedFiles.push({
-            fileId,
-            deleted: true,
-            message: `Successfully deleted original file`,
-          });
-        } else {
-          deletedFiles.push({
-            fileId,
-            deleted: false,
-            message: 'Original file not found',
-          });
-        }
-      }
-
-      return deletedFiles;
-    });
-
-    const allDeleted = result.every((r) => r.deleted);
-    const statusCode = allDeleted ? 200 : 207;
-
-    res.status(statusCode).json(result);
-  } catch (error) {
-    console.error('Error deleting multiple original files:', error);
-    res.status(500).json({ error: error.message });
-  }
-}
+const { parseRule } = require("../services/parseService");
 
 
 async function validateTemplate(templateId) {
@@ -214,22 +48,43 @@ async function fetchExistingHeaders(templateId) {
   }));
 }
 
-
-
-async function saveFileAndData(processedFiles, templateId, transaction) {
+async function saveFileAndData(processedFiles, templateId, mappingtemplateId, transaction) {
   const allSheets = [];
+
+  // Fetch headers for the given templateId
+  const templateHeaders = await Header.findAll({
+    where: { templateId },
+    transaction,
+  });
+
+  if (!templateHeaders.length) {
+    throw new Error(`No headers found for templateId: ${templateId}`);
+  }
+
+  // Fetch mapHeaders only if mappingtemplateId is provided and not empty
+  let headerToMapHeaders = new Map();
+  if (mappingtemplateId && mappingtemplateId !== "") {
+    const mapHeaders = await MapHeader.findAll({
+      where: { mappingTemplateId: mappingtemplateId },
+      transaction,
+    });
+
+    // Create a mapping of headerId to mapHeader names
+    for (const mapHeader of mapHeaders) {
+      if (mapHeader.headerId) {
+        if (!headerToMapHeaders.has(mapHeader.headerId)) {
+          headerToMapHeaders.set(mapHeader.headerId, []);
+        }
+        headerToMapHeaders.get(mapHeader.headerId).push(mapHeader.name.toLowerCase());
+      }
+    }
+  }
+
+  // Save files and collect sheet data
   for (const processedFile of processedFiles) {
     if (!processedFile.fileName || !processedFile.sheets) {
       throw new Error(`Invalid processed file: ${JSON.stringify(processedFile)}`);
     }
-    await File.create(
-      {
-        id: uuidv4(),
-        filename: processedFile.fileName,
-        templateId,
-      },
-      { transaction }
-    );
 
     for (const sheet of processedFile.sheets) {
       if (!sheet.headers || !sheet.data) {
@@ -244,98 +99,199 @@ async function saveFileAndData(processedFiles, templateId, transaction) {
     }
   }
 
+  // Function to check if a header has unique values across all sheets
+  const isHeaderUnique = (headerName) => {
+    const ids = new Set();
+    let totalRows = 0;
+    for (const sheet of allSheets) {
+      const idIndex = sheet.headers.findIndex((h) => h.toLowerCase() === headerName.toLowerCase());
+      if (idIndex === -1) return false; // Header not found in this sheet
+      for (const row of sheet.data) {
+        const id = row[idIndex];
+        if (id != null) {
+          ids.add(id);
+          totalRows++;
+        }
+      }
+    }
+    return ids.size === totalRows; // True if all non-null IDs are unique
+  };
 
-  const headerCounts = new Map();
+  let commonHeader;
+
+  if (allSheets.length > 1 || processedFiles.length > 1) { 
+    // Find common header (e.g., ID) across all sheets
+    const headerCounts = new Map();
+    for (const sheet of allSheets) {
+      for (const header of sheet.headers) {
+        const lowerHeader = header.toLowerCase();
+        headerCounts.set(lowerHeader, (headerCounts.get(lowerHeader) || 0) + 1);
+      }
+    }
+
+    const commonHeaders = [...headerCounts.entries()]
+      .filter(([_, count]) => count === allSheets.length)
+      .map(([header]) => header);
+
+    // Find the first common header with unique values
+    for (const header of commonHeaders) {
+      if (isHeaderUnique(header)) {
+        commonHeader = header;
+        break;
+      } else {
+        console.warn(`Common header '${header}' has non-unique values`);
+      }
+    }
+
+    if (!commonHeader) {
+      throw new Error("No common header with unique values found across all sheets");
+    }
+  } else {
+    // Single sheet: Check predefined primary key headers
+    const potentialPrimaryKeys = ['studentid', 'studentidalt', 'id', 'student_id', 'student_id_alt' , 'unique_id'];
+    const sheet = allSheets[0];
+
+    for (const pk of potentialPrimaryKeys) {
+      if (sheet.headers.some((h) => h.toLowerCase() === pk.toLowerCase()) && isHeaderUnique(pk)) {
+        commonHeader = pk;
+        break;
+      }
+    }
+
+    // Fallback: Try each header in order, ensuring uniqueness
+    if (!commonHeader) {
+      for (const header of sheet.headers) {
+        if (isHeaderUnique(header.toLowerCase())) {
+          commonHeader = header.toLowerCase();
+          break;
+        } else {
+          console.warn(`Header '${header}' is not unique`);
+        }
+      }
+    }
+
+    if (!commonHeader) {
+      throw new Error("No unique header found in single sheet");
+    }
+  }
+
+
+  // Quality check: Detect duplicate headers in sheets
   for (const sheet of allSheets) {
+    const headerSet = new Set();
     for (const header of sheet.headers) {
       const lowerHeader = header.toLowerCase();
-      headerCounts.set(lowerHeader, (headerCounts.get(lowerHeader) || 0) + 1);
+      if (headerSet.has(lowerHeader)) {
+        console.warn(`Duplicate header '${header}' found in sheet '${sheet.sheetName}' of file '${sheet.fileName}'`);
+        continue;
+      }
+      headerSet.add(lowerHeader);
     }
   }
 
-  const commonHeader = [...headerCounts.entries()]
-    .filter(([_, count]) => count === allSheets.length)
-    .map(([header]) => header)[0];
-
-  if (!commonHeader) {
-    throw new Error("No common header found across all sheets");
-  }
-
-
-  const mergedHeaders = [];
-  const headerSet = new Set();
+  // Map processed file headers to template headers
+  const headerMapping = new Map(); // Maps processed file header to template header
   for (const sheet of allSheets) {
-    for (const header of sheet.headers) {
-      const lowerHeader = header.toLowerCase();
-      if (!headerSet.has(lowerHeader)) {
-        headerSet.add(lowerHeader);
-        mergedHeaders.push(header);
+    for (const fileHeader of sheet.headers) {
+      const lowerFileHeader = fileHeader.toLowerCase();
+
+      let matchedTemplateHeader = null;
+      if (mappingtemplateId && mappingtemplateId !== "") {
+        // Check if fileHeader matches any mapHeader
+        for (const templateHeader of templateHeaders) {
+          const mapHeaderNames = headerToMapHeaders.get(templateHeader.id) || [];
+          if (mapHeaderNames.includes(lowerFileHeader)) {
+            matchedTemplateHeader = templateHeader;
+            break;
+          }
+        }
+      }
+
+      // If no mapHeader match or no mappingtemplateId, try matching by template header name
+      if (!matchedTemplateHeader) {
+        matchedTemplateHeader = templateHeaders.find(
+          (h) => h.name.toLowerCase() === lowerFileHeader
+        );
+      }
+
+      if (matchedTemplateHeader) {
+        headerMapping.set(fileHeader, matchedTemplateHeader);
       }
     }
   }
 
-  const newDataQuality = new Map();
-  for (const sheet of allSheets) {
-    const idIndex = sheet.headers.findIndex((h) => h.toLowerCase() === commonHeader);
-    for (const header of sheet.headers) {
-      if (header.toLowerCase() === commonHeader) continue;
-      const colIndex = sheet.headers.indexOf(header);
-      const rowCount = sheet.data.length;
-      const nonNullCount = sheet.data.filter((row) => row[colIndex] != null).length;
-
-      if (!newDataQuality.has(header)) {
-        newDataQuality.set(header, { rowCount: 0, nonNullCount: 0 });
-      }
-      const current = newDataQuality.get(header);
-      if (
-        rowCount > current.rowCount ||
-        (rowCount === current.rowCount && nonNullCount > current.nonNullCount)
-      ) {
-        current.rowCount = rowCount;
-        current.nonNullCount = nonNullCount;
-      }
-    }
-  }
-
+  // Collect data by ID, allowing new data to be merged
   const dataById = new Map();
   for (const sheet of allSheets) {
     const idIndex = sheet.headers.findIndex((h) => h.toLowerCase() === commonHeader);
-    const otherHeaders = sheet.headers.filter((h) => h.toLowerCase() !== commonHeader);
+    if (idIndex === -1) {
+      throw new Error(`Common header '${commonHeader}' not found in sheet '${sheet.sheetName}'`);
+    }
 
     for (const row of sheet.data) {
       const id = row[idIndex];
-      if (id == null) continue;
+      if (id == null) {
+        console.warn(`Skipping row with null ID in sheet ${sheet.sheetName}`); // Debug log
+        continue;
+      }
+
       if (!dataById.has(id)) {
-        dataById.set(id, {});
+        dataById.set(id, { _nonNullCount: 0, _source: sheet.fileName });
       }
       const rowData = dataById.get(id);
 
-      otherHeaders.forEach((header) => {
-        const value = row[sheet.headers.indexOf(header)];
-        if (!rowData[header] || (value != null && sheet.data.length > (rowData._rowCount || 0))) {
-          rowData[header] = value;
-          rowData._rowCount = sheet.data.length;
+      // Calculate non-null count for this row
+      let nonNullCount = 0;
+      const newRowData = {};
+      for (const header of sheet.headers) {
+        if (header.toLowerCase() === commonHeader) continue;
+        const templateHeader = headerMapping.get(header);
+        if (templateHeader) {
+          const value = row[sheet.headers.indexOf(header)];
+          newRowData[templateHeader.id] = value != null ? value.toString() : null;
+          if (value != null) nonNullCount++;
         }
-      });
+      }
+
+      // Update data if new row has more non-null values or if existing data is empty
+      if (!rowData._nonNullCount || nonNullCount >= rowData._nonNullCount) {
+        rowData._nonNullCount = nonNullCount;
+        rowData._source = sheet.fileName;
+        Object.assign(rowData, newRowData);
+      }
     }
   }
 
+  // Quality check: Validate data consistency
+  for (const [id, rowData] of dataById) {
+    for (const templateHeader of templateHeaders) {
+      const value = rowData[templateHeader.id];
+      if (value != null && templateHeader.columnType === "text" && value.length > 1000) {
+        console.warn(
+          `Data quality warning: Value for header '${templateHeader.name}' in ID '${id}' exceeds length limit`
+        );
+      }
+    }
+  }
+
+  // Prepare merged headers and data
+  const mergedHeaders = templateHeaders.map((h) => h.name);
   const mergedData = [];
   for (const [id, rowData] of dataById) {
-    const row = mergedHeaders.map((header) => {
-      if (header.toLowerCase() === commonHeader) return id;
-      return rowData[header] != null ? rowData[header].toString() : null;
+    const row = mergedHeaders.map((headerName) => {
+      const templateHeader = templateHeaders.find((h) => h.name === headerName);
+      if (templateHeader.name.toLowerCase() === commonHeader) return id;
+      return rowData[templateHeader.id] || null;
     });
     mergedData.push(row);
   }
 
+  // Save or update headers
   const savedHeaders = [];
-  for (const headerName of mergedHeaders) {
-    const lowerHeaderName = headerName.toLowerCase();
-
+  for (const templateHeader of templateHeaders) {
     let header = await Header.findOne({
       where: {
-        name: { [Op.iLike]: lowerHeaderName },
+        id: templateHeader.id,
         templateId,
       },
       transaction,
@@ -344,10 +300,10 @@ async function saveFileAndData(processedFiles, templateId, transaction) {
     if (!header) {
       header = await Header.create(
         {
-          id: uuidv4(),
-          name: headerName,
-          criticalityLevel: "3",
-          columnType: "text",
+          id: templateHeader.id,
+          name: templateHeader.name,
+          criticalityLevel: templateHeader.criticalityLevel || "3",
+          columnType: templateHeader.columnType || "text",
           templateId,
         },
         { transaction }
@@ -361,25 +317,34 @@ async function saveFileAndData(processedFiles, templateId, transaction) {
     const existingRowCount = existingData.length;
     const existingNonNullCount = existingData.filter((d) => d.value != null).length;
 
-    const newQuality = newDataQuality.get(headerName) || { rowCount: 0, nonNullCount: 0 };
+    // Calculate new data quality
+    let newRowCount = 0;
+    let newNonNullCount = 0;
+    for (const row of mergedData) {
+      const colIndex = mergedHeaders.indexOf(header.name);
+      if (colIndex !== -1 && row[colIndex] != null) {
+        newNonNullCount++;
+      }
+      newRowCount++;
+    }
+
+    // Update if new data has more non-null values or if existing data is empty
     const shouldUpdate =
       existingRowCount === 0 ||
-      newQuality.rowCount > existingRowCount ||
-      (newQuality.rowCount === existingRowCount && newQuality.nonNullCount > existingNonNullCount);
+      newNonNullCount > existingNonNullCount ||
+      (newNonNullCount === existingNonNullCount && newRowCount > existingRowCount);
 
     if (shouldUpdate) {
       await SheetData.destroy({
         where: { headerId: header.id },
         transaction,
       });
-      console.log(`Updated data for header: ${headerName}`);
-    } else {
-      console.log(`Keeping existing data for header: ${headerName}`);
     }
 
     savedHeaders.push({ header, shouldUpdate });
   }
 
+  // Save merged data
   for (let rowIndex = 0; rowIndex < mergedData.length; rowIndex++) {
     const row = mergedData[rowIndex];
     for (let colIndex = 0; colIndex < row.length && colIndex < savedHeaders.length; colIndex++) {
@@ -401,14 +366,68 @@ async function saveFileAndData(processedFiles, templateId, transaction) {
 }
 
 
+async function saveUniqueHeaders(processedFiles, templateId, transaction) {
+  try {
+    // Extract headers from processedFiles
+    const headersToSave = processedFiles.flatMap(file => 
+      file.sheets.flatMap(sheet => 
+        sheet.headers.map(headerName => ({
+          name: headerName,
+          criticalityLevel: '3', // Default as per model
+          columnType: 'text', // Default as per model
+          templateId
+        }))
+      )
+    );
+
+    // Get existing headers for the template from DB
+    const existingHeaders = await Header.findAll({
+      where: { templateId },
+      attributes: ['name'],
+      transaction
+    });
+
+    // Create a Set of existing header names for quick lookup
+    const existingHeaderNames = new Set(existingHeaders.map(h => h.name));
+
+    // Filter out headers that already exist
+    const uniqueHeaders = headersToSave.filter(
+      header => !existingHeaderNames.has(header.name)
+    );
+
+    // Bulk create unique headers
+    if (uniqueHeaders.length > 0) {
+      await Header.bulkCreate(uniqueHeaders, { transaction });
+    }
+
+    return uniqueHeaders.length;
+  } catch (error) {
+    throw new Error(`Failed to save unique headers: ${error.message}`);
+  }
+}
+
+
+
+
 async function uploadAndGetHeaders(req, res) {
   try {
-    const { templateId } = req.body;
-    const processedFiles = await headerProcessor(req.files.files);
+    const { templateId, fileNames, headerOrientation, headerPosition } = req.body;
+    if (!templateId || !Array.isArray(fileNames) || fileNames.length === 0) {
+      return res.status(400).json({ error: 'templateId and fileNames array are required' });
+    }
+
+    // Construct file objects for headerProcessor
+    const files = fileNames.map(fileName => ({
+      path: path.join('uploads', templateId, fileName),
+      originalname: fileName
+    }));
+
+    const processedFiles = await headerProcessor(files, headerOrientation, headerPosition);
     
     await sequelize.transaction(async (t) => {
-      await saveFileAndData(processedFiles, templateId, t);
+      await saveUniqueHeaders(processedFiles, templateId, t);
     });
+
     const headers = await fetchExistingHeaders(templateId);
     res.status(201).json({
       templateId,
@@ -420,10 +439,42 @@ async function uploadAndGetHeaders(req, res) {
   }
 }
 
-async function processAndSaveSelectedSheets(req, res) {
+async function uploadAndProcessData(req, res) {
+  try {
+    const { templateId, mappingtemplateId, fileNames } = req.body;
+    if (!templateId || !mappingtemplateId) {
+      return res.status(400).json({ error: 'templateId and Mapping TemplateId are required' });
+    }
+
+    // Construct file objects for headerProcessor
+    const files = fileNames.map(fileName => ({
+      path: path.join('uploads', templateId, fileName),
+      originalname: fileName
+    }));
+
+    const processedFiles = await headerProcessor(files);
+    
+    await sequelize.transaction(async (t) => {
+      await saveFileAndData(processedFiles, templateId, mappingtemplateId ,t);
+    });
+
+
+    const headers = await fetchExistingHeaders(templateId);
+    res.status(201).json({
+      templateId,
+      headers,
+    });
+
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+}
+
+
+async function processAndGetHeaderSelectedSheets(req, res) {
   try{
 
-    const { templateId, sheetSelectionData } = req.body;
+    const { templateId, sheetSelectionData, headerOrientation, headerPosition } = req.body;
 
     if (!templateId) {
       throw new Error("templateId is required");
@@ -442,6 +493,248 @@ async function processAndSaveSelectedSheets(req, res) {
         }
       }
     }
+
+    const files = [];
+    for (const selection of sheetSelectionData) {
+      const filePath = path.join("uploads", templateId, selection.fileName);
+      if (!fs.existsSync(filePath)) {
+        throw new Error(`File not found: ${filePath}`);
+      }
+      files.push({
+        id: uuidv4(),
+        path: filePath,
+        originalname: selection.fileName,
+      });
+    }
+
+    let processedFiles;
+    try {
+      processedFiles = await headerProcessor(files, headerOrientation, headerPosition);
+    } catch (error) {
+      throw new Error(`Failed to process files: ${error.message}`);
+    }
+
+    const filteredProcessedFiles = [];
+    for (const selection of sheetSelectionData) {
+      const processedFile = processedFiles.find((pf) => pf.fileName === selection.fileName);
+      if (!processedFile) {
+        throw new Error(`Processed file not found for ${selection.fileName}`);
+      }
+
+      const selectedSheets = processedFile.sheets.filter((sheet) =>
+        selection.sheets.some((s) => s.sheetName === sheet.sheetName)
+      );
+
+      for (const sheet of selectedSheets) {
+        const selectionSheet = selection.sheets.find((s) => s.sheetName === sheet.sheetName);
+        if (selectionSheet.totalHeaders !== sheet.headers.length) {
+          throw new Error(
+            `Header count mismatch for ${sheet.sheetName} in ${selection.fileName}: expected ${selectionSheet.totalHeaders}, got ${sheet.headers.length}`
+          );
+        }
+      }
+
+      if (selectedSheets.length > 0) {
+        filteredProcessedFiles.push({
+          ...processedFile,
+          sheets: selectedSheets,
+        });
+      }
+    }
+
+    if (filteredProcessedFiles.length === 0) {
+      throw new Error("No valid sheets selected for processing");
+    }
+
+    await sequelize.transaction(async (t) => {
+      await saveUniqueHeaders(filteredProcessedFiles, templateId, t);
+    });
+    const headers = await fetchExistingHeaders(templateId);
+    res.status(201).json({
+      templateId,
+      headers,
+    }); 
+
+  } catch(error) {
+    res.status(500).json({error: error.message});
+  }
+}
+
+
+async function processAndGetSheetMapHeaders(req, res) {
+  const { templateId, sheetSelectionData } = req.body;
+  const { mappingTemplateId } = req.params;
+
+  if (!templateId || !mappingTemplateId) {
+    return res.status(400).json({ error: 'templateId and mappingTemplateId are required' });
+  }
+
+  if (!sheetSelectionData || !Array.isArray(sheetSelectionData)) {
+    return res.status(400).json({ error: 'sheetSelectionData must be an array' });
+  }
+
+  // Validate sheetSelectionData
+  for (const selection of sheetSelectionData) {
+    if (!selection.fileName || !selection.sheets || !Array.isArray(selection.sheets)) {
+      return res.status(400).json({ error: `Invalid sheetSelectionData: ${JSON.stringify(selection)}` });
+    }
+    for (const sheet of selection.sheets) {
+      if (!sheet.sheetName || typeof sheet.totalHeaders !== 'number') {
+        return res.status(400).json({ error: `Invalid sheet in ${selection.fileName}: ${JSON.stringify(sheet)}` });
+      }
+    }
+  }
+
+  try {
+    const files = [];
+    for (const selection of sheetSelectionData) {
+      const filePath = path.join("uploads", templateId, selection.fileName);
+      if (!fs.existsSync(filePath)) {
+        throw new Error(`File not found: ${filePath}`);
+      }
+      files.push({
+        id: uuidv4(),
+        path: filePath,
+        originalname: selection.fileName,
+      });
+    }
+
+    // Step 2: Process files
+    const processedFiles = await headerProcessor(files);
+
+    // Step 3: Filter processed files to include only selected sheets
+    const filteredProcessedFiles = [];
+    for (const selection of sheetSelectionData) {
+      const processedFile = processedFiles.find((pf) => pf.fileName === selection.fileName);
+      if (!processedFile) {
+        return res.status(400).json({ error: `Processed file not found for ${selection.fileName}` });
+      }
+
+      const selectedSheets = processedFile.sheets.filter((sheet) =>
+        selection.sheets.some((s) => s.sheetName === sheet.sheetName)
+      );
+
+      // Validate header count
+      for (const sheet of selectedSheets) {
+        const selectionSheet = selection.sheets.find((s) => s.sheetName === sheet.sheetName);
+        if (selectionSheet.totalHeaders !== sheet.headers.length) {
+          return res.status(400).json({
+            error: `Header count mismatch for ${sheet.sheetName} in ${selection.fileName}: expected ${selectionSheet.totalHeaders}, got ${sheet.headers.length}`,
+          });
+        }
+      }
+
+      if (selectedSheets.length > 0) {
+        filteredProcessedFiles.push({
+          ...processedFile,
+          sheets: selectedSheets,
+        });
+      }
+    }
+
+    if (filteredProcessedFiles.length === 0) {
+      return res.status(400).json({ error: 'No valid sheets selected for processing' });
+    }
+
+    // Step 4: Extract all unique headers from filtered processed files
+    const extractedHeaders = new Set();
+    for (const file of filteredProcessedFiles) {
+      for (const sheet of file.sheets) {
+        sheet.headers.forEach(header => {
+          if (header) extractedHeaders.add(header); // Only add non-empty headers
+        });
+      }
+    }
+
+    // Step 5: Get existing headers from ExtractedHeader for this mappingTemplateId
+    const existingExtractedHeaders = await ExtractedHeader.findAll({
+      where: { mappingTemplateId },
+      attributes: ['name'],
+      raw: true,
+    });
+    const existingExtractedHeaderNames = new Set(existingExtractedHeaders.map(header => header.name));
+
+    // Step 6: Filter out headers that already exist in ExtractedHeader
+    const uniqueHeaders = Array.from(extractedHeaders).filter(
+      header => !existingExtractedHeaderNames.has(header)
+    );
+
+    // Step 7: Save unique headers to ExtractedHeader and prepare response
+    const result = [];
+    await ExtractedHeader.sequelize.transaction(async (t) => {
+      for (const header of uniqueHeaders) {
+        const headerData = {
+          id: uuidv4(),
+          name: header,
+          columnType: 'text',
+          criticalityLevel: '3',
+          mappingTemplateId,
+        };
+        await ExtractedHeader.create(headerData, { transaction: t });
+        result.push({
+          id: headerData.id,
+          name: headerData.name,
+          columnType: headerData.columnType,
+          criticalityLevel: headerData.criticalityLevel,
+        });
+      }
+    });
+
+    // Step 9: Return all headers (existing + new) for the mappingTemplateId
+    const allHeaders = await ExtractedHeader.findAll({
+      where: { mappingTemplateId },
+      attributes: ['id', 'name', 'columnType', 'criticalityLevel'],
+      raw: true,
+    });
+
+    res.status(200).json(allHeaders);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+}
+
+
+
+async function processAndSaveSelectedSheets(req, res) {
+  try{
+
+    const { templateId, sheetSelectionData, mappingtemplateId} = req.body;
+
+    if (!templateId) {
+      throw new Error("templateId is required");
+    }
+    if (!templateId) {
+      throw new Error("mappingtemplateId is required");
+    }
+    if (!sheetSelectionData || !Array.isArray(sheetSelectionData)) {
+      throw new Error("sheetSelectionData must be an array");
+    }
+
+    for (const selection of sheetSelectionData) {
+      if (!selection.fileName || !selection.sheets || !Array.isArray(selection.sheets)) {
+        throw new Error(`Invalid sheetSelectionData: ${JSON.stringify(selection)}`);
+      }
+      for (const sheet of selection.sheets) {
+        if (!sheet.sheetName || typeof sheet.totalHeaders !== "number") {
+          throw new Error(`Invalid sheet in ${selection.fileName}: ${JSON.stringify(sheet)}`);
+        }
+      }
+    }
+
+    // Check for existing files in DB
+    const existingFiles = await File.findAll({
+      where: {
+        templateId,
+        filename: sheetSelectionData.map(s => s.fileName)
+      },
+      attributes: ['filename']
+    });
+    const existingFileNames = new Set(existingFiles.map(f => f.filename));
+
+    // Filter out already existing files
+    const newSelections = sheetSelectionData.filter(
+      selection => !existingFileNames.has(selection.fileName)
+    );
 
     const files = [];
     for (const selection of sheetSelectionData) {
@@ -481,6 +774,7 @@ async function processAndSaveSelectedSheets(req, res) {
             `Header count mismatch for ${sheet.sheetName} in ${selection.fileName}: expected ${selectionSheet.totalHeaders}, got ${sheet.headers.length}`
           );
         }
+        console.log(sheet.data.length);
       }
 
       if (selectedSheets.length > 0) {
@@ -496,8 +790,9 @@ async function processAndSaveSelectedSheets(req, res) {
     }
 
     await sequelize.transaction(async (t) => {
-      await saveFileAndData(filteredProcessedFiles, templateId, t);
+      await saveFileAndData(filteredProcessedFiles, templateId, mappingtemplateId ,t);
     });
+
     const headers = await fetchExistingHeaders(templateId);
     res.status(201).json({
       templateId,
@@ -514,25 +809,153 @@ async function processAndSaveSelectedSheets(req, res) {
 
 async function getFileSheets(req, res) {
   try{
+    const { templateId, headerOrientation, headerPosition } = req.body; // Assuming templateId is sent in the request body
     if (!req.files.files || req.files.files.length === 0) {
       return res.status(400).json({ error: 'No files uploaded' });
     }
-    const data = await getFileSheet(req.files.files);
+
+    if (!templateId) {
+      return res.status(400).json({ error: 'templateId is required' });
+    }
+
+    const fileNames = req.files.files.map(file => file.filename);
+    const filesNames = fileNames.map(fileName => ({
+      path: path.join('uploads', templateId, fileName),
+      originalname: fileName
+    }));
+
+    for (const file of filesNames) {
+      try {
+        await File.create(
+          {
+            filename: file.originalname,
+            templateId,
+          }
+        );
+      } catch (createError) {
+        console.error(`Failed to create File record for ${file.originalname}: ${createError.message}`);
+      }
+    }
+    const data = await getFileSheet(req.files.files, headerOrientation, headerPosition);
     res.status(200).json(data)
   } catch(error) {
     res.status(500).json({ error: error.message })
+  }
+}
+
+
+async function processAndCompareHeaders(req, res) {
+  const { templateId, fileNames } = req.body;
+  const { mappingTemplateId } = req.params;
+
+  if (!templateId) {
+    return res.status(400).json({ error: 'mappingTemplateId is required' });
+  }
+
+  try {
+    // Step 1: Prepare files for processing
+    const files = fileNames.map(fileName => ({
+      path: path.join('uploads', templateId, fileName),
+      originalname: fileName
+    }));
+    const processedFiles = await headerProcessor(files);
+
+    // Step 2: Extract all unique headers from processed files
+    const extractedHeaders = new Set();
+    for (const file of processedFiles) {
+      for (const sheet of file.sheets) {
+        sheet.headers.forEach(header => {
+          if (header) extractedHeaders.add(header); // Only add non-empty headers
+        });
+      }
+    }
+
+    // Step 3: Get existing headers from ExtractedHeader for this mappingTemplateId
+    const existingExtractedHeaders = await ExtractedHeader.findAll({
+      where: { mappingTemplateId},
+      attributes: ['name'],
+      raw: true,
+    });
+    const existingExtractedHeaderNames = new Set(existingExtractedHeaders.map(header => header.name));
+
+    // Step 4: Filter out headers that already exist in ExtractedHeader
+    const uniqueHeaders = Array.from(extractedHeaders).filter(
+      header => !existingExtractedHeaderNames.has(header)
+    );
+
+    // Step 5: Save unique headers to ExtractedHeader and prepare response
+    const result = [];
+    await ExtractedHeader.sequelize.transaction(async (t) => {
+      for (const header of uniqueHeaders) {
+        const headerData = {
+          id: uuidv4(),
+          name: header,
+          columnType: 'text',
+          criticalityLevel: '3',
+          mappingTemplateId,
+        };
+        await ExtractedHeader.create(headerData, { transaction: t });
+        result.push({
+          id: headerData.id,
+          name: headerData.name,
+          columnType: headerData.columnType,
+          criticalityLevel: headerData.criticalityLevel,
+        });
+      }
+    });
+
+    // Step 7: Return all headers (existing + new) for the mappingTemplateId
+    const allHeaders = await ExtractedHeader.findAll({
+      where: { mappingTemplateId },
+      attributes: ['id', 'name', 'columnType', 'criticalityLevel'],
+      raw: true,
+    });
+
+    res.status(200).json(allHeaders);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+}
+
+
+async function getExtractedHeadersByTemplateId(req, res) {
+  const { mappingTemplateId } = req.query;
+  if (!mappingTemplateId) {
+    return res.status(400).json({ message: "Mapping Template Id is required" });
+  }
+  try {
+    const headers = await ExtractedHeader.findAll({
+      where: { mappingTemplateId },
+      attributes: ['id', 'name', 'columnType', 'criticalityLevel'],
+      raw: true,
+    });
+    res.status(200).json(headers);
+  } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+}
+
+
+async function processNLP(req, res) {
+  const { ruleString } = req.body;
+
+  try{
+    const result = parseRule(ruleString);
+    res.status(200).json(result);
+  } catch(error) {
+    res.status(500).json({ error: error.message });
   }
 
 }
 
 
-
 module.exports = {
-  deleteFile,
-  deleteMultipleFiles,
-  deleteOriginalFile,
-  deleteMultipleOriginalFiles,
   uploadAndGetHeaders,
   getFileSheets,
-  processAndSaveSelectedSheets
+  processAndSaveSelectedSheets,
+  processAndCompareHeaders,
+  getExtractedHeadersByTemplateId,
+  uploadAndProcessData,
+  processAndGetHeaderSelectedSheets,
+  processAndGetSheetMapHeaders
 };

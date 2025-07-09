@@ -8,29 +8,12 @@ const fileRoutes = require("./routes/fileRoutes");
 const dataRoutes = require("./routes/dataRoutes");
 const mapheaderRoutes = require("./routes/mapheaderRoutes");
 const maptemplateRoutes = require("./routes/maptemplateRoutes");
+const ruleRoutes = require("./routes/ruleRoutes");
+const revertRoutes = require("./routes/revertRoutes");
 
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', 'https://j-mac.vercel.app');
-  res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type,Authorization');
-  if (req.method === 'OPTIONS') {
-    return res.sendStatus(200);
-  }
-  next();
-});
-
-
-app.use(
-    cors({
-      origin: "https://j-mac.vercel.app", // Allow only your frontend domain
-      methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"], // Allow these HTTP methods
-      allowedHeaders: ["Content-Type", "Authorization"], // Allow these headers (valid header names only)
-      credentials: true, // If your frontend sends cookies or credentials
-    })
-  );
 app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 app.use(express.json({ limit: '100mb' }));
-
+app.use(cors());
 app.set("timeout", 600000);
 
 
@@ -41,6 +24,8 @@ app.use("/api", fileRoutes);
 app.use("/api", dataRoutes);
 app.use("/api", mapheaderRoutes);
 app.use("/api", maptemplateRoutes);
+app.use("/api", ruleRoutes);
+app.use("/api", revertRoutes);
 
 
 module.exports = app;

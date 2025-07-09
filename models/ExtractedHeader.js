@@ -1,8 +1,8 @@
 const { DataTypes } = require('sequelize');
 const sequelize = require('../config/database');
 
-const Header = sequelize.define(
-  'Header',
+const ExtractedHeader = sequelize.define(
+  'ExtractedHeader',
   {
     id: {
       type: DataTypes.UUID,
@@ -23,13 +23,13 @@ const Header = sequelize.define(
       allowNull: false,
       defaultValue: 'text',
     },
-    templateId: {
+    mappingTemplateId: {
       type: DataTypes.UUID,
       allowNull: false,
     },
   },
   {
-    tableName: 'Header',
+    tableName: 'ExtractedHeader',
     timestamps: true,
     indexes: [
       {
@@ -39,4 +39,4 @@ const Header = sequelize.define(
   }
 );
 
-module.exports = Header;
+module.exports = ExtractedHeader;
