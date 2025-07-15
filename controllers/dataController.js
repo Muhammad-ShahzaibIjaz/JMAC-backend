@@ -1531,7 +1531,7 @@ const findZipCodes = async (req, res) => {
 const scoreConversion = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
-    const { templateId, subject, testType, sourceHeader, targetHeader } = req.body;
+    const { templateId, subject, testType, sourceHeader, sourceCompHeader, targetHeader } = req.body;
     if (!templateId || !subject || !testType || !sourceHeader || !targetHeader) {
       await transaction.rollback();
       return res.status(400).json({ error: 'Missing required fields' });
@@ -1555,16 +1555,36 @@ const scoreConversion = async (req, res) => {
       transaction
     });
 
+    // Find comparison header if provided
+    let sourceCompHeaderID = null;
+    if (sourceCompHeader !== "optional" || sourceCompHeader !== null) {
+      sourceCompHeaderID = await Header.findOne({
+        where: { templateId, name: sourceCompHeader },
+        transaction,
+      });
+      if (!sourceCompHeaderID) {
+        await transaction.rollback();
+        return res.status(404).json({ error: 'Comparison header not found' });
+      }
+    }
+
     if (!sourceHeaderID || !targetHeaderID) {
       await transaction.rollback();
       return res.status(404).json({ error: 'One or more headers not found' });
+    }
+
+
+    // Get all relevant sheet data
+    const headerIds = [sourceHeaderID.id, targetHeaderID.id];
+    if (sourceCompHeaderID) {
+      headerIds.push(sourceCompHeaderID.id);
     }
 
     // Get all relevant sheet data
     const data = await SheetData.findAll({
       where: {
         headerId: {
-          [Op.in]: [sourceHeaderID.id, targetHeaderID.id],
+          [Op.in]: headerIds,
         }
       },
       transaction
@@ -1583,6 +1603,8 @@ const scoreConversion = async (req, res) => {
       } else if (entry.headerId === targetHeaderID.id) {
         rows[rowIndex].targetValue = entry.value; // This is a string
         originalValues.set(rowIndex, entry.value);
+      } else if (entry.headerId === sourceCompHeaderID?.id) {
+        rows[rowIndex].compValue = entry.value;
       }
     });
 
@@ -1602,13 +1624,25 @@ const scoreConversion = async (req, res) => {
       }
 
       // Parse the string value to number
-      const sourceValue = parseFloat(sourceValueStr);
+      let sourceValue = parseFloat(sourceValueStr);
       if (isNaN(sourceValue)) {
         errors.push({
           rowIndex: parseInt(rowIndex),
           error: `Invalid number format: ${sourceValueStr}`
         });
         continue;
+      }
+
+      if (sourceCompHeader && row.compValue) {
+        const compValue = parseFloat(row.compValue);
+        if (isNaN(compValue)) {
+          errors.push({
+            rowIndex: parseInt(rowIndex),
+            error: `Invalid number format in comparison: ${row.compValue}`
+          });
+          continue;
+        }
+        sourceValue = Math.max(sourceValue, compValue);
       }
 
       // Check if the parsed number meets minimum requirements

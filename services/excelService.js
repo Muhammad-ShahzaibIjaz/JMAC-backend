@@ -40,7 +40,7 @@ function findFirstNonEmptyRow(jsonData, startFrom = 0) {
   return -1;
 }
 
-function processDataRows(jsonData, headerOrientation='horizontal', headerPosition=null, maxConsecutiveEmptyRows=10) {
+function processDataRows(jsonData, headerOrientation='horizontal', headerPosition=null, isRowSkipped=false ,maxConsecutiveEmptyRows=10) {
   if (!jsonData || !Array.isArray(jsonData) || jsonData.length < 1) {
     return { headers: [], data: [] };
   }
@@ -56,11 +56,13 @@ function processDataRows(jsonData, headerOrientation='horizontal', headerPositio
       return { headers: [], data: [] };
     }
 
-    headers = jsonData[headerRowIndex].filter(cell => cell !== null && cell !== undefined);
+    const startRowIndex = isRowSkipped ? headerRowIndex + 1 : headerRowIndex;
+
+    headers = jsonData[startRowIndex].filter(cell => cell !== null && cell !== undefined);
     
     // Process data rows
     let consecutiveEmptyRows = 0;
-    for (let i = headerRowIndex + 1; i < jsonData.length; i++) {
+    for (let i = startRowIndex + 1; i < jsonData.length; i++) {
       const row = jsonData[i];
       if (!Array.isArray(row) || isRowEmpty(row)) {
         consecutiveEmptyRows++;
@@ -88,8 +90,8 @@ function processDataRows(jsonData, headerOrientation='horizontal', headerPositio
     if (headerColIndex === -1 || headerColIndex >= jsonData[0].length) {
       return { headers: [], data: [] };
     }
-
-    headers = jsonData.map(row => row[headerColIndex]).filter(h => h !== null && h !== undefined);
+ 
+    headers = jsonData.slice(isRowSkipped ? 1 : 0).map(row => row[headerColIndex]).filter(h => h !== null && h !== undefined);
     
     // Process data columns
     for (let i = headerColIndex + 1; i < jsonData[0].length; i++) {
@@ -156,7 +158,7 @@ function processDataRows(jsonData, headerOrientation='horizontal', headerPositio
 //   return processedFiles;
 // }
 
-async function headerProcessor(files, headerOrientation='horizontal', headerPosition=0) {
+async function headerProcessor(files, headerOrientation='horizontal', headerPosition=0, isRowSkipped=false) {
 
   const processedFiles = [];
 
@@ -186,7 +188,7 @@ async function headerProcessor(files, headerOrientation='horizontal', headerPosi
         }
         const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: null});
 
-        const { headers, data } = processDataRows(jsonData, headerOrientation, headerPosition);
+        const { headers, data } = processDataRows(jsonData, headerOrientation, headerPosition, isRowSkipped);
         return {
           sheetName,
           headers,

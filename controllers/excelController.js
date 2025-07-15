@@ -411,7 +411,7 @@ async function saveUniqueHeaders(processedFiles, templateId, transaction) {
 
 async function uploadAndGetHeaders(req, res) {
   try {
-    const { templateId, fileNames, headerOrientation, headerPosition } = req.body;
+    const { templateId, fileNames, headerOrientation, headerPosition, isRowSkipped } = req.body;
     if (!templateId || !Array.isArray(fileNames) || fileNames.length === 0) {
       return res.status(400).json({ error: 'templateId and fileNames array are required' });
     }
@@ -422,7 +422,7 @@ async function uploadAndGetHeaders(req, res) {
       originalname: fileName
     }));
 
-    const processedFiles = await headerProcessor(files, headerOrientation, headerPosition);
+    const processedFiles = await headerProcessor(files, headerOrientation, headerPosition, isRowSkipped);
     
     await sequelize.transaction(async (t) => {
       await saveUniqueHeaders(processedFiles, templateId, t);
@@ -474,7 +474,7 @@ async function uploadAndProcessData(req, res) {
 async function processAndGetHeaderSelectedSheets(req, res) {
   try{
 
-    const { templateId, sheetSelectionData, headerOrientation, headerPosition } = req.body;
+    const { templateId, sheetSelectionData, headerOrientation, headerPosition, isRowSkipped } = req.body;
 
     if (!templateId) {
       throw new Error("templateId is required");
@@ -509,7 +509,7 @@ async function processAndGetHeaderSelectedSheets(req, res) {
 
     let processedFiles;
     try {
-      processedFiles = await headerProcessor(files, headerOrientation, headerPosition);
+      processedFiles = await headerProcessor(files, headerOrientation, headerPosition, isRowSkipped);
     } catch (error) {
       throw new Error(`Failed to process files: ${error.message}`);
     }
