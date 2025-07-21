@@ -1087,9 +1087,9 @@ async function applyCalculations(req, res) {
 
       // Step 1: Clean up outer quotes and escaped quotes
       let normalizedCond = cond
-        .replace(/^"|"$/g, '') // Remove outer quotes
-        .replace(/\\"/g, '"') // Remove escaped quotes
-        .replace(/"/g, "'"); // Convert any double quotes to single quotes
+        .replace(/^"|"$/g, '')
+        .replace(/\\"/g, '"')
+        .replace(/"/g, "'");
 
       // First pass: Add @ prefix to all header references
       normalizedCond = cond.replace(/\b([a-zA-Z_]\w*)\b/g, (match, header) => {
@@ -1204,7 +1204,6 @@ async function applyCalculations(req, res) {
               );
             }
             const targetType = headerMap[assignment.header].columnType;
-            console.log(`The target value is ${targetValue} and target Type is ${targetType}`);
             if (targetValue !== null && targetValue !== undefined) {
               if (targetType === 'integer') {
                 targetValue = Math.round(Number(targetValue));

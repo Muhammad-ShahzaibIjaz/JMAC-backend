@@ -162,8 +162,6 @@ async function undoLatestOperation(req, res) {
       return res.status(400).json({ error: "templateId is required" });
     }
 
-    console.log(templateId);
-
     const latestOperation = await OperationLog.findOne({
       where: { templateId },
       order: [['createdAt', 'DESC']],

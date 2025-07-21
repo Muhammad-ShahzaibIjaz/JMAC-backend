@@ -10,6 +10,7 @@ const mapheaderRoutes = require("./routes/mapheaderRoutes");
 const maptemplateRoutes = require("./routes/maptemplateRoutes");
 const ruleRoutes = require("./routes/ruleRoutes");
 const revertRoutes = require("./routes/revertRoutes");
+const visualDataRoutes = require("./routes/visualDataRoutes");
 
 app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 app.use(express.json({ limit: '100mb' }));
@@ -26,6 +27,7 @@ app.use("/api", mapheaderRoutes);
 app.use("/api", maptemplateRoutes);
 app.use("/api", ruleRoutes);
 app.use("/api", revertRoutes);
+app.use("/api", visualDataRoutes);
 
 
 module.exports = app;
