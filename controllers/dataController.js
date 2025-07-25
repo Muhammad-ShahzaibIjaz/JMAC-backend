@@ -111,56 +111,168 @@ function validateAndConvertValue(value, columnType, criticalityLevel) {
   }
 }
 
+// async function getHeadersWithValidatedData(req, res) {
+//   try {
+//     const { templateId, currentPage, pageSize } = req.query;
+
+//     if (!templateId) {
+//       return res.status(400).json({ error: 'templateId is required' });
+//     }
+//     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(templateId)) {
+//       return res.status(400).json({ error: 'templateId must be a valid UUID' });
+//     }
+//     const page = parseInt(currentPage);
+//     const size = parseInt(pageSize);
+//     if (isNaN(page) || page < 1) {
+//       return res.status(400).json({ error: 'currentPage must be a positive integer' });
+//     }
+//     if (isNaN(size) || size < 1) {
+//       return res.status(400).json({ error: 'pageSize must be a positive integer' });
+//     }
+
+//     const headers = await Header.findAll({
+//       where: { templateId },
+//       attributes: ['id', 'name', 'criticalityLevel', 'columnType'],
+//       order: [['createdAt', 'ASC']],
+//     });
+
+//     if (!headers || headers.length === 0) {
+//       return res.status(404).json({ error: `No headers found for templateId ${templateId}` });
+//     }
+
+//     const allSheetData = await SheetData.findAll({
+//       include: [{
+//         model: Header,
+//         where: { templateId },
+//         attributes: [],
+//       }],
+//       attributes: ['id', 'rowIndex', 'value', 'headerId'],
+//       order: [['rowIndex', 'ASC']],
+//     });
+
+//     const errorRows = new Set();
+//     const errorPages = new Set();
+//     const validatedDataByHeader = {};
+
+//     headers.forEach(header => {
+//       validatedDataByHeader[header.id] = [];
+//     });
+
+//     allSheetData.forEach(data => {
+//       const header = headers.find(h => h.id === data.headerId);
+//       if (!header) return;
+
+//       const { value, valid } = validateAndConvertValue(
+//         data.value,
+//         header.columnType,
+//         header.criticalityLevel
+//       );
+
+//       validatedDataByHeader[header.id].push({
+//         id: data.id,
+//         rowIndex: data.rowIndex,
+//         value,
+//         valid,
+//       });
+
+//       if (!valid) {
+//         errorRows.add(data.rowIndex);
+//         const pageWithError = Math.floor(data.rowIndex / size) + 1;
+//         errorPages.add(pageWithError);
+//       }
+//     });
+
+//     const offset = (page - 1) * size;
+//     const paginatedDataByHeader = {};
+
+//     headers.forEach(header => {
+//       const headerData = validatedDataByHeader[header.id];
+//       const paginatedData = headerData.filter(
+//         data => data.rowIndex >= offset && data.rowIndex < offset + size
+//       );
+//       paginatedDataByHeader[header.id] = paginatedData;
+//     });
+
+//     const responseHeaders = headers.map(header => ({
+//       id: header.id,
+//       name: header.name,
+//       criticalityLevel: header.criticalityLevel,
+//       columnType: header.columnType,
+//       data: paginatedDataByHeader[header.id],
+//     }));
+
+//     const totalRows = Math.max(...allSheetData.map(data => data.rowIndex), 0);
+//     const totalPages = Math.ceil(totalRows / size);
+
+//     res.status(200).json({
+//       headers: responseHeaders,
+//       totalErrorRows: errorRows.size,
+//       errorPages: Array.from(errorPages).sort((a, b) => a - b),
+//       pagination: {
+//         currentPage: page,
+//         pageSize: size,
+//         totalRows,
+//         totalPages,
+//       },
+//     });
+//   } catch (error) {
+//     console.error('Error retrieving headers with validated data:', error.message, error.stack);
+//     res.status(500).json({ error: 'Failed to retrieve data' });
+//   }
+// }
+
 async function getHeadersWithValidatedData(req, res) {
   try {
     const { templateId, currentPage, pageSize } = req.query;
 
-    if (!templateId) {
-      return res.status(400).json({ error: 'templateId is required' });
-    }
-    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(templateId)) {
+    // Validation checks
+    if (!templateId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(templateId)) {
       return res.status(400).json({ error: 'templateId must be a valid UUID' });
     }
+
     const page = parseInt(currentPage);
     const size = parseInt(pageSize);
-    if (isNaN(page) || page < 1) {
-      return res.status(400).json({ error: 'currentPage must be a positive integer' });
-    }
-    if (isNaN(size) || size < 1) {
-      return res.status(400).json({ error: 'pageSize must be a positive integer' });
+    if (isNaN(page) || page < 1 || isNaN(size) || size < 1) {
+      return res.status(400).json({ error: 'Invalid pagination values' });
     }
 
+    // Fetch header definitions
     const headers = await Header.findAll({
       where: { templateId },
       attributes: ['id', 'name', 'criticalityLevel', 'columnType'],
       order: [['createdAt', 'ASC']],
     });
 
-    if (!headers || headers.length === 0) {
+    if (!headers?.length) {
       return res.status(404).json({ error: `No headers found for templateId ${templateId}` });
     }
 
+    const headerMap = {};
+    headers.forEach(h => { headerMap[h.id] = h; });
+
+    // Fetch all sheet data (small attribute set for performance)
     const allSheetData = await SheetData.findAll({
-      include: [{
-        model: Header,
-        where: { templateId },
-        attributes: [],
-      }],
+      include: [{ model: Header, where: { templateId }, attributes: [] }],
       attributes: ['id', 'rowIndex', 'value', 'headerId'],
       order: [['rowIndex', 'ASC']],
     });
 
+    const offset = (page - 1) * size;
+    const endOffset = offset + size;
+
+    const paginatedData = allSheetData.filter(d => d.rowIndex >= offset && d.rowIndex < endOffset);
+
+    const paginatedDataByHeader = {};
     const errorRows = new Set();
     const errorPages = new Set();
-    const validatedDataByHeader = {};
 
-    headers.forEach(header => {
-      validatedDataByHeader[header.id] = [];
-    });
+    for (const header of headers) {
+      paginatedDataByHeader[header.id] = [];
+    }
 
-    allSheetData.forEach(data => {
-      const header = headers.find(h => h.id === data.headerId);
-      if (!header) return;
+    for (const data of paginatedData) {
+      const header = headerMap[data.headerId];
+      if (!header) continue;
 
       const { value, valid } = validateAndConvertValue(
         data.value,
@@ -168,7 +280,7 @@ async function getHeadersWithValidatedData(req, res) {
         header.criticalityLevel
       );
 
-      validatedDataByHeader[header.id].push({
+      paginatedDataByHeader[header.id].push({
         id: data.id,
         rowIndex: data.rowIndex,
         value,
@@ -177,21 +289,9 @@ async function getHeadersWithValidatedData(req, res) {
 
       if (!valid) {
         errorRows.add(data.rowIndex);
-        const pageWithError = Math.floor(data.rowIndex / size) + 1;
-        errorPages.add(pageWithError);
+        errorPages.add(page);
       }
-    });
-
-    const offset = (page - 1) * size;
-    const paginatedDataByHeader = {};
-
-    headers.forEach(header => {
-      const headerData = validatedDataByHeader[header.id];
-      const paginatedData = headerData.filter(
-        data => data.rowIndex >= offset && data.rowIndex < offset + size
-      );
-      paginatedDataByHeader[header.id] = paginatedData;
-    });
+    }
 
     const responseHeaders = headers.map(header => ({
       id: header.id,
@@ -201,7 +301,10 @@ async function getHeadersWithValidatedData(req, res) {
       data: paginatedDataByHeader[header.id],
     }));
 
-    const totalRows = Math.max(...allSheetData.map(data => data.rowIndex), 0);
+    const totalRows = allSheetData.reduce(
+      (max, d) => Math.max(max, d.rowIndex),
+      0
+    );
     const totalPages = Math.ceil(totalRows / size);
 
     res.status(200).json({

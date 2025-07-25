@@ -13,6 +13,7 @@ const fs = require("fs");
 const fsSync = require("fs").promises;
 const path = require("path");
 const { parseRule } = require("../services/parseService");
+const crypto = require("crypto");
 
 
 async function validateTemplate(templateId) {
@@ -365,6 +366,154 @@ async function saveFileAndData(processedFiles, templateId, mappingtemplateId, tr
   return { savedHeaders: savedHeaders.map((h) => h.header) };
 }
 
+async function saveFileAndSingleSheetData(processedFiles, templateId, mappingtemplateId, transaction) {
+  const sheet = processedFiles?.[0]?.sheets?.[0];
+  if (!sheet || !sheet.headers || !sheet.data) {
+    throw new Error("Sheet is missing or malformed.");
+  }
+
+  const templateHeaders = await Header.findAll({ where: { templateId }, transaction });
+  if (!templateHeaders.length) throw new Error(`No headers found for templateId: ${templateId}`);
+
+  // 🔄 Build mappingTemplate map
+  const headerToMapHeaders = new Map();
+  if (mappingtemplateId) {
+    const mapHeaders = await MapHeader.findAll({ where: { mappingTemplateId: mappingtemplateId }, transaction });
+    for (const mapHeader of mapHeaders) {
+      if (!mapHeader.headerId) continue;
+      if (!headerToMapHeaders.has(mapHeader.headerId)) {
+        headerToMapHeaders.set(mapHeader.headerId, []);
+      }
+      headerToMapHeaders.get(mapHeader.headerId).push(mapHeader.name.toLowerCase());
+    }
+  }
+
+  // 🧠 Detect common header (STUDENTID etc.)
+  const preferredKeys = ['studentid', 'student_id', 'studentidalt', 'student_id_alt', 'id', 'unique_id'];
+  let commonHeader = null;
+  for (const key of preferredKeys) {
+    if (sheet.headers.some(h => h.toLowerCase() === key.toLowerCase())) {
+      commonHeader = key;
+      break;
+    }
+  }
+  const idIndex = commonHeader ? sheet.headers.findIndex(h => h.toLowerCase() === commonHeader.toLowerCase()) : -1;
+
+  // 🧠 Map headers
+  const headerMapping = new Map();
+  for (const fileHeader of sheet.headers) {
+    const lower = fileHeader.toLowerCase();
+    let matchedTemplateHeader = null;
+
+    if (mappingtemplateId) {
+      for (const templateHeader of templateHeaders) {
+        const mapNames = headerToMapHeaders.get(templateHeader.id) || [];
+        if (mapNames.includes(lower)) {
+          matchedTemplateHeader = templateHeader;
+          break;
+        }
+      }
+    }
+
+    if (!matchedTemplateHeader) {
+      matchedTemplateHeader = templateHeaders.find(h => h.name.toLowerCase() === lower);
+    }
+
+    if (matchedTemplateHeader) {
+      headerMapping.set(fileHeader, matchedTemplateHeader);
+    }
+  }
+
+  // 🔐 Row-level hash logic
+  const uniqueRowHashes = new Set();
+  const rowMap = new Map();
+  const generateRowHash = (row) => {
+    const normalized = row.map(val =>
+      (val ?? '').toString().trim().toLowerCase()
+    ).join('|');
+    return crypto.createHash('sha256').update(normalized).digest('hex');
+  };
+
+  for (const row of sheet.data) {
+    const hashKey = generateRowHash(row);
+    if (!uniqueRowHashes.has(hashKey)) {
+      uniqueRowHashes.add(hashKey);
+      rowMap.set(hashKey, row);
+    }
+  }
+
+
+  // 🔍 Text length validations
+  for (const row of rowMap.values()) {
+    for (const header of sheet.headers) {
+      const templateHeader = headerMapping.get(header);
+      if (!templateHeader || templateHeader.columnType !== "text") continue;
+      const val = row[sheet.headers.indexOf(header)];
+      if (val && val.toString().length > 1000) {
+        console.warn(`⚠️ Value for '${templateHeader.name}' exceeds max length`);
+      }
+    }
+  }
+
+  // 🧱 Create or update headers
+  const savedHeaders = [];
+  for (const templateHeader of templateHeaders) {
+    let header = await Header.findOne({ where: { id: templateHeader.id, templateId }, transaction });
+    if (!header) {
+      header = await Header.create({
+        id: templateHeader.id,
+        name: templateHeader.name,
+        criticalityLevel: templateHeader.criticalityLevel || '3',
+        columnType: templateHeader.columnType || 'text',
+        templateId,
+      }, { transaction });
+    }
+
+    const existingData = await SheetData.findAll({ where: { headerId: header.id }, transaction });
+    const existingRowCount = existingData.length;
+    const existingNonNullCount = existingData.filter(d => d.value != null).length;
+
+    let newRowCount = 0, newNonNullCount = 0;
+    for (const row of rowMap.values()) {
+      const val = row[sheet.headers.indexOf(header.name)];
+      if (val != null) newNonNullCount++;
+      newRowCount++;
+    }
+
+    const shouldUpdate =
+      existingRowCount === 0 ||
+      newNonNullCount > existingNonNullCount ||
+      (newNonNullCount === existingNonNullCount && newRowCount > existingRowCount);
+
+    if (shouldUpdate) {
+      await SheetData.destroy({ where: { headerId: header.id }, transaction });
+    }
+
+    savedHeaders.push({ header, shouldUpdate });
+  }
+
+  // 🚀 Bulk insert payload
+  const sheetDataPayload = [];
+  let rowIndex = 1;
+  for (const row of rowMap.values()) {
+    for (const saved of savedHeaders) {
+      if (!saved.shouldUpdate) continue;
+      const colIndex = sheet.headers.findIndex(h => h.toLowerCase() === saved.header.name.toLowerCase());
+      const value = colIndex !== -1 ? row[colIndex] ?? null : null;
+      sheetDataPayload.push({
+        id: uuidv4(),
+        rowIndex,
+        value,
+        headerId: saved.header.id,
+      });
+    }
+    rowIndex++;
+  }
+  console.log(`⏳ Inserting ${sheetDataPayload.length} cells from ${rowMap.size} unique rows`);
+  await SheetData.bulkCreate(sheetDataPayload, { transaction });
+  return { savedHeaders: savedHeaders.map(h => h.header) };
+}
+
 
 async function saveUniqueHeaders(processedFiles, templateId, transaction) {
   try {
@@ -455,7 +604,7 @@ async function uploadAndProcessData(req, res) {
     const processedFiles = await headerProcessor(files);
     
     await sequelize.transaction(async (t) => {
-      await saveFileAndData(processedFiles, templateId, mappingtemplateId ,t);
+      await saveFileAndSingleSheetData(processedFiles, templateId, mappingtemplateId ,t);
     });
 
 

@@ -9,72 +9,171 @@ const { OperationLog, SheetDataSnapshot } = require('../models');
 const { buildRanges, countBaseHeaderValues, getAllBaseHeaderValues} = require('../utils/rangeHelper');
 
 
+// const categorizer = async (req, res) => {
+//   const transaction = await sequelize.transaction();
+
+//   try {
+//     const { templateId, targetHeader, categoryCount } = req.query;
+
+//     if (!templateId || !targetHeader || !categoryCount) {
+//       await transaction.rollback();
+//       return res.status(400).json({ error: 'Missing required fields: templateId, targetHeader and categoryCount are required' });
+//     }
+
+//     const header = await Header.findOne({ where: { templateId, name: targetHeader }, transaction });
+//     if (!header) {
+//       await transaction.rollback();
+//       return res.status(400).json({ error: 'target header not found' });
+//     }
+
+//     const rawValues = await SheetData.findAll({
+//       where: { headerId: header.id },
+//       attributes: ['value'],
+//       transaction,
+//     });
+
+//     if (rawValues.length === 0) {
+//       await transaction.rollback();
+//       return res.status(404).json({ error: 'No data found for the provided headerId' });
+//     }
+
+//     const sortedValues = rawValues
+//       .map((entry) => parseFloat(entry.value))
+//       .filter((val) => !isNaN(val))
+//       .sort((a, b) => b - a);
+
+//     if (sortedValues.length === 0) {
+//       await transaction.rollback();
+//       return res.status(400).json({ error: 'No valid numerical values found in the data' });
+//     }
+
+//     const total = sortedValues.length;
+//     const bucketSize = Math.floor(total / categoryCount);
+//     const categories = [];
+
+//     if (bucketSize === 0) {
+//       await transaction.rollback();
+//       return res.status(400).json({ error: 'Too many categories requested for the available data' });
+//     }
+
+//     for (let i = 0; i < categoryCount; i++) {
+//       const startIdx = i * bucketSize;
+//       const endIdx = i === categoryCount - 1 ? total - 1 : (i + 1) * bucketSize - 1;
+
+//       const start = sortedValues[startIdx];
+//       const end = sortedValues[endIdx];
+
+//       categories.push({ start, end });
+//     }
+
+//     await transaction.commit();
+//     return res.status(200).json(categories);
+
+//   } catch (error) {
+//     await transaction.rollback();
+//     return res.status(500).json({ 
+//       error: 'Failed to categorize data',
+//     });
+//   }
+// };
+
+
 const categorizer = async (req, res) => {
   const transaction = await sequelize.transaction();
 
   try {
-    const { headerId, categoryCount } = req.body;
+    const { templateId, targetHeader, categoryCount } = req.query;
 
-    if (!headerId || !categoryCount) {
+    if (!templateId || !targetHeader || !categoryCount) {
       await transaction.rollback();
-      return res.status(400).json({ error: 'Missing required fields: headerId, and categoryCount are required' });
+      return res.status(400).json({
+        error: "Missing required fields: templateId, targetHeader and categoryCount are required",
+      });
     }
 
-    if (!Number.isInteger(categoryCount) || categoryCount <= 0) {
+    const header = await Header.findOne({ where: { templateId, name: targetHeader }, transaction });
+    if (!header) {
       await transaction.rollback();
-      return res.status(400).json({ error: 'categoryCount must be a positive integer' });
+      return res.status(404).json({ error: "Target header not found" });
     }
 
     const rawValues = await SheetData.findAll({
-      where: { headerId },
-      attributes: ['value'],
+      where: { headerId: header.id },
+      attributes: ["value"],
       transaction,
     });
 
-    if (rawValues.length === 0) {
+    const cleaned = rawValues.map(v => v.value?.trim()).filter(Boolean);
+    if (cleaned.length === 0) {
       await transaction.rollback();
-      return res.status(404).json({ error: 'No data found for the provided headerId' });
+      return res.status(404).json({ error: "No data found for the provided header" });
     }
 
-    const sortedValues = rawValues
-      .map((entry) => parseFloat(entry.value))
-      .filter((val) => !isNaN(val))
-      .sort((a, b) => b - a);
+    let type = header.columnType;
+    if (type === "text") {
+      const isNumeric = cleaned.every(val => !isNaN(parseFloat(val)));
+      const isDate = cleaned.every(val => !isNaN(Date.parse(val)));
 
-    if (sortedValues.length === 0) {
-      await transaction.rollback();
-      return res.status(400).json({ error: 'No valid numerical values found in the data' });
+      if (isNumeric) type = "numeric";
+      else if (isDate) type = "date";
+      else type = "string";
     }
 
-    const total = sortedValues.length;
-    const bucketSize = Math.floor(total / categoryCount);
-    const categories = [];
+    let result;
 
-    if (bucketSize === 0) {
-      await transaction.rollback();
-      return res.status(400).json({ error: 'Too many categories requested for the available data' });
-    }
+    if (type === "numeric" || type === "integer" || type === "decimal") {
+      const values = cleaned.map(Number).filter(v => !isNaN(v));
+      if (values.length === 0) throw new Error("No valid numerical values found");
 
-    for (let i = 0; i < categoryCount; i++) {
-      const startIdx = i * bucketSize;
-      const endIdx = i === categoryCount - 1 ? total - 1 : (i + 1) * bucketSize - 1;
+      const min = Math.min(...values);
+      const max = Math.max(...values);
+      const step = Math.ceil((max - min + 1) / categoryCount);
 
-      const min = sortedValues[startIdx];
-      const max = sortedValues[endIdx];
+      const ranges = [];
+      for (let i = 0; i < categoryCount; i++) {
+        const start = min + i * step;
+        const end = i === categoryCount - 1 ? max : start + step - 1;
+        ranges.push({ start, end });
+      }
 
-      categories.push({ category: i + 1, min, max });
+      result = { type: "numeric", ranges };
+
+    } else if (type === "date") {
+      const dates = cleaned.map(val => new Date(val)).filter(d => !isNaN(d));
+      if (dates.length === 0) throw new Error("No valid date entries found");
+
+      const sorted = dates.sort((a, b) => a - b);
+      const total = sorted.length;
+      const bucketSize = Math.floor(total / categoryCount);
+      if (bucketSize === 0) throw new Error("Too many categories for available date data");
+
+      const ranges = [];
+      for (let i = 0; i < categoryCount; i++) {
+        const start = sorted[i * bucketSize].toISOString();
+        const end = sorted[i === categoryCount - 1 ? total - 1 : (i + 1) * bucketSize - 1].toISOString();
+        ranges.push({ start, end });
+      }
+
+      result = { type: "date", ranges };
+
+    } else if (type === "Y/N" || type === "character" || type === "string") {
+      const uniqueValues = [...new Set(cleaned)];
+      if (categoryCount < uniqueValues.length) {
+        throw new Error(`Category count (${categoryCount}) is less than unique values (${uniqueValues.length})`);
+      }
+
+      result = { type: "category", values: uniqueValues.map(label => ({ label })) };
+
+    } else {
+      throw new Error("Unsupported column type");
     }
 
     await transaction.commit();
-    return res.status(200).json({
-      data: categories
-    });
+    return res.status(200).json(result);
 
   } catch (error) {
     await transaction.rollback();
-    return res.status(500).json({ 
-      error: 'Failed to categorize data',
-    });
+    return res.status(500).json({ error: error.message || "Failed to categorize data" });
   }
 };
 
@@ -476,7 +575,7 @@ async function getStructuredData(templateId) {
 
 
 
-function breakdownNestedFirst(data, baseHeader, targetHeader, categoryCount, nestedHeaders) {
+function breakdownNestedFirst(data, baseHeader, targetHeader, categoryCount, nestedHeaders, manualRanges = []) {
   const result = [];
   const allBaseHeaderValues = getAllBaseHeaderValues(data, baseHeader);
 
@@ -489,7 +588,7 @@ function breakdownNestedFirst(data, baseHeader, targetHeader, categoryCount, nes
 
       if (nestedFiltered.length === 0) return;
 
-      const targetRanges = buildRanges(nestedFiltered, targetHeader, categoryCount);
+      const targetRanges = manualRanges.length > 0 ? manualRanges : buildRanges(nestedFiltered, targetHeader, categoryCount);
 
       targetRanges.forEach(targetRange => {
         const finalFiltered = nestedFiltered.filter(row => {
@@ -513,12 +612,12 @@ function breakdownNestedFirst(data, baseHeader, targetHeader, categoryCount, nes
 
 
 async function getCategoryStats(req, res) {
-  const { templateId, baseHeader, targetHeader, categoryCount, nestedHeaders = [] } = req.body;
+  const { templateId, baseHeader, targetHeader, categoryCount, nestedHeaders = [], manualRanges = [] } = req.body;
   try{
     const structuredData = await getStructuredData(templateId);
     let breakdown = [];
     if (nestedHeaders.length === 0) {
-      const targetRanges = buildRanges(structuredData, targetHeader, categoryCount);
+      const targetRanges = manualRanges.length > 0 ? manualRanges : buildRanges(structuredData, targetHeader, categoryCount);
       const allBaseValues = getAllBaseHeaderValues(structuredData, baseHeader);
 
       breakdown = targetRanges.map(targetRange => {
@@ -534,20 +633,51 @@ async function getCategoryStats(req, res) {
         };
       });
     } else {
-      breakdown = breakdownNestedFirst(structuredData, baseHeader, targetHeader, categoryCount, nestedHeaders);
+      breakdown = breakdownNestedFirst(structuredData, baseHeader, targetHeader, categoryCount, nestedHeaders, manualRanges);
     }
     res.status(200).json(breakdown);
   } catch(error) {
     console.error(error);
     res.status(500).json({ error: 'Unable to process category breakdown.' });
   }
-
 }
 
 
+async function countStudentsByTemplateRaw(templateId) {
+  try {
+    const query = `
+      SELECT COUNT(DISTINCT sd."rowIndex") AS "studentCount"
+      FROM "SheetData" sd
+      JOIN "Header" h ON sd."headerId" = h."id"
+      WHERE h."templateId" = :templateId
+    `;
+
+    const [result] = await sequelize.query(query, {
+      replacements: { templateId },
+      type: sequelize.QueryTypes.SELECT,
+    });
+
+    return result.studentCount || 0;
+  } catch (err) {
+    console.error('Raw query error:', err);
+    throw err;
+  }
+}
+
+async function countStudentsByTemplate(req, res) {
+  const { templateId } = req.params;
+  try {
+    const count = await countStudentsByTemplateRaw(templateId);
+    res.status(200).json({ count });
+  } catch (err) {
+    console.error('Error counting students by template:', err);
+    res.status(500).json({ error: 'Unable to count students by template.' });
+  }
+}
 
 module.exports = {
     categorizer,
     getDataWithRange,
-    getCategoryStats
+    getCategoryStats,
+    countStudentsByTemplate
 };
