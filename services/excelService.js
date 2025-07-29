@@ -186,7 +186,7 @@ async function headerProcessor(files, headerOrientation='horizontal', headerPosi
         if (!worksheet) {
           return null;
         }
-        const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: null});
+        const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: null, raw: false});
 
         const { headers, data } = processDataRows(jsonData, headerOrientation, headerPosition, isRowSkipped);
         return {

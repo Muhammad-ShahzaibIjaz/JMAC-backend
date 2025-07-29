@@ -226,7 +226,11 @@ async function getHeadersWithValidatedData(req, res) {
     const { templateId, currentPage, pageSize } = req.query;
 
     // Validation checks
-    if (!templateId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(templateId)) {
+    if (!templateId) {
+      return res.status(400).json({ error: 'templateId is required' });
+    }
+
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(templateId)) {
       return res.status(400).json({ error: 'templateId must be a valid UUID' });
     }
 
@@ -247,8 +251,11 @@ async function getHeadersWithValidatedData(req, res) {
       return res.status(404).json({ error: `No headers found for templateId ${templateId}` });
     }
 
-    const headerMap = {};
-    headers.forEach(h => { headerMap[h.id] = h; });
+    const errorRows = new Set();
+    const errorPages = new Set();
+    const validatedDataByHeader = {};
+
+    headers.forEach(h => { validatedDataByHeader[h.id] = h; });
 
     // Fetch all sheet data (small attribute set for performance)
     const allSheetData = await SheetData.findAll({
@@ -263,15 +270,13 @@ async function getHeadersWithValidatedData(req, res) {
     const paginatedData = allSheetData.filter(d => d.rowIndex >= offset && d.rowIndex < endOffset);
 
     const paginatedDataByHeader = {};
-    const errorRows = new Set();
-    const errorPages = new Set();
 
     for (const header of headers) {
       paginatedDataByHeader[header.id] = [];
     }
 
     for (const data of paginatedData) {
-      const header = headerMap[data.headerId];
+      const header = validatedDataByHeader[data.headerId];
       if (!header) continue;
 
       const { value, valid } = validateAndConvertValue(
@@ -289,7 +294,8 @@ async function getHeadersWithValidatedData(req, res) {
 
       if (!valid) {
         errorRows.add(data.rowIndex);
-        errorPages.add(page);
+        const pageWithError = Math.floor(data.rowIndex / size) + 1;
+        errorPages.add(pageWithError);
       }
     }
 
@@ -922,6 +928,19 @@ async function bulkUpdates(headerId, value, templateId) {
       transaction
     });
 
+    const maxRowIndexRecord = await SheetData.findOne({
+      include: [{
+        model: Header,
+        where: { templateId },
+        attributes: [],
+      }],
+      order: [['rowIndex', 'DESC']],
+      attributes: ['rowIndex'],
+      transaction,
+    });
+    const maxRowIndex = maxRowIndexRecord?.rowIndex ?? 0;
+    const existingRowIndexes = new Set(currentRecords.map(r => r.rowIndex));
+
     currentRecords.map(record => {
       snapshots.push({
         id: uuidv4(),
@@ -937,6 +956,31 @@ async function bulkUpdates(headerId, value, templateId) {
       { value: value },
       { where: { headerId: headerId }, transaction }
     );
+
+    const newRows = [];
+    for (let i = 1; i <= maxRowIndex; i++) {
+      if (!existingRowIndexes.has(i)) {
+        newRows.push({
+          id: uuidv4(),
+          headerId: headerId,
+          rowIndex: i,
+          value: value
+        });
+
+        snapshots.push({
+          id: uuidv4(),
+          operationLogId: operationLog.id,
+          headerId,
+          rowIndex: i,
+          originalValue: null,
+          newValue: value
+        });
+      }
+    }
+
+    if (newRows.length > 0) {
+      await SheetData.bulkCreate(newRows, { transaction });
+    }
 
     if (snapshots.length > 0) {
       await SheetDataSnapshot.bulkCreate(snapshots, { transaction });

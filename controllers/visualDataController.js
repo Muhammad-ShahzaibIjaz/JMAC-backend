@@ -103,19 +103,31 @@ const categorizer = async (req, res) => {
       transaction,
     });
 
-    const cleaned = rawValues.map(v => v.value?.trim()).filter(Boolean);
+    const cleaned = rawValues.map(v => v.value?.trim()).filter(val => val && val.toUpperCase() !== "NULL");
     if (cleaned.length === 0) {
       await transaction.rollback();
       return res.status(404).json({ error: "No data found for the provided header" });
     }
 
+    const sampleSize = 20;
+    const sample = cleaned.slice(0, sampleSize);
+    const numericSample = sample.filter(val => /^-?\d+(\.\d+)?$/.test(val));
+    const numericConfidence = numericSample.length / sample.length;
+
+    if (cleaned.length > sampleSize && numericConfidence < 0.5) {
+      await transaction.rollback();
+      return res.status(400).json({
+        error: "Column appears to be mixed format. Not Possible to categorize",
+      });
+    }
+
+    const isLikelyNumeric = numericConfidence > 0.8; // tweak this threshold if needed
+
     let type = header.columnType;
     if (type === "text") {
-      const isNumeric = cleaned.every(val => !isNaN(parseFloat(val)));
-      const isDate = cleaned.every(val => !isNaN(Date.parse(val)));
 
-      if (isNumeric) type = "numeric";
-      else if (isDate) type = "date";
+      if (isLikelyNumeric) type = "numeric";
+      else if (sample.every(val => !isNaN(Date.parse(val)))) type = "Date";
       else type = "string";
     }
 
@@ -138,7 +150,8 @@ const categorizer = async (req, res) => {
 
       result = { type: "numeric", ranges };
 
-    } else if (type === "date") {
+    } else if (type === "Date") {
+      console.log("Categorizing date data");
       const dates = cleaned.map(val => new Date(val)).filter(d => !isNaN(d));
       if (dates.length === 0) throw new Error("No valid date entries found");
 
