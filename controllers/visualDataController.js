@@ -109,25 +109,27 @@ const categorizer = async (req, res) => {
       return res.status(404).json({ error: "No data found for the provided header" });
     }
 
+    const uniqueValues = [];
     const sampleSize = 20;
-    const sample = cleaned.slice(0, sampleSize);
-    const numericSample = sample.filter(val => /^-?\d+(\.\d+)?$/.test(val));
-    const numericConfidence = numericSample.length / sample.length;
 
-    if (cleaned.length > sampleSize && numericConfidence < 0.5) {
-      await transaction.rollback();
-      return res.status(400).json({
-        error: "Column appears to be mixed format. Not Possible to categorize",
-      });
+    for (const val of cleaned) {
+      if (!uniqueValues.includes(val)) {
+        uniqueValues.push(val);
+        if (uniqueValues.length >= sampleSize) break;
+      }
     }
 
-    const isLikelyNumeric = numericConfidence > 0.8; // tweak this threshold if needed
+    // const sample = cleaned.slice(0, sampleSize);
+    const numericSample = uniqueValues.filter(val => /^-?\d+(\.\d+)?$/.test(val));
+    const numericConfidence = numericSample.length / uniqueValues.length;
+
+    const isLikelyNumeric = numericConfidence > 0.8;
 
     let type = header.columnType;
     if (type === "text") {
 
       if (isLikelyNumeric) type = "numeric";
-      else if (sample.every(val => !isNaN(Date.parse(val)))) type = "Date";
+      else if (uniqueValues.every(val => !isNaN(Date.parse(val)))) type = "Date";
       else type = "string";
     }
 
@@ -170,12 +172,12 @@ const categorizer = async (req, res) => {
       result = { type: "date", ranges };
 
     } else if (type === "Y/N" || type === "character" || type === "string") {
-      const uniqueValues = [...new Set(cleaned)];
-      if (categoryCount < uniqueValues.length) {
-        throw new Error(`Category count (${categoryCount}) is less than unique values (${uniqueValues.length})`);
+      const allUniqueValues = [...new Set(cleaned)];
+      if (categoryCount < allUniqueValues.length) {
+        throw new Error(`Category count (${categoryCount}) is less than unique values (${allUniqueValues.length})`);
       }
 
-      result = { type: "category", values: uniqueValues.map(label => ({ label })) };
+      result = { type: "category", values: allUniqueValues.map(label => ({ label })) };
 
     } else {
       throw new Error("Unsupported column type");

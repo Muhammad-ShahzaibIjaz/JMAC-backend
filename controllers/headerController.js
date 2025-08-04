@@ -152,6 +152,58 @@ async function getHeader(req, res) {
     }
 }
 
+async function getQualifiedHeadersFromDB(templateId) {
+  const query = `
+    WITH valid_data AS (
+      SELECT 
+        h.id AS "headerId", 
+        TRIM(sd.value) AS value
+      FROM "Header" h
+      JOIN "SheetData" sd ON sd."headerId" = h.id
+      WHERE h."templateId" = :templateId
+        AND sd.value IS NOT NULL
+        AND TRIM(sd.value) <> ''
+    ),
+    filtered_headers AS (
+      SELECT 
+        "headerId"
+      FROM valid_data
+      GROUP BY "headerId"
+      HAVING COUNT(DISTINCT value) >= 2
+    )
+    SELECT h.id, h.name, h."criticalityLevel", h."columnType"
+    FROM "Header" h
+    JOIN filtered_headers fh ON fh."headerId" = h.id
+  `;
+
+  const results = await sequelize.query(query, {
+    replacements: { templateId },
+    type: sequelize.QueryTypes.SELECT,
+  });
+
+  return results;
+}
+
+async function getQualifiedHeaders(req, res) {
+  try {
+    const { id: templateId } = req.params;
+
+    if (!templateId || typeof templateId !== 'string' || templateId.trim().length === 0) {
+      return res.status(400).json({ error: 'Template ID is required and must be a non-empty string' });
+    }
+
+    const qualifiedHeaders = await getQualifiedHeadersFromDB(templateId);
+    if (!qualifiedHeaders || qualifiedHeaders.length === 0) {
+      return res.status(404).json({ error: `No headers found` });
+    }
+
+    res.status(200).json(qualifiedHeaders);
+  } catch (error) {
+    console.error('Error fetching qualified headers:', error.message);
+    res.status(500).json({ error: error.message || 'Internal server error' });
+  }
+}
+
 
 async function exportHeaders(req, res) {
     try {
@@ -422,5 +474,6 @@ module.exports = {
   getHeadersWithMapHeaders,
   getMapHeaders,
   getHeaderID,
-  createRunTimeHeader
+  createRunTimeHeader,
+  getQualifiedHeaders,
 };
