@@ -1145,6 +1145,50 @@ async function processNLP(req, res) {
 
 }
 
+async function getMissingHeaders(req, res) {
+  const { templateId, mappingTemplateId, fileNames } = req.body;
+
+  if (!templateId || !Array.isArray(fileNames) || fileNames.length === 0) {
+    return res.status(400).json({ error: 'templateId and fileNames array are required' });
+  }
+
+  if (!mappingTemplateId) {
+    return res.status(400).json({ error: 'mappingTemplateId is required' });
+  }
+
+  const files = fileNames.map(fileName => ({
+    path: path.join('uploads', templateId, fileName),
+    originalname: fileName
+  }));
+
+  try {
+    const processedFiles = await headerProcessor(files);
+
+    const headers = await Header.findAll({ where: { templateId } });
+
+    const mapHeaders = await MapHeader.findAll({ where: { mappingTemplateId } });
+
+    const headerMap = new Map();
+    mapHeaders.forEach(mh => headerMap.set(mh.headerId, mh.name));
+
+    const expectedNames = headers.map(h =>
+      headerMap.has(h.id) ? headerMap.get(h.id) : h.name
+    ).map(name => name.toLowerCase());
+
+    const actualHeaders = processedFiles.flatMap(file =>
+      file.sheets.flatMap(sheet => sheet.headers.map(h => h.toLowerCase()))
+    );
+
+    const missing = expectedNames.filter(name => !actualHeaders.includes(name));
+
+    return res.status(200).json({ missingHeaders: [...new Set(missing)] });
+
+  } catch (error) {
+    console.error('Error in getMissingHeaders:', error);
+    return res.status(500).json({ error: error.message });
+  }
+}
+
 
 module.exports = {
   uploadAndGetHeaders,
@@ -1154,5 +1198,6 @@ module.exports = {
   getExtractedHeadersByTemplateId,
   uploadAndProcessData,
   processAndGetHeaderSelectedSheets,
-  processAndGetSheetMapHeaders
+  processAndGetSheetMapHeaders,
+  getMissingHeaders
 };
