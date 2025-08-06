@@ -173,10 +173,6 @@ const categorizer = async (req, res) => {
 
     } else if (type === "Y/N" || type === "character" || type === "string") {
       const allUniqueValues = [...new Set(cleaned)];
-      if (categoryCount < allUniqueValues.length) {
-        throw new Error(`Category count (${categoryCount}) is less than unique values (${allUniqueValues.length})`);
-      }
-
       result = { type: "category", values: allUniqueValues.map(label => ({ label })) };
 
     } else {
@@ -637,8 +633,15 @@ async function getCategoryStats(req, res) {
 
       breakdown = targetRanges.map(targetRange => {
         const filtered = structuredData.filter(row => {
-          const val = parseFloat(row[targetHeader]);
-          return val >= targetRange.start && val <= targetRange.end;
+          const val = row[targetHeader];
+
+          // Handle string-based manual ranges
+          if (typeof targetRange.start === 'string' && typeof targetRange.end === 'string') {
+            return val?.trim().toUpperCase() === targetRange.start.trim().toUpperCase();
+          }
+
+          const numVal = parseFloat(val);
+          return !isNaN(numVal) && numVal >= targetRange.start && numVal <= targetRange.end;
         });
 
         return {

@@ -184,6 +184,27 @@ async function getQualifiedHeadersFromDB(templateId) {
   return results;
 }
 
+// async function getQualifiedHeaders(req, res) {
+//   try {
+//     const { id: templateId } = req.params;
+
+//     if (!templateId || typeof templateId !== 'string' || templateId.trim().length === 0) {
+//       return res.status(400).json({ error: 'Template ID is required and must be a non-empty string' });
+//     }
+
+//     const qualifiedHeaders = await getQualifiedHeadersFromDB(templateId);
+//     if (!qualifiedHeaders || qualifiedHeaders.length === 0) {
+//       return res.status(404).json({ error: `No headers found` });
+//     }
+
+//     res.status(200).json(qualifiedHeaders);
+//   } catch (error) {
+//     console.error('Error fetching qualified headers:', error.message);
+//     res.status(500).json({ error: error.message || 'Internal server error' });
+//   }
+// }
+
+
 async function getQualifiedHeaders(req, res) {
   try {
     const { id: templateId } = req.params;
@@ -192,12 +213,60 @@ async function getQualifiedHeaders(req, res) {
       return res.status(400).json({ error: 'Template ID is required and must be a non-empty string' });
     }
 
-    const qualifiedHeaders = await getQualifiedHeadersFromDB(templateId);
-    if (!qualifiedHeaders || qualifiedHeaders.length === 0) {
-      return res.status(404).json({ error: `No headers found` });
+    const headers = await Header.findAll({ where: { templateId } });
+    if (!headers || headers.length === 0) {
+      return res.status(404).json({ error: 'No headers found for this template' });
+    }
+
+    const qualifiedHeaders = [];
+
+    for (const header of headers) {
+      const rawValues = await SheetData.findAll({
+        where: { headerId: header.id },
+        attributes: ['value'],
+      });
+
+      const cleaned = rawValues
+        .map(v => v.value?.trim())
+        .filter(val => val && val.toUpperCase() !== 'NULL');
+
+      if (cleaned.length === 0) continue; // Skip headers with no usable data
+
+      const uniqueValues = [];
+      const sampleSize = 20;
+
+      for (const val of cleaned) {
+        if (!uniqueValues.includes(val)) {
+          uniqueValues.push(val);
+          if (uniqueValues.length >= sampleSize) break;
+        }
+      }
+
+      const numericSample = uniqueValues.filter(val => /^-?\d+(\.\d+)?$/.test(val));
+      const numericConfidence = numericSample.length / uniqueValues.length;
+      const isLikelyNumeric = numericConfidence > 0.8;
+
+      let inferredType = 'category'; // default
+
+      if (isLikelyNumeric) {
+        inferredType = 'numeric';
+      } else if (uniqueValues.every(val => !isNaN(Date.parse(val)))) {
+        inferredType = 'date';
+      }
+
+      qualifiedHeaders.push({
+        id: header.id,
+        name: header.name,
+        inferredType,
+      });
+    }
+
+    if (qualifiedHeaders.length === 0) {
+      return res.status(404).json({ error: 'No qualified headers with usable data' });
     }
 
     res.status(200).json(qualifiedHeaders);
+
   } catch (error) {
     console.error('Error fetching qualified headers:', error.message);
     res.status(500).json({ error: error.message || 'Internal server error' });
