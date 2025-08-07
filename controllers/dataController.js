@@ -1009,7 +1009,7 @@ async function bulkUpdateData(req, res) {
 }
 
 
-async function addPaddingInData(headerId, templateId) {
+async function addPaddingInData(headerId, templateId, padValue, padLength) {
   const transaction = await sequelize.transaction();
   let affectedRows = 0;
   const snapshots = [];
@@ -1030,27 +1030,52 @@ async function addPaddingInData(headerId, templateId) {
 
     // Process each record
     for (const record of records) {
-      if (record.value && record.value !== '') {
-        // Store original value in snapshot
+      const rawValue = record.value;
+
+      // Skip if value is null or string "NULL"
+      if (rawValue === null || String(rawValue).trim().toUpperCase() === "NULL") {
+        await SheetData.update(
+          { value: "" }, // or null if you prefer
+          {
+            where: { id: record.id },
+            transaction
+          }
+        );
+
         snapshots.push({
           id: uuidv4(),
           operationLogId: operationLog.id,
           headerId,
           rowIndex: record.rowIndex,
-          originalValue: record.value,
-          newValue: String(record.value).padStart(9, '0')
+          originalValue: rawValue,
+          newValue: ""
         });
 
-        // Pad the value to 9 characters with leading zeros
-        const [count] = await SheetData.update(
-          { value: String(record.value).padStart(9, '0') },
-          { 
-            where: { id: record.id },
-            transaction
-          }
-        );
-        affectedRows += count;
+        affectedRows += 1;
+        continue;
       }
+
+      // Otherwise, pad the value
+      const originalValue = String(rawValue);
+      const paddedValue = padValue.repeat(padLength) + originalValue;
+
+      snapshots.push({
+        id: uuidv4(),
+        operationLogId: operationLog.id,
+        headerId,
+        rowIndex: record.rowIndex,
+        originalValue,
+        newValue: paddedValue
+      });
+
+      const [count] = await SheetData.update(
+        { value: paddedValue },
+        {
+          where: { id: record.id },
+          transaction
+        }
+      );
+      affectedRows += count;
     }
 
     // Save all snapshots in bulk
@@ -1071,14 +1096,14 @@ async function addPaddingInData(headerId, templateId) {
 
 async function addPadding(req,res) {
   try{
-    const {headerId, templateId} = req.body;
+    const {headerId, templateId, padValue, padLength} = req.body;
 
     if (!headerId || !templateId) {
       return res.status(400).json({ message: "headerId and templateId is required" });
     }
 
-    const result = await addPaddingInData(headerId, templateId);
-    
+    const result = await addPaddingInData(headerId, templateId, padValue, padLength);
+
     res.status(200).json({ message: "OK" });
   } catch(error) {
     res.status(500).json({ error: error.message });
@@ -1175,6 +1200,16 @@ const mathConfig = {
       if (str === null || str === undefined) return false;
       return String(str).endsWith(String(suffix));
     };
+  }),
+  createYEq: math.factory('yEq', [], () => {
+    return function yEq(a, b) {
+      return String(a).toUpperCase() === String(b).toUpperCase();
+    };
+  }),
+  createYNotEquals: math.factory('yNeq', [], () => {
+    return function yNeq(a, b) {
+      return String(a).toUpperCase() !== String(b).toUpperCase();
+    };
   })
 };
 
@@ -1186,6 +1221,11 @@ function createStringComparisonEvaluator(math) {
   const originalEvaluate = math.evaluate;
   return function evaluate(expr, scope) {
     if (typeof expr === 'string') {
+      // Handle Y/N comparisons
+      expr = expr.replace(/(yEq|yNeq)\(([^,]+),\s*('[^']*')\)/g, 
+        (match, fn, left, right) => {
+          return `${fn}(${left}, ${right})`;
+        });
       // Replace == with strEq and != with strNeq for text comparisons
       expr = expr.replace(/(lower\(@?\w+\))\s*(==|!=)\s*('[^']*')/g, 
         (match, left, op, right) => {
@@ -2044,6 +2084,247 @@ const cipConversion = async (req, res) => {
 };
 
 
+async function evaluateRulesAndReturnFilteredData(req, res) {
+  try {
+    // Validate request
+    const { templateId, conditions = [], currentPage = 1, pageSize = 10, headers = [] } = req.body;
+
+    if (!templateId) {
+      return res.status(400).json({ error: 'templateId is required' });
+    }
+
+    // Validate pagination
+    const page = parseInt(currentPage);
+    const size = parseInt(pageSize);
+    if (isNaN(page) || page < 1 || isNaN(size) || size < 1) {
+      return res.status(400).json({ error: 'Invalid pagination parameters' });
+    }
+
+    // Fetch all headers for the templateId from database
+    const dbHeaders = await Header.findAll({
+      where: { templateId },
+      attributes: ['id', 'name', 'columnType', 'criticalityLevel'],
+      order: [['createdAt', 'ASC']],
+    });
+
+    if (dbHeaders.length === 0) {
+      return res.status(404).json({ error: 'No headers found for the template' });
+    }
+
+    // Create header map for quick lookup
+    const headerMap = {};
+    dbHeaders.forEach(header => {
+      headerMap[header.name] = header;
+    });
+
+    // Process conditions to replace header names and handle special cases
+    const processedConditions = conditions.map(condition => {
+      let processed = condition
+        .replace(/^"|"$/g, '') // Remove surrounding quotes
+        .replace(/\\"/g, '"')  // Unescape quotes
+        .replace(/'/g, '"');   // Standardize to double quotes
+
+      processed = processed.replace(/\b([a-zA-Z_][a-zA-Z0-9_]*)\b/g, (match, potentialHeader) => {
+        return headerMap[potentialHeader] ? potentialHeader : match;
+      });
+
+      processed = processed.replace(/([a-zA-Z_][a-zA-Z0-9_]*)\s*(==|!=|>=|<=|>|<)\s*"([^"]*)"/g, 
+        (match, header, operator, value) => {
+          const headerInfo = headerMap[header];
+          if (!headerInfo) return match;
+
+          if (['text', 'character'].includes(headerInfo.columnType.toLowerCase())) {
+            return operator === '=='
+              ? `strEq(${header}, "${value}")`
+              : `strNeq(${header}, "${value}")`;
+          }
+          return match;
+        });
+
+      return processed;
+    });
+
+    // Fetch all relevant sheet data for the template
+    const allSheetData = await SheetData.findAll({
+      where: { headerId: dbHeaders.map(h => h.id) },
+      attributes: ['id', 'headerId', 'rowIndex', 'value'],
+      order: [['rowIndex', 'ASC'], ['headerId', 'ASC']],
+    });
+
+    console.log('allSheetData:', JSON.stringify(allSheetData, null, 2));
+
+    // Organize data by row
+    const rows = {};
+    allSheetData.forEach(entry => {
+      if (!rows[entry.rowIndex]) {
+        rows[entry.rowIndex] = {};
+      }
+      const headerName = dbHeaders.find(h => h.id === entry.headerId)?.name;
+      if (headerName) {
+        rows[entry.rowIndex][headerName] = { id: entry.id, value: entry.value };
+      }
+    });
+
+    console.log('Rows:', JSON.stringify(rows, null, 2));
+
+    // Evaluate conditions for each row
+    const matchingRowIndices = [];
+    const errorRowIndices = [];
+
+    for (const [rowIndexStr, rowData] of Object.entries(rows)) {
+      const rowIndex = parseInt(rowIndexStr);
+      const scope = {};
+
+      // Prepare evaluation scope with properly typed values
+      dbHeaders.forEach(header => {
+        const rawValue = rowData[header.name]?.value ?? null;
+
+        switch (header.columnType.toLowerCase()) {
+          case 'integer':
+            scope[header.name] = rawValue && !isNaN(rawValue) ? parseInt(rawValue, 10) : null;
+            break;
+          case 'decimal':
+            scope[header.name] = rawValue && !isNaN(rawValue) ? parseFloat(rawValue) : null;
+            break;
+          case 'date':
+            const date = rawValue ? new Date(rawValue) : null;
+            scope[header.name] = date && !isNaN(date.getTime()) ? date : null;
+            break;
+          case 'y/n':
+            scope[header.name] = rawValue ? (String(rawValue).toUpperCase() === 'Y' ? 'Y' : 'N') : null;
+            break;
+          default:
+            scope[header.name] = rawValue != null ? String(rawValue) : null;
+        }
+      });
+
+      // Evaluate all conditions
+      let allConditionsMet = true;
+      for (const condition of processedConditions) {
+        try {
+          const result = mathInstance.evaluate(condition, scope);
+          if (!result) {
+            allConditionsMet = false;
+            break;
+          } else {
+            console.log("Evaluating scope:", scope);
+          }
+        } catch (error) {
+          console.error(`Error evaluating condition for row ${rowIndex}:`, error);
+          allConditionsMet = false;
+          break;
+        }
+      }
+
+      if (allConditionsMet) {
+        matchingRowIndices.push(rowIndex);
+      } else {
+        errorRowIndices.push(rowIndex);
+      }
+    }
+
+    // Apply pagination
+    const startIndex = (page - 1) * size;
+    const endIndex = startIndex + size;
+    const paginatedRowIndices = matchingRowIndices.slice(startIndex, endIndex);
+
+    // Create sequential row indices for the response
+    const sequentialRowIndices = paginatedRowIndices.map((originalRowIndex, index) => ({
+      originalRowIndex,
+      sequentialRowIndex: startIndex + index + 1,
+    }));
+
+    // Define validateAndConvertValue function
+    function validateAndConvertValue(value, columnType, criticalityLevel) {
+      let valid = true;
+      let convertedValue = value;
+
+      if (value === null || value === undefined) {
+        valid = criticalityLevel === '0'; // Valid only if non-critical
+        convertedValue = null;
+      } else {
+        switch (columnType.toLowerCase()) {
+          case 'integer':
+            convertedValue = isNaN(value) ? null : parseInt(value, 10);
+            valid = !isNaN(value);
+            break;
+          case 'decimal':
+            convertedValue = isNaN(value) ? null : parseFloat(value);
+            valid = !isNaN(value);
+            break;
+          case 'date':
+            const date = new Date(value);
+            convertedValue = date && !isNaN(date.getTime()) ? date.toISOString() : null;
+            valid = date && !isNaN(date.getTime());
+            break;
+          case 'y/n':
+            convertedValue = String(value).toUpperCase() === 'Y' ? 'Y' : 'N';
+            valid = ['Y', 'N'].includes(String(value).toUpperCase());
+            break;
+          default:
+            convertedValue = String(value);
+            valid = value !== '';
+        }
+      }
+
+      return { value: convertedValue, valid };
+    }
+
+    // Prepare response data with all headers for each row
+    const responseHeaders = dbHeaders.map(header => {
+      const headerData = [];
+
+      for (const { originalRowIndex, sequentialRowIndex } of sequentialRowIndices) {
+        const entry = rows[originalRowIndex]?.[header.name] ?? { value: null };
+        const { value, valid } = validateAndConvertValue(
+          entry.value ?? null,
+          header.columnType,
+          header.criticalityLevel
+        );
+
+        headerData.push({
+          id: entry.id || `${header.id}-${sequentialRowIndex}`,
+          rowIndex: sequentialRowIndex,
+          value,
+          valid,
+        });
+      }
+
+      return {
+        id: header.id,
+        name: header.name,
+        criticalityLevel: header.criticalityLevel,
+        columnType: header.columnType,
+        data: headerData,
+      };
+    });
+
+    // Calculate error pages
+    const errorPages = [];
+    const errorRowsPerPage = size;
+
+    // Send response
+    res.status(200).json({
+      headers: responseHeaders,
+      totalErrorRows: errorRowIndices.length,
+      errorPages: errorPages.sort((a, b) => a - b),
+      pagination: {
+        currentPage: page,
+        pageSize: size,
+        totalRows: matchingRowIndices.length,
+        totalPages: Math.ceil(matchingRowIndices.length / size),
+      },
+    });
+  } catch (error) {
+    console.error('Error in evaluateRulesAndReturnFilteredData:', error);
+    res.status(500).json({
+      error: 'Internal server error',
+      details: error.message,
+    });
+  }
+}
+
+
 module.exports = {
   deleteSheetData, 
   getMatrixPop, 
@@ -2059,5 +2340,6 @@ module.exports = {
   addRow, 
   findZipCodes, 
   scoreConversion,
-  cipConversion
+  cipConversion,
+  evaluateRulesAndReturnFilteredData
 };
