@@ -17,4 +17,5 @@ router.put('/score-conversion', dataController.scoreConversion);
 router.put('/cip-conversion', dataController.cipConversion);
 router.post('/apply-quality-rules', dataController.evaluateRulesAndReturnFilteredData);
 
+
 module.exports = router;

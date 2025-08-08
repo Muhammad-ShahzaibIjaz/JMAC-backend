@@ -1,0 +1,48 @@
+const Header = require('../models/Header');
+const CrossReference = require('../models/CrossReference');
+const CrossReferenceMapping = require('../models/CrossReferenceMappingAttributes');
+const Template = require('../models/Template');
+const sequelize = require('../config/database');
+const { DataTypes, Op } = require('sequelize');
+
+
+const addReferenceMapping = async (req, res) => {
+    const { crossReferenceId, mappings } = req.body;
+    try {
+        if (!crossReferenceId || !mappings || !Array.isArray(mappings)) {
+            return res.status(400).json({ error: 'All fields are required' });
+        }
+        const crossReference = await CrossReference.findByPk(crossReferenceId);
+        if (!crossReference) {
+            return res.status(404).json({ error: 'Cross-reference not found' });
+        }
+        const existingMappings = await CrossReferenceMapping.findAll({
+            where: { crossReferenceId },
+            attributes: ['inputValue', 'outputValue']
+        });
+        const existingMappingSet = new Set(existingMappings.map(m => `${m.inputValue}-${m.outputValue}`));
+        const newMappings = mappings.filter(mapping => {
+            const mappingKey = `${mapping.inputValue}-${mapping.outputValue}`;
+            return !existingMappingSet.has(mappingKey);
+        });
+        if (newMappings.length === 0) {
+            return res.status(409).json({ error: 'No new mappings to add' });
+        }
+        const createdMappings = await CrossReferenceMapping.bulkCreate(
+            newMappings.map(mapping => ({
+                crossReferenceId,
+                inputValue: mapping.inputValue,
+                outputValue: mapping.outputValue
+            })),
+            { returning: true }
+        );
+        return res.status(201).json("success");
+    } catch (error) {
+        console.error('Error adding cross-reference mappings:', error);
+        return res.status(500).json({ error: 'Internal server error' });
+    }
+}
+
+module.exports = {
+    addReferenceMapping
+};

@@ -8,11 +8,16 @@ const ExtractedHeader = require('./ExtractedHeader');
 const Rule = require('./Rule');
 const SheetDataSnapshot = require('./SheetDataSnapShot');
 const OperationLog = require('./OperationLog');
+const CrossReference = require('./CrossReference');
+const CrossReferenceMapping = require('./CrossReferenceMappingAttributes');
 const sequelize = require('../config/database');
 
 // Define associations
 Template.hasMany(File, { foreignKey: 'templateId', onDelete: 'CASCADE' });
 File.belongsTo(Template, { foreignKey: 'templateId' });
+
+Template.hasMany(CrossReference, { foreignKey: 'templateId', onDelete: 'CASCADE' });
+CrossReference.belongsTo(Template, { foreignKey: 'templateId' });
 
 Template.hasMany(Header, { foreignKey: 'templateId', onDelete: 'CASCADE' });
 Header.belongsTo(Template, { foreignKey: 'templateId' });
@@ -32,17 +37,20 @@ MapHeader.belongsTo(MappingTemplate, { foreignKey: 'mappingTemplateId' });
 MapHeader.belongsTo(Header, {foreignKey: "headerId"});
 Header.hasMany(MapHeader, {foreignKey: "headerId", onDelete: "CASCADE"});
 
-
 Header.hasMany(SheetData, { foreignKey: 'headerId', onDelete: 'CASCADE' });
 SheetData.belongsTo(Header, { foreignKey: 'headerId' });
 
 MappingTemplate.hasMany(ExtractedHeader, { foreignKey: "mappingTemplateId", onDelete: 'CASCADE'});
 ExtractedHeader.belongsTo(MappingTemplate, { foreignKey: "mappingTemplateId" });
 
-
 OperationLog.hasMany(SheetDataSnapshot, { foreignKey: 'operationLogId', onDelete: 'CASCADE' });
 SheetDataSnapshot.belongsTo(OperationLog, { foreignKey: 'operationLogId' });
 
+CrossReference.hasMany(CrossReferenceMapping, { foreignKey: 'crossReferenceId', onDelete: 'CASCADE', as: 'mappings' });
+CrossReferenceMapping.belongsTo(CrossReference, { foreignKey: 'crossReferenceId' });
+
+CrossReference.belongsTo(Header, { foreignKey: 'inputHeaderId', as: 'inputHeader' });
+CrossReference.belongsTo(Header, { foreignKey: 'outputHeaderId', as: 'outputHeader' });
 
 
 module.exports = {

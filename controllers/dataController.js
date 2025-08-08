@@ -2325,6 +2325,54 @@ async function evaluateRulesAndReturnFilteredData(req, res) {
 }
 
 
+async function applyReferenceOnData(inputHeaderId, outputHeaderId, mappings) {
+  try {
+    const allData = await SheetData.findAll({
+      where: {
+        headerId: { [Op.in]: [inputHeaderId, outputHeaderId] },
+      },
+    });
+
+
+    const grouped = {};
+    for (const row of allData) {
+      if (!grouped[row.rowIndex]) grouped[row.rowIndex] = {};
+      grouped[row.rowIndex][row.headerId] = row;
+    }
+
+    const toRegex = (pattern) => {
+      const escaped = pattern.replace(/[-[\]/{}()+?.\\^$|]/g, '\\$&');
+      const regexStr = escaped.replace(/\*/g, '.*').replace(/\?/g, '.');
+      return new RegExp(`^${regexStr}$`, 'i');
+    };
+
+    for (const { inputValue, outputValue } of mappings) {
+      const regex = toRegex(inputValue);
+      for (const rowIndex in grouped) {
+        const inputRow = grouped[rowIndex][inputHeaderId];
+        const outputRow = grouped[rowIndex][outputHeaderId];
+
+        if (inputRow?.value && regex.test(inputRow.value.trim())) {
+          if (outputRow) {
+            outputRow.value = outputValue;
+            await outputRow.save();
+          } else {
+            await SheetData.create({
+              rowIndex: parseInt(rowIndex),
+              headerId: outputHeaderId,
+              value: outputValue,
+            });
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Error in applyReferenceOnData:', err);
+    throw err; // Let the parent handler catch it
+  }
+}
+
+
 module.exports = {
   deleteSheetData, 
   getMatrixPop, 
@@ -2341,5 +2389,6 @@ module.exports = {
   findZipCodes, 
   scoreConversion,
   cipConversion,
-  evaluateRulesAndReturnFilteredData
+  evaluateRulesAndReturnFilteredData,
+  applyReferenceOnData,
 };
