@@ -43,6 +43,30 @@ const addReferenceMapping = async (req, res) => {
     }
 }
 
+
+const updateReferenceMappings = async (crossReferenceId, mappings) => {
+    try {
+        await sequelize.transaction(async (t) => {
+            await CrossReferenceMapping.destroy({
+                where: { crossReferenceId },
+                transaction: t
+            });
+            await CrossReferenceMapping.bulkCreate(
+                mappings.map(mapping => ({
+                    crossReferenceId,
+                    inputValue: mapping.inputValue,
+                    outputValue: mapping.outputValue
+                })),
+                { transaction: t }
+            );
+        });
+    } catch (error) {
+        console.error('Error updating reference mappings:', error);
+        throw error;
+    }
+}
+
 module.exports = {
-    addReferenceMapping
+    addReferenceMapping,
+    updateReferenceMappings
 };
