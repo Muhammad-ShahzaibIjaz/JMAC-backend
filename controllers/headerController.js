@@ -4,6 +4,7 @@ const MappingTemplate = require('../models/MappingTemplate');
 const sequelize = require('../config/database');
 const { v4: uuidv4 } = require('uuid');
 const { exportHeader } = require('../services/excelService');
+const desiredOrder = require('../utils/headerOrderList').desiredOrder;
 
 async function createHeader(req, res) {
   try {
@@ -127,6 +128,25 @@ async function deleteHeader(req, res) {
   }
 }
 
+function normalize(str) {
+  return str.toLowerCase().replace(/[_\s]/g, '');
+}
+
+function sortHeadersFlexibleMatch(headers) {
+  const headerMap = new Map(
+    headers.map(h => [normalize(h.name), h])
+  );
+
+  const ordered = desiredOrder
+    .map(name => headerMap.get(normalize(name)))
+    .filter(Boolean);
+
+  const matchedKeys = new Set(ordered.map(h => normalize(h.name)));
+  const extras = headers.filter(h => !matchedKeys.has(normalize(h.name)));
+
+  return [...ordered, ...extras];
+}
+
 
 async function getHeader(req, res) {
     try {
@@ -141,7 +161,9 @@ async function getHeader(req, res) {
         attributes: ['id', 'name', 'columnType', 'criticalityLevel'],
       });
 
-      res.status(200).json(headers);
+      const sortedHeaders = sortHeadersFlexibleMatch(headers);
+
+      res.status(200).json(sortedHeaders);
     } catch (error) {
       console.error('Error fetching headers:', {
         message: error.message,
@@ -346,7 +368,9 @@ async function getHeadersWithMapHeaders(req, res) {
       return res.status(404).json({ error: `No headers found for templateId ${templateId}` });
     }
 
-    res.status(200).json(headers);
+    const sortedHeaders = sortHeadersFlexibleMatch(headers);
+
+    res.status(200).json(sortedHeaders);
   } catch (error) {
     console.error(`Error retrieving headers with mapHeaders: ${error.message}`, error.stack);
     res.status(500).json({ error: error.message });

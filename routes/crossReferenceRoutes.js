@@ -12,7 +12,8 @@ router.get('/cross-references-without-mapping', referenceController.getCrossRefe
 router.delete('/cross-references', referenceController.deleteCrossReference);
 router.post('/cross-reference-mappings', referenceMappingController.addReferenceMapping);
 router.post('/apply-reference', referenceController.applyReference);
-router.post('/upload-and-get-mapping', upload ,referenceController.parseAndGetReferenceMapping);
+router.post('/get-mapping', referenceController.parseAndGetReferenceMapping);
+router.post('/get-reference-header', upload, referenceController.getReferenceHeader);
 
 
 module.exports = router;

@@ -12,6 +12,7 @@ const math = require('mathjs');
 const { OperationLog, SheetDataSnapshot } = require('../models');
 const { convertScore } = require('../services/conversion');
 const { getCipTitle } = require('../services/cipService');
+const desiredOrder = require('../utils/headerOrderList').desiredOrder;
 
 async function deleteSheetData(req, res) {
   try {
@@ -221,6 +222,18 @@ function validateAndConvertValue(value, columnType, criticalityLevel) {
 //   }
 // }
 
+function normalize(str) {
+  return str.toLowerCase().replace(/[_\s]/g, '');
+}
+
+function sortHeadersFlexibleMatch(headers) {
+  const headerMap = new Map(headers.map(h => [normalize(h.name), h]));
+  const ordered = desiredOrder.map(name => headerMap.get(normalize(name))).filter(Boolean);
+  const matchedKeys = new Set(ordered.map(h => normalize(h.name)));
+  const extras = headers.filter(h => !matchedKeys.has(normalize(h.name)));
+  return [...ordered, ...extras];
+}
+
 async function getHeadersWithValidatedData(req, res) {
   try {
     const { templateId, currentPage, pageSize } = req.query;
@@ -253,9 +266,11 @@ async function getHeadersWithValidatedData(req, res) {
 
     const errorRows = new Set();
     const errorPages = new Set();
-    const validatedDataByHeader = {};
 
-    headers.forEach(h => { validatedDataByHeader[h.id] = h; });
+    const sortedHeaders = sortHeadersFlexibleMatch(headers);
+    // Use sortedHeaders instead of headers in rest of the logic
+    const validatedDataByHeader = {};
+    sortedHeaders.forEach(h => { validatedDataByHeader[h.id] = h; });
 
     // Fetch all sheet data (small attribute set for performance)
     const allSheetData = await SheetData.findAll({
@@ -271,7 +286,7 @@ async function getHeadersWithValidatedData(req, res) {
 
     const paginatedDataByHeader = {};
 
-    for (const header of headers) {
+    for (const header of sortedHeaders) {
       paginatedDataByHeader[header.id] = [];
     }
 
@@ -299,7 +314,7 @@ async function getHeadersWithValidatedData(req, res) {
       }
     }
 
-    const responseHeaders = headers.map(header => ({
+    const responseHeaders = sortedHeaders.map(header => ({
       id: header.id,
       name: header.name,
       criticalityLevel: header.criticalityLevel,
@@ -2151,8 +2166,6 @@ async function evaluateRulesAndReturnFilteredData(req, res) {
       order: [['rowIndex', 'ASC'], ['headerId', 'ASC']],
     });
 
-    console.log('allSheetData:', JSON.stringify(allSheetData, null, 2));
-
     // Organize data by row
     const rows = {};
     allSheetData.forEach(entry => {
@@ -2164,8 +2177,6 @@ async function evaluateRulesAndReturnFilteredData(req, res) {
         rows[entry.rowIndex][headerName] = { id: entry.id, value: entry.value };
       }
     });
-
-    console.log('Rows:', JSON.stringify(rows, null, 2));
 
     // Evaluate conditions for each row
     const matchingRowIndices = [];
@@ -2285,6 +2296,7 @@ async function evaluateRulesAndReturnFilteredData(req, res) {
         headerData.push({
           id: entry.id || `${header.id}-${sequentialRowIndex}`,
           rowIndex: sequentialRowIndex,
+          originalRowIndex: originalRowIndex,
           value,
           valid,
         });
@@ -2391,4 +2403,5 @@ module.exports = {
   cipConversion,
   evaluateRulesAndReturnFilteredData,
   applyReferenceOnData,
+  bulkUpdates
 };

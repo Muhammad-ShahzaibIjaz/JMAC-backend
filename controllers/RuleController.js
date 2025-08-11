@@ -1,5 +1,9 @@
 const Rule = require("../models/Rule");
+const CalculationRule = require("../models/CalculationRule");
 const { v4: uuidv4 } = require("uuid");
+const { Header } = require("../models");
+const { bulkUpdateData, bulkUpdates } = require("./dataController");
+const { re } = require("mathjs");
 
 const createRule = async (req, res) => {
   try {
@@ -116,10 +120,99 @@ const getRuleById = async (req, res) => {
   }
 };
 
+
+const getBulkRulesByTemplateId = async (req, res) => {
+  try {
+    const { id } = req.query;
+    const rules = await CalculationRule.findAll({
+      where: { templateId: id, isGlobal: true },
+      attributes: ['id', 'name'],
+      order: [['createdAt', 'DESC']]
+    });
+
+    const transformedRules = rules.map((rule) => ({
+      id: rule.id,
+      name: rule.name,
+    }));
+    return res.status(200).json(transformedRules);
+  } catch (error) {
+    console.error("Error fetching rules:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+
+const createBulkRule = async (req, res) => {
+  const { headerName, value, name, templateId } = req.body;
+  try{
+    // Validate input
+    if (!headerName || !value || !name || !templateId) {
+      return res.status(400).json({ error: "All fields (headerName, value, name, templateId) are required" });
+    }
+    const isRuleExist = await CalculationRule.findOne({
+      where: { header: headerName, templateId, name }
+    });
+    if (isRuleExist) {
+      return res.status(409).json({ error: "Bulk rule already exists" });
+    }
+    const rule = await CalculationRule.create({
+      name: name,
+      header: headerName,
+      assignments: value,
+      isGlobal: true,
+      templateId
+    });
+    return res.status(201).json({ id: rule.id, name: rule.name });
+  } catch (error) {
+    console.error("Error creating bulk rule:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+}
+
+const applyBulkRule = async (req, res) => {
+  const { id } = req.query;
+  try {
+    const isBulkRuleExist = await CalculationRule.findByPk(id);
+    if (!isBulkRuleExist) {
+      return res.status(404).json({ error: "Bulk rule not found" });
+    }
+
+    const headerId = await Header.findOne({ where: { templateId: isBulkRuleExist.templateId, name: isBulkRuleExist.header } });
+    if (!headerId) {
+      return res.status(404).json({ error: "Header not found" });
+    }
+
+    await bulkUpdates(headerId.id, isBulkRuleExist.assignments, isBulkRuleExist.templateId);
+    return res.status(200).json({ message: "Bulk rule applied successfully" });
+  } catch (error) {
+    console.error("Error applying bulk rule:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+}
+
+const deleteBulkRule = async (req, res) => {
+  const { id } = req.query;
+  try{
+    const isBulkRuleExist = await CalculationRule.findByPk(id);
+    if (!isBulkRuleExist) {
+      return res.status(404).json({ error: "Bulk rule not found" });
+    }
+    await isBulkRuleExist.destroy();
+    return res.status(200).json({ message: "Bulk rule deleted successfully" });
+  } catch(error) {
+    console.error("Error deleting bulk rule:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+}
+
 module.exports = {
   createRule,
   updateRule,
   deleteRule,
   getAllRules,
-  getRuleById
+  getRuleById,
+  getBulkRulesByTemplateId,
+  createBulkRule,
+  applyBulkRule,
+  deleteBulkRule
 };

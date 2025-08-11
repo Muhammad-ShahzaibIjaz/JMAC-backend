@@ -12,9 +12,9 @@ const { headerProcessor }  = require('../services/excelService');
 
 
 const addCrossReference = async (req, res) => {
-    const { name, templateId, inputHeaderId, outputHeaderId } = req.body;
+    const { name, templateId, inputHeaderId, dependentReferenceId = null } = req.body;
     try {
-        if (!name || !templateId || !inputHeaderId || !outputHeaderId) {
+        if (!name || !templateId || !inputHeaderId) {
             return res.status(400).json({ error: 'All fields are required' });
         }
         const referenceExists = await sequelize.transaction(async (t) => {
@@ -23,7 +23,6 @@ const addCrossReference = async (req, res) => {
                     name,
                     templateId,
                     inputHeaderId,
-                    outputHeaderId
                 },
                 transaction: t
             });
@@ -38,7 +37,7 @@ const addCrossReference = async (req, res) => {
             name,
             templateId,
             inputHeaderId,
-            outputHeaderId
+            dependentReferenceId
         });
 
         return res.status(201).json(newReference.id);
@@ -65,11 +64,6 @@ const getCrossReferences = async (req, res) => {
           attributes: ['name'],
         },
         {
-          model: Header,
-          as: 'outputHeader',
-          attributes: ['name'],
-        },
-        {
           model: CrossReferenceMapping,
           as: 'mappings',
           attributes: ['inputValue', 'outputValue'],
@@ -81,7 +75,6 @@ const getCrossReferences = async (req, res) => {
       id: ref.id,
       name: ref.name,
       inputHeader: ref.inputHeader ? ref.inputHeader.name : '',
-      outputHeader: ref.outputHeader ? ref.outputHeader.name : '',
       mappings: ref.mappings.map((mapping) => ({
         inputValue: mapping.inputValue,
         outputValue: mapping.outputValue,
@@ -109,12 +102,7 @@ const getCrossReferencesWithoutMapping = async (req, res) => {
           model: Header,
           as: 'inputHeader',
           attributes: ['name'],
-        },
-        {
-          model: Header,
-          as: 'outputHeader',
-          attributes: ['name'],
-        },
+        }
       ],
     });
 
@@ -122,7 +110,7 @@ const getCrossReferencesWithoutMapping = async (req, res) => {
       id: ref.id,
       name: ref.name,
       inputHeader: ref.inputHeader ? ref.inputHeader.name : '',
-      outputHeader: ref.outputHeader ? ref.outputHeader.name : '',
+      dependentReferenceId: ref.dependentReferenceId ? ref.dependentReferenceId : null
     }));
 
     return res.status(200).json(formattedReferences);
@@ -165,11 +153,6 @@ const applyReference = async (req, res) => {
           attributes: ['id'],
         },
         {
-          model: Header,
-          as: 'outputHeader',
-          attributes: ['id'],
-        },
-        {
           model: CrossReferenceMapping,
           as: 'mappings',
           attributes: ['inputValue', 'outputValue'],
@@ -183,7 +166,6 @@ const applyReference = async (req, res) => {
     }
     
     const inputHeaderId = crossReferences.inputHeader.id;
-    const outputHeaderId = crossReferences.outputHeader.id;
     const mappings = crossReferences.mappings.map((mapping) => ({
         inputValue: mapping.inputValue,
         outputValue: mapping.outputValue,
@@ -191,7 +173,7 @@ const applyReference = async (req, res) => {
     if (!Array.isArray(mappings) || mappings.length === 0) {
       return res.status(422).json({ error: 'There is no References Rules to apply' });
     }
-    await applyReferenceOnData(inputHeaderId, outputHeaderId, mappings);
+    await applyReferenceOnData(inputHeaderId, inputHeaderId, mappings);
     return res.status(200).json({ message: 'Reference applied successfully' });
   } catch (error) {
     console.error('Error cross-references:', error);
@@ -200,9 +182,9 @@ const applyReference = async (req, res) => {
 }
 
 const updateCrossReferenceWithMapping = async (req, res) => {
-  const { id, name, inputHeaderId, outputHeaderId, mappings } = req.body;
+  const { id, name, inputHeaderId, mappings } = req.body;
   try{
-    if (!id || !name || !inputHeaderId || !outputHeaderId || !mappings || !Array.isArray(mappings)) {
+    if (!id || !name || !inputHeaderId || !mappings || !Array.isArray(mappings)) {
       return res.status(400).json({ error: 'All fields are required' });
     }
     const crossReference = await CrossReference.findByPk(id);
@@ -211,7 +193,6 @@ const updateCrossReferenceWithMapping = async (req, res) => {
     }
     crossReference.name = name;
     crossReference.inputHeaderId = inputHeaderId;
-    crossReference.outputHeaderId = outputHeaderId;
     await crossReference.save();
     await updateReferenceMappings(crossReference.id, mappings);
     return res.status(200).json({ message: 'Cross-reference updated successfully' });
@@ -222,6 +203,70 @@ const updateCrossReferenceWithMapping = async (req, res) => {
 }
 
 const parseAndGetReferenceMapping = async (req, res) => {
+  try {
+    const { templateId, fileName, headerName } = req.body;
+
+    if (!templateId || !fileName || !headerName) {
+      return res.status(400).json({ error: 'templateId, fileName, and headerName are required' });
+    }
+
+    const filePath = path.join('uploads', templateId, fileName);
+
+    // Construct file object manually
+    const fileObj = {
+      path: filePath,
+      originalname: fileName,
+    };
+
+    const processedFiles = await headerProcessor([fileObj]);
+
+    if (!processedFiles || processedFiles.length === 0) {
+      return res.status(422).json({ error: 'No content found in the file' });
+    }
+
+    const fileData = processedFiles[0];
+    const headerValues = [];
+
+    for (const sheet of fileData.sheets) {
+      const headers = sheet.headers;
+      const rows = sheet.data;
+
+      const headerIndex = headers.findIndex(h => h.trim().toLowerCase() === headerName.trim().toLowerCase());
+
+      if (headerIndex === -1) {
+        console.warn(`Header "${headerName}" not found in sheet "${sheet.sheetName}"`);
+        continue;
+      }
+
+      for (const row of rows) {
+        const value = row[headerIndex];
+        if (value !== undefined && value !== null && value !== '') {
+          headerValues.push(value);
+        }
+      }
+    }
+
+    const uniqueValues = [...new Set(headerValues.map(v => v.trim()))];
+
+    if (uniqueValues.length === 0) {
+      return res.status(422).json({ error: `No values found for header "${headerName}"` });
+    }
+
+    const referenceRows = uniqueValues.map(value => ({
+      inputValue: value,
+      outputValue: "",
+    }));
+
+    return res.status(200).json(referenceRows);
+
+  } catch (error) {
+    console.error('Error processing header mapping:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+
+const getReferenceHeader = async (req, res) => {
   try {
     const { templateId } = req.body;
 
@@ -256,34 +301,13 @@ const parseAndGetReferenceMapping = async (req, res) => {
       return res.status(422).json({ error: 'No content found in the uploaded files' });
     }
 
-    const referenceMappings = [];
+    const allHeaders = processedFiles.flatMap(file =>
+      file.sheets.flatMap(sheet => sheet.headers || [])
+    );
 
-    for (const file of processedFiles) {
-      for (const sheet of file.sheets) {
-        const headers = sheet.headers;
-        const rows = sheet.data;
+    const uniqueHeaders = [...new Set(allHeaders.map(h => h.trim()))];
 
-        if (headers.length < 2) {
-          console.warn(`Sheet "${sheet.sheetName}" in file "${file.fileName}" has less than 2 columns. Skipping.`);
-          continue;
-        }
-
-        for (const row of rows) {
-          if (row.length < 2) continue;
-
-          referenceMappings.push({
-            inputValue: row[0],
-            outputValue: row[1],
-          });
-        }
-      }
-    }
-
-    if (referenceMappings.length === 0) {
-      return res.status(422).json({ error: 'No valid mappings found in the uploaded files' });
-    }
-
-    return res.status(200).json(referenceMappings);
+    return res.status(200).json({ headers: uniqueHeaders });
 
   } catch (error) {
     console.error('Error processing files:', error);
@@ -301,5 +325,6 @@ module.exports = {
     getCrossReferencesWithoutMapping,
     applyReference,
     updateCrossReferenceWithMapping,
-    parseAndGetReferenceMapping
+    parseAndGetReferenceMapping,
+    getReferenceHeader
 };
