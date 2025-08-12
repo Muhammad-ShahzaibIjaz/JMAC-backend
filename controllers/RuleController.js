@@ -2,8 +2,7 @@ const Rule = require("../models/Rule");
 const CalculationRule = require("../models/CalculationRule");
 const { v4: uuidv4 } = require("uuid");
 const { Header } = require("../models");
-const { bulkUpdateData, bulkUpdates } = require("./dataController");
-const { re } = require("mathjs");
+const { bulkUpdates } = require("./dataController");
 
 const createRule = async (req, res) => {
   try {

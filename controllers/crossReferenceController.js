@@ -12,9 +12,9 @@ const { headerProcessor }  = require('../services/excelService');
 
 
 const addCrossReference = async (req, res) => {
-    const { name, templateId, inputHeaderId, dependentReferenceId = null } = req.body;
+    const { name, templateId, inputHeaderId, outputHeaderId, dependentReferenceId = null } = req.body;
     try {
-        if (!name || !templateId || !inputHeaderId) {
+        if (!name || !templateId || !inputHeaderId || !outputHeaderId) {
             return res.status(400).json({ error: 'All fields are required' });
         }
         const referenceExists = await sequelize.transaction(async (t) => {
@@ -23,6 +23,7 @@ const addCrossReference = async (req, res) => {
                     name,
                     templateId,
                     inputHeaderId,
+                    outputHeaderId
                 },
                 transaction: t
             });
@@ -37,6 +38,7 @@ const addCrossReference = async (req, res) => {
             name,
             templateId,
             inputHeaderId,
+            outputHeaderId,
             dependentReferenceId
         });
 
@@ -64,6 +66,11 @@ const getCrossReferences = async (req, res) => {
           attributes: ['name'],
         },
         {
+          model: Header,
+          as: 'outputHeader',
+          attributes: ['name'],
+        },
+        {
           model: CrossReferenceMapping,
           as: 'mappings',
           attributes: ['inputValue', 'outputValue'],
@@ -75,6 +82,7 @@ const getCrossReferences = async (req, res) => {
       id: ref.id,
       name: ref.name,
       inputHeader: ref.inputHeader ? ref.inputHeader.name : '',
+      outputHeader: ref.outputHeader ? ref.outputHeader.name : '',
       mappings: ref.mappings.map((mapping) => ({
         inputValue: mapping.inputValue,
         outputValue: mapping.outputValue,
@@ -102,7 +110,12 @@ const getCrossReferencesWithoutMapping = async (req, res) => {
           model: Header,
           as: 'inputHeader',
           attributes: ['name'],
-        }
+        },
+        {
+          model: Header,
+          as: 'outputHeader',
+          attributes: ['name'],
+        },
       ],
     });
 
@@ -110,6 +123,7 @@ const getCrossReferencesWithoutMapping = async (req, res) => {
       id: ref.id,
       name: ref.name,
       inputHeader: ref.inputHeader ? ref.inputHeader.name : '',
+      outputHeader: ref.outputHeader ? ref.outputHeader.name : '',
       dependentReferenceId: ref.dependentReferenceId ? ref.dependentReferenceId : null
     }));
 
@@ -122,18 +136,22 @@ const getCrossReferencesWithoutMapping = async (req, res) => {
 
 
 const deleteCrossReference = async (req, res) => {
-    const { id } = req.query;
-    try {
-        const crossReference = await CrossReference.findByPk(id);
-        if (!crossReference) {
-            return res.status(404).json({ error: 'Cross-reference not found' });
-        }
-        await crossReference.destroy();
-        return res.status(204).send();
-    } catch (error) {
-        console.error('Error deleting cross-reference:', error);
-        return res.status(500).json({ error: 'Internal server error' });
+  const { id } = req.query;
+  try {
+    const crossReference = await CrossReference.findByPk(id);
+    if (!crossReference) {
+      return res.status(404).json({ error: 'Cross-reference not found' });
     }
+    await CrossReference.update(
+      { dependentReferenceId: null },
+      { where: { dependentReferenceId: id } }
+    );
+    await crossReference.destroy();
+    return res.status(204).send();
+  } catch (error) {
+    console.error('Error deleting cross-reference:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
 };
 
 
@@ -153,6 +171,11 @@ const applyReference = async (req, res) => {
           attributes: ['id'],
         },
         {
+          model: Header,
+          as: 'outputHeader',
+          attributes: ['id'],
+        },
+        {
           model: CrossReferenceMapping,
           as: 'mappings',
           attributes: ['inputValue', 'outputValue'],
@@ -166,6 +189,7 @@ const applyReference = async (req, res) => {
     }
     
     const inputHeaderId = crossReferences.inputHeader.id;
+    const outputHeaderId = crossReferences.outputHeader.id;
     const mappings = crossReferences.mappings.map((mapping) => ({
         inputValue: mapping.inputValue,
         outputValue: mapping.outputValue,
@@ -173,7 +197,7 @@ const applyReference = async (req, res) => {
     if (!Array.isArray(mappings) || mappings.length === 0) {
       return res.status(422).json({ error: 'There is no References Rules to apply' });
     }
-    await applyReferenceOnData(inputHeaderId, inputHeaderId, mappings);
+    await applyReferenceOnData(inputHeaderId, outputHeaderId, mappings);
     return res.status(200).json({ message: 'Reference applied successfully' });
   } catch (error) {
     console.error('Error cross-references:', error);
@@ -182,9 +206,9 @@ const applyReference = async (req, res) => {
 }
 
 const updateCrossReferenceWithMapping = async (req, res) => {
-  const { id, name, inputHeaderId, mappings } = req.body;
+  const { id, name, inputHeaderId, outputHeaderId, mappings } = req.body;
   try{
-    if (!id || !name || !inputHeaderId || !mappings || !Array.isArray(mappings)) {
+    if (!id || !name || !inputHeaderId || !outputHeaderId || !mappings || !Array.isArray(mappings)) {
       return res.status(400).json({ error: 'All fields are required' });
     }
     const crossReference = await CrossReference.findByPk(id);
@@ -193,6 +217,7 @@ const updateCrossReferenceWithMapping = async (req, res) => {
     }
     crossReference.name = name;
     crossReference.inputHeaderId = inputHeaderId;
+    crossReference.outputHeaderId = outputHeaderId;
     await crossReference.save();
     await updateReferenceMappings(crossReference.id, mappings);
     return res.status(200).json({ message: 'Cross-reference updated successfully' });

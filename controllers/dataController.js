@@ -345,6 +345,140 @@ async function getHeadersWithValidatedData(req, res) {
   }
 }
 
+async function getHeadersWithDuplicateData(req, res) {
+  try {
+    const { templateId } = req.query;
+
+    // Validate templateId
+    if (!templateId) {
+      return res.status(400).json({ error: 'templateId is required' });
+    }
+
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(templateId)) {
+      return res.status(400).json({ error: 'templateId must be a valid UUID' });
+    }
+
+    // Fetch headers
+    const headers = await Header.findAll({
+      where: { templateId },
+      attributes: ['id', 'name', 'criticalityLevel', 'columnType'],
+      order: [['createdAt', 'ASC']],
+    });
+
+    if (!headers?.length) {
+      return res.status(404).json({ error: `No headers found for templateId ${templateId}` });
+    }
+
+    // Normalize helper
+    const normalize = str => str.toLowerCase().replace(/[_\s]/g, '');
+    const preferredKeys = ['studentid', 'lastname', 'firstname'];
+    const normalizedHeaderMap = new Map(headers.map(h => [normalize(h.name), h.name]));
+
+    let identityHeaders = preferredKeys
+      .filter(key => normalizedHeaderMap.has(key))
+      .map(key => normalizedHeaderMap.get(key));
+
+    if (identityHeaders.length === 0) {
+      identityHeaders = headers.slice(0, 3).map(h => h.name);
+    }
+
+    // Fetch all sheet data
+    const allSheetData = await SheetData.findAll({
+      include: [{ model: Header, where: { templateId }, attributes: [] }],
+      attributes: ['id', 'rowIndex', 'value', 'headerId'],
+      order: [['rowIndex', 'ASC']],
+    });
+
+    // Build rows by rowIndex
+    const validatedDataByHeader = Object.fromEntries(headers.map(h => [h.id, h]));
+    const rowsByIndex = new Map();
+
+    for (const data of allSheetData) {
+      const header = validatedDataByHeader[data.headerId];
+      if (!header) continue;
+
+      const { value, valid } = validateAndConvertValue(
+        data.value,
+        header.columnType,
+        header.criticalityLevel
+      );
+
+      if (!rowsByIndex.has(data.rowIndex)) {
+        rowsByIndex.set(data.rowIndex, {
+          originalRowIndex: data.rowIndex,
+          values: {},
+          sheetDataRefs: []
+        });
+      }
+
+      const row = rowsByIndex.get(data.rowIndex);
+      row.values[header.name] = value;
+      row.sheetDataRefs.push({
+        headerId: header.id,
+        headerName: header.name,
+        id: data.id,
+        value,
+        valid
+      });
+    }
+
+    // Group by identity key
+    const grouped = new Map();
+    for (const row of rowsByIndex.values()) {
+      const key = identityHeaders.map(h => row.values[h] ?? '').join('|');
+      if (!grouped.has(key)) grouped.set(key, []);
+      grouped.get(key).push(row);
+    }
+
+    // Extract only duplicates
+    const duplicateRows = [];
+    for (const group of grouped.values()) {
+      if (group.length > 1) {
+        group.forEach((row, index) => {
+          duplicateRows.push({
+            ...row,
+            sequenceIndex: index + 1
+          });
+        });
+      }
+    }
+
+    // Build headerMap only for headers that have duplicate data
+    const headerDataMap = new Map();
+
+    for (const row of duplicateRows) {
+      for (const ref of row.sheetDataRefs) {
+        if (!headerDataMap.has(ref.headerId)) {
+          const headerDef = validatedDataByHeader[ref.headerId];
+          headerDataMap.set(ref.headerId, {
+            id: ref.headerId,
+            name: ref.headerName,
+            criticalityLevel: headerDef.criticalityLevel,
+            columnType: headerDef.columnType,
+            data: []
+          });
+        }
+
+        headerDataMap.get(ref.headerId).data.push({
+          id: ref.id,
+          rowIndex: row.sequenceIndex,
+          originalRowIndex: row.originalRowIndex,
+          value: ref.value,
+          valid: ref.valid
+        });
+      }
+    }
+
+    // Final response
+    res.status(200).json({
+      headers: Array.from(headerDataMap.values())
+    });
+  } catch (error) {
+    console.error('Error in getHeadersWithDuplicateData:', error.message, error.stack);
+    res.status(500).json({ error: 'Failed to retrieve validated duplicate data' });
+  }
+}
+
 async function getValidatedPageData(req, res) {
   try {
     const { templateId, currentPage = 1, pageSize = 30 } = req.query;
@@ -2403,5 +2537,6 @@ module.exports = {
   cipConversion,
   evaluateRulesAndReturnFilteredData,
   applyReferenceOnData,
-  bulkUpdates
+  bulkUpdates,
+  getHeadersWithDuplicateData
 };

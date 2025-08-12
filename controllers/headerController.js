@@ -50,6 +50,40 @@ async function createHeader(req, res) {
   }
 }
 
+async function createBaseHeader(req, res) {
+  try {
+    const { id } = req.query;
+
+    if (!id || id.trim().length === 0) {
+      return res.status(400).json({ error: 'Template ID is required and must be non-empty' });
+    }
+
+    const headersToCreate = desiredOrder.map((headerName) => ({
+      id: uuidv4(),
+      name: headerName.trim(),
+      criticalityLevel: '3',
+      columnType: 'text',
+      templateId: id,
+    }));
+
+    const createdHeaders = await sequelize.transaction(async (t) => {
+      return await Header.bulkCreate(headersToCreate, { transaction: t });
+    });
+
+    res.status(201).json({
+      headers: createdHeaders.map((h) => ({
+        id: h.id,
+        name: h.name,
+        criticalityLevel: h.criticalityLevel,
+        columnType: h.columnType,
+      })),
+    });
+  } catch (error) {
+    console.error('Error creating base headers:', error);
+    res.status(500).json({ error: error.message });
+  }
+}
+
 async function updateHeader(req, res) {
   try {
     const { id } = req.params;
@@ -569,4 +603,5 @@ module.exports = {
   getHeaderID,
   createRunTimeHeader,
   getQualifiedHeaders,
+  createBaseHeader
 };

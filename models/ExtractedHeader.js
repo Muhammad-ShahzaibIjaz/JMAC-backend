@@ -27,6 +27,10 @@ const ExtractedHeader = sequelize.define(
       type: DataTypes.UUID,
       allowNull: false,
     },
+    fileBelongsTo: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
   },
   {
     tableName: 'ExtractedHeader',

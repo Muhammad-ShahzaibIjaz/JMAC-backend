@@ -834,11 +834,13 @@ async function processAndGetSheetMapHeaders(req, res) {
     }
 
     // Step 4: Extract all unique headers from filtered processed files
-    const extractedHeaders = new Set();
+    const extractedHeaders = [];
     for (const file of filteredProcessedFiles) {
       for (const sheet of file.sheets) {
         sheet.headers.forEach(header => {
-          if (header) extractedHeaders.add(header); // Only add non-empty headers
+          if (header) {
+            extractedHeaders.push({name: header, fileBelongsTo: file.fileName,});
+          }
         });
       }
     }
@@ -852,12 +854,11 @@ async function processAndGetSheetMapHeaders(req, res) {
     const existingExtractedHeaderNames = new Set(existingExtractedHeaders.map(header => header.name));
 
     // Step 6: Filter out headers that already exist in ExtractedHeader
-    const uniqueHeaders = Array.from(extractedHeaders).filter(
-      header => !existingExtractedHeaderNames.has(header)
+    const uniqueHeaders = extractedHeaders.filter(
+      header => !existingExtractedHeaderNames.has(header.name)
     );
 
     // Step 7: Save unique headers to ExtractedHeader and prepare response
-    const result = [];
     await ExtractedHeader.sequelize.transaction(async (t) => {
       for (const header of uniqueHeaders) {
         const headerData = {
@@ -866,21 +867,16 @@ async function processAndGetSheetMapHeaders(req, res) {
           columnType: 'text',
           criticalityLevel: '3',
           mappingTemplateId,
+          fileBelongsTo: header.fileBelongsTo,
         };
         await ExtractedHeader.create(headerData, { transaction: t });
-        result.push({
-          id: headerData.id,
-          name: headerData.name,
-          columnType: headerData.columnType,
-          criticalityLevel: headerData.criticalityLevel,
-        });
       }
     });
 
     // Step 9: Return all headers (existing + new) for the mappingTemplateId
     const allHeaders = await ExtractedHeader.findAll({
       where: { mappingTemplateId },
-      attributes: ['id', 'name', 'columnType', 'criticalityLevel'],
+      attributes: ['id', 'name', 'columnType', 'criticalityLevel', 'fileBelongsTo'],
       raw: true,
     });
 
@@ -1081,7 +1077,6 @@ async function processAndCompareHeaders(req, res) {
     );
 
     // Step 5: Save unique headers to ExtractedHeader and prepare response
-    const result = [];
     await ExtractedHeader.sequelize.transaction(async (t) => {
       for (const header of uniqueHeaders) {
         const headerData = {
@@ -1090,21 +1085,16 @@ async function processAndCompareHeaders(req, res) {
           columnType: 'text',
           criticalityLevel: '3',
           mappingTemplateId,
+          fileBelongsTo: files[0].originalname,
         };
         await ExtractedHeader.create(headerData, { transaction: t });
-        result.push({
-          id: headerData.id,
-          name: headerData.name,
-          columnType: headerData.columnType,
-          criticalityLevel: headerData.criticalityLevel,
-        });
       }
     });
 
     // Step 7: Return all headers (existing + new) for the mappingTemplateId
     const allHeaders = await ExtractedHeader.findAll({
       where: { mappingTemplateId },
-      attributes: ['id', 'name', 'columnType', 'criticalityLevel'],
+      attributes: ['id', 'name', 'columnType', 'criticalityLevel', 'fileBelongsTo'],
       raw: true,
     });
 
@@ -1123,7 +1113,7 @@ async function getExtractedHeadersByTemplateId(req, res) {
   try {
     const headers = await ExtractedHeader.findAll({
       where: { mappingTemplateId },
-      attributes: ['id', 'name', 'columnType', 'criticalityLevel'],
+      attributes: ['id', 'name', 'columnType', 'criticalityLevel', 'fileBelongsTo'],
       raw: true,
     });
     res.status(200).json(headers);

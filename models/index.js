@@ -54,6 +54,7 @@ CrossReference.hasMany(CrossReferenceMapping, { foreignKey: 'crossReferenceId', 
 CrossReferenceMapping.belongsTo(CrossReference, { foreignKey: 'crossReferenceId' });
 
 CrossReference.belongsTo(Header, { foreignKey: 'inputHeaderId', as: 'inputHeader' });
+CrossReference.belongsTo(Header, { foreignKey: 'outputHeaderId', as: 'outputHeader' });
 
 
 module.exports = {

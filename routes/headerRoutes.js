@@ -3,6 +3,7 @@ const router = express.Router();
 const headerController = require('../controllers/headerController');
 
 router.post('/headers', headerController.createHeader);
+router.post('/base-headers', headerController.createBaseHeader);
 router.delete('/headers/:id', headerController.deleteHeader);
 router.put('/headers/:id', headerController.updateHeader);
 router.get('/headers/:id', headerController.getHeader);
