@@ -419,7 +419,7 @@ const desiredOrder = [
   "Total_Loans",
   "Total_Emp_Ben",
   "Total_Tuit_Exch",
-  "Total Ouside"
+  "Total Outside"
 ];
 
 

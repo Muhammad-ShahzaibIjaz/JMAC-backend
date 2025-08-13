@@ -4,6 +4,7 @@ const MappingTemplate = require('../models/MappingTemplate');
 const sequelize = require('../config/database');
 const { v4: uuidv4 } = require('uuid');
 const { exportHeader } = require('../services/excelService');
+const { DataTypes } = require('sequelize');
 const desiredOrder = require('../utils/headerOrderList').desiredOrder;
 
 async function createHeader(req, res) {
@@ -52,9 +53,9 @@ async function createHeader(req, res) {
 
 async function createBaseHeader(req, res) {
   try {
-    const { id } = req.query;
+    const { templateId } = req.query;
 
-    if (!id || id.trim().length === 0) {
+    if (!templateId || templateId.trim().length === 0) {
       return res.status(400).json({ error: 'Template ID is required and must be non-empty' });
     }
 
@@ -63,14 +64,14 @@ async function createBaseHeader(req, res) {
       name: headerName.trim(),
       criticalityLevel: '3',
       columnType: 'text',
-      templateId: id,
+      templateId,
     }));
 
     const createdHeaders = await sequelize.transaction(async (t) => {
-      return await Header.bulkCreate(headersToCreate, { transaction: t });
+      return await Header.bulkCreate(headersToCreate, { transaction: t, returning: true, validate: true });
     });
 
-    res.status(201).json({
+    return res.status(201).json({
       headers: createdHeaders.map((h) => ({
         id: h.id,
         name: h.name,

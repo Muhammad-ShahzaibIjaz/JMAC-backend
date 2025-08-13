@@ -206,7 +206,7 @@ const applyReference = async (req, res) => {
 }
 
 const updateCrossReferenceWithMapping = async (req, res) => {
-  const { id, name, inputHeaderId, outputHeaderId, mappings } = req.body;
+  const { id, name, inputHeaderId, outputHeaderId, mappings, dependentReferenceId = null } = req.body;
   try{
     if (!id || !name || !inputHeaderId || !outputHeaderId || !mappings || !Array.isArray(mappings)) {
       return res.status(400).json({ error: 'All fields are required' });
@@ -218,6 +218,9 @@ const updateCrossReferenceWithMapping = async (req, res) => {
     crossReference.name = name;
     crossReference.inputHeaderId = inputHeaderId;
     crossReference.outputHeaderId = outputHeaderId;
+    if (dependentReferenceId !== null) {
+      crossReference.dependentReferenceId = dependentReferenceId;
+    }
     await crossReference.save();
     await updateReferenceMappings(crossReference.id, mappings);
     return res.status(200).json({ message: 'Cross-reference updated successfully' });
@@ -229,15 +232,14 @@ const updateCrossReferenceWithMapping = async (req, res) => {
 
 const parseAndGetReferenceMapping = async (req, res) => {
   try {
-    const { templateId, fileName, headerName } = req.body;
+    const { templateId, fileName, headerInName, headerOutName } = req.body;
 
-    if (!templateId || !fileName || !headerName) {
-      return res.status(400).json({ error: 'templateId, fileName, and headerName are required' });
+    if (!templateId || !fileName || !headerInName) {
+      return res.status(400).json({ error: 'templateId, fileName, headerInName are required' });
     }
 
     const filePath = path.join('uploads', templateId, fileName);
 
-    // Construct file object manually
     const fileObj = {
       path: filePath,
       originalname: fileName,
@@ -250,39 +252,42 @@ const parseAndGetReferenceMapping = async (req, res) => {
     }
 
     const fileData = processedFiles[0];
-    const headerValues = [];
+    const referenceRows = [];
 
     for (const sheet of fileData.sheets) {
       const headers = sheet.headers;
       const rows = sheet.data;
 
-      const headerIndex = headers.findIndex(h => h.trim().toLowerCase() === headerName.trim().toLowerCase());
+      const headerInIndex = headers.findIndex(h => h.trim().toLowerCase() === headerInName.trim().toLowerCase());
+      const headerOutIndex = headerOutName
+        ? headers.findIndex(h => h.trim().toLowerCase() === headerOutName.trim().toLowerCase())
+        : -1;
 
-      if (headerIndex === -1) {
-        console.warn(`Header "${headerName}" not found in sheet "${sheet.sheetName}"`);
+      if (headerInIndex === -1) {
+        console.warn(`Header "${headerInName}" not found in sheet "${sheet.sheetName}"`);
         continue;
       }
 
       for (const row of rows) {
-        const value = row[headerIndex];
-        if (value !== undefined && value !== null && value !== '') {
-          headerValues.push(value);
+        const inputValue = row[headerInIndex]?.toString().trim();
+        const outputValue = headerOutIndex !== -1 ? row[headerOutIndex]?.toString().trim() : "";
+
+        if (inputValue) {
+          referenceRows.push({ inputValue, outputValue });
         }
       }
     }
 
-    const uniqueValues = [...new Set(headerValues.map(v => v.trim()))];
+    // Remove duplicates based on inputValue
+    const uniqueRows = Array.from(
+      new Map(referenceRows.map(row => [row.inputValue, row])).values()
+    );
 
-    if (uniqueValues.length === 0) {
-      return res.status(422).json({ error: `No values found for header "${headerName}"` });
+    if (uniqueRows.length === 0) {
+      return res.status(422).json({ error: `No values found for header "${headerInName}"` });
     }
 
-    const referenceRows = uniqueValues.map(value => ({
-      inputValue: value,
-      outputValue: "",
-    }));
-
-    return res.status(200).json(referenceRows);
+    return res.status(200).json(uniqueRows);
 
   } catch (error) {
     console.error('Error processing header mapping:', error);

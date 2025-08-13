@@ -253,6 +253,8 @@ async function getHeadersWithValidatedData(req, res) {
       return res.status(400).json({ error: 'Invalid pagination values' });
     }
 
+    const offset = (page - 1) * size;
+
     // Fetch header definitions
     const headers = await Header.findAll({
       where: { templateId },
@@ -264,34 +266,48 @@ async function getHeadersWithValidatedData(req, res) {
       return res.status(404).json({ error: `No headers found for templateId ${templateId}` });
     }
 
-    const errorRows = new Set();
-    const errorPages = new Set();
-
     const sortedHeaders = sortHeadersFlexibleMatch(headers);
-    // Use sortedHeaders instead of headers in rest of the logic
-    const validatedDataByHeader = {};
-    sortedHeaders.forEach(h => { validatedDataByHeader[h.id] = h; });
+    const headerMap = new Map(sortedHeaders.map(h => [h.id, h]));
 
-    // Fetch all sheet data (small attribute set for performance)
-    const allSheetData = await SheetData.findAll({
+    const distinctRowIndices = await SheetData.findAll({
+      include: [{ model: Header, where: { templateId }, attributes: [] }],
+      attributes: ['rowIndex'],
+      group: ['rowIndex'],
+      order: [['rowIndex', 'ASC']],
+      offset,
+      limit: size,
+      raw: true,
+    });
+
+    const rowIndexList = distinctRowIndices.map(r => r.rowIndex);
+
+    const paginatedData = await SheetData.findAll({
       include: [{ model: Header, where: { templateId }, attributes: [] }],
       attributes: ['id', 'rowIndex', 'value', 'headerId'],
+      where: { 
+        rowIndex: rowIndexList,
+       },
       order: [['rowIndex', 'ASC']],
     });
 
-    const offset = (page - 1) * size;
-    const endOffset = offset + size;
-
-    const paginatedData = allSheetData.filter(d => d.rowIndex >= offset && d.rowIndex < endOffset);
+    // Count total rows efficiently
+    const totalRows = await SheetData.count({
+      include: [{ model: Header, where: { templateId }, attributes: [] }],
+      distinct: true,
+      col: 'rowIndex',
+    });
+    const totalPages = Math.ceil(totalRows / size);
 
     const paginatedDataByHeader = {};
+    const errorRows = new Set();
+    const errorPages = new Set();
 
     for (const header of sortedHeaders) {
       paginatedDataByHeader[header.id] = [];
     }
 
     for (const data of paginatedData) {
-      const header = validatedDataByHeader[data.headerId];
+      const header = headerMap.get(data.headerId);
       if (!header) continue;
 
       const { value, valid } = validateAndConvertValue(
@@ -309,11 +325,10 @@ async function getHeadersWithValidatedData(req, res) {
 
       if (!valid) {
         errorRows.add(data.rowIndex);
-        const pageWithError = Math.floor(data.rowIndex / size) + 1;
-        errorPages.add(pageWithError);
+        errorPages.add(Math.floor(data.rowIndex / size) + 1);
       }
     }
-
+    
     const responseHeaders = sortedHeaders.map(header => ({
       id: header.id,
       name: header.name,
@@ -321,12 +336,6 @@ async function getHeadersWithValidatedData(req, res) {
       columnType: header.columnType,
       data: paginatedDataByHeader[header.id],
     }));
-
-    const totalRows = allSheetData.reduce(
-      (max, d) => Math.max(max, d.rowIndex),
-      0
-    );
-    const totalPages = Math.ceil(totalRows / size);
 
     res.status(200).json({
       headers: responseHeaders,
@@ -349,7 +358,6 @@ async function getHeadersWithDuplicateData(req, res) {
   try {
     const { templateId } = req.query;
 
-    // Validate templateId
     if (!templateId) {
       return res.status(400).json({ error: 'templateId is required' });
     }
@@ -369,54 +377,52 @@ async function getHeadersWithDuplicateData(req, res) {
       return res.status(404).json({ error: `No headers found for templateId ${templateId}` });
     }
 
-    // Normalize helper
+    const headerIds = headers.map(h => h.id);
+    const headerMap = new Map(headers.map(h => [h.id, h]));
+    const nameMap = new Map(headers.map(h => [h.name, h]));
+
+    // Identity key logic
     const normalize = str => str.toLowerCase().replace(/[_\s]/g, '');
-    const preferredKeys = ['studentid', 'lastname', 'firstname'];
     const normalizedHeaderMap = new Map(headers.map(h => [normalize(h.name), h.name]));
+    const preferredKey = normalizedHeaderMap.get('studentid');
+    const identityHeaders = preferredKey
+      ? [preferredKey]
+      : headers.slice(0, 3).map(h => h.name);
 
-    let identityHeaders = preferredKeys
-      .filter(key => normalizedHeaderMap.has(key))
-      .map(key => normalizedHeaderMap.get(key));
-
-    if (identityHeaders.length === 0) {
-      identityHeaders = headers.slice(0, 3).map(h => h.name);
-    }
-
-    // Fetch all sheet data
-    const allSheetData = await SheetData.findAll({
-      include: [{ model: Header, where: { templateId }, attributes: [] }],
+    // Fetch sheet data
+    const sheetData = await SheetData.findAll({
+      where: { headerId: { [Op.in]: headerIds } },
       attributes: ['id', 'rowIndex', 'value', 'headerId'],
       order: [['rowIndex', 'ASC']],
     });
 
-    // Build rows by rowIndex
-    const validatedDataByHeader = Object.fromEntries(headers.map(h => [h.id, h]));
+    // Build rows
     const rowsByIndex = new Map();
 
-    for (const data of allSheetData) {
-      const header = validatedDataByHeader[data.headerId];
+    for (const entry of sheetData) {
+      const header = headerMap.get(entry.headerId);
       if (!header) continue;
 
       const { value, valid } = validateAndConvertValue(
-        data.value,
+        entry.value,
         header.columnType,
         header.criticalityLevel
       );
 
-      if (!rowsByIndex.has(data.rowIndex)) {
-        rowsByIndex.set(data.rowIndex, {
-          originalRowIndex: data.rowIndex,
+      if (!rowsByIndex.has(entry.rowIndex)) {
+        rowsByIndex.set(entry.rowIndex, {
+          originalRowIndex: entry.rowIndex,
           values: {},
           sheetDataRefs: []
         });
       }
 
-      const row = rowsByIndex.get(data.rowIndex);
+      const row = rowsByIndex.get(entry.rowIndex);
       row.values[header.name] = value;
       row.sheetDataRefs.push({
         headerId: header.id,
         headerName: header.name,
-        id: data.id,
+        id: entry.id,
         value,
         valid
       });
@@ -430,7 +436,7 @@ async function getHeadersWithDuplicateData(req, res) {
       grouped.get(key).push(row);
     }
 
-    // Extract only duplicates
+    // Extract duplicates
     const duplicateRows = [];
     for (const group of grouped.values()) {
       if (group.length > 1) {
@@ -443,13 +449,12 @@ async function getHeadersWithDuplicateData(req, res) {
       }
     }
 
-    // Build headerMap only for headers that have duplicate data
+    // Build header map
     const headerDataMap = new Map();
-
     for (const row of duplicateRows) {
       for (const ref of row.sheetDataRefs) {
         if (!headerDataMap.has(ref.headerId)) {
-          const headerDef = validatedDataByHeader[ref.headerId];
+          const headerDef = headerMap.get(ref.headerId);
           headerDataMap.set(ref.headerId, {
             id: ref.headerId,
             name: ref.headerName,
@@ -469,7 +474,6 @@ async function getHeadersWithDuplicateData(req, res) {
       }
     }
 
-    // Final response
     res.status(200).json({
       headers: Array.from(headerDataMap.values())
     });
@@ -2261,25 +2265,23 @@ async function evaluateRulesAndReturnFilteredData(req, res) {
     }
 
     // Create header map for quick lookup
-    const headerMap = {};
-    dbHeaders.forEach(header => {
-      headerMap[header.name] = header;
-    });
+    const headerMap = new Map(dbHeaders.map(h => [h.name, h]));
+    const headerIdToName = new Map(dbHeaders.map(h => [h.id, h.name]));
 
     // Process conditions to replace header names and handle special cases
     const processedConditions = conditions.map(condition => {
       let processed = condition
-        .replace(/^"|"$/g, '') // Remove surrounding quotes
-        .replace(/\\"/g, '"')  // Unescape quotes
-        .replace(/'/g, '"');   // Standardize to double quotes
+        .replace(/^"|"$/g, '')
+        .replace(/\\"/g, '"')
+        .replace(/'/g, '"');
 
-      processed = processed.replace(/\b([a-zA-Z_][a-zA-Z0-9_]*)\b/g, (match, potentialHeader) => {
-        return headerMap[potentialHeader] ? potentialHeader : match;
-      });
+      processed = processed.replace(/\b([a-zA-Z_][a-zA-Z0-9_]*)\b/g, (match) =>
+        headerMap.has(match) ? match : match
+      );
 
       processed = processed.replace(/([a-zA-Z_][a-zA-Z0-9_]*)\s*(==|!=|>=|<=|>|<)\s*"([^"]*)"/g, 
         (match, header, operator, value) => {
-          const headerInfo = headerMap[header];
+          const headerInfo = headerMap.get(header);
           if (!headerInfo) return match;
 
           if (['text', 'character'].includes(headerInfo.columnType.toLowerCase())) {
@@ -2293,37 +2295,34 @@ async function evaluateRulesAndReturnFilteredData(req, res) {
       return processed;
     });
 
-    // Fetch all relevant sheet data for the template
+    // ⚡ Fetch and organize SheetData
     const allSheetData = await SheetData.findAll({
       where: { headerId: dbHeaders.map(h => h.id) },
       attributes: ['id', 'headerId', 'rowIndex', 'value'],
       order: [['rowIndex', 'ASC'], ['headerId', 'ASC']],
+      raw: true,
     });
 
-    // Organize data by row
-    const rows = {};
-    allSheetData.forEach(entry => {
-      if (!rows[entry.rowIndex]) {
-        rows[entry.rowIndex] = {};
-      }
-      const headerName = dbHeaders.find(h => h.id === entry.headerId)?.name;
+    // 🧠 Organize data by rowIndex and headerName
+    const rows = new Map();
+    for (const entry of allSheetData) {
+      const row = rows.get(entry.rowIndex) || {};
+      const headerName = headerIdToName.get(entry.headerId);
       if (headerName) {
-        rows[entry.rowIndex][headerName] = { id: entry.id, value: entry.value };
+        row[headerName] = { id: entry.id, value: entry.value };
+        rows.set(entry.rowIndex, row);
       }
-    });
+    }
 
-    // Evaluate conditions for each row
+    // 🧪 Evaluate conditions
     const matchingRowIndices = [];
     const errorRowIndices = [];
 
-    for (const [rowIndexStr, rowData] of Object.entries(rows)) {
-      const rowIndex = parseInt(rowIndexStr);
+    for (const [rowIndex, rowData] of rows.entries()) {
       const scope = {};
 
-      // Prepare evaluation scope with properly typed values
-      dbHeaders.forEach(header => {
+      for (const header of dbHeaders) {
         const rawValue = rowData[header.name]?.value ?? null;
-
         switch (header.columnType.toLowerCase()) {
           case 'integer':
             scope[header.name] = rawValue && !isNaN(rawValue) ? parseInt(rawValue, 10) : null;
@@ -2341,21 +2340,16 @@ async function evaluateRulesAndReturnFilteredData(req, res) {
           default:
             scope[header.name] = rawValue != null ? String(rawValue) : null;
         }
-      });
+      }
 
-      // Evaluate all conditions
       let allConditionsMet = true;
       for (const condition of processedConditions) {
         try {
-          const result = mathInstance.evaluate(condition, scope);
-          if (!result) {
+          if (!mathInstance.evaluate(condition, scope)) {
             allConditionsMet = false;
             break;
-          } else {
-            console.log("Evaluating scope:", scope);
           }
-        } catch (error) {
-          console.error(`Error evaluating condition for row ${rowIndex}:`, error);
+        } catch {
           allConditionsMet = false;
           break;
         }
@@ -2370,8 +2364,8 @@ async function evaluateRulesAndReturnFilteredData(req, res) {
 
     // Apply pagination
     const startIndex = (page - 1) * size;
-    const endIndex = startIndex + size;
-    const paginatedRowIndices = matchingRowIndices.slice(startIndex, endIndex);
+    const paginatedRowIndices = matchingRowIndices.slice(startIndex, startIndex + size);
+    
 
     // Create sequential row indices for the response
     const sequentialRowIndices = paginatedRowIndices.map((originalRowIndex, index) => ({
@@ -2379,62 +2373,24 @@ async function evaluateRulesAndReturnFilteredData(req, res) {
       sequentialRowIndex: startIndex + index + 1,
     }));
 
-    // Define validateAndConvertValue function
-    function validateAndConvertValue(value, columnType, criticalityLevel) {
-      let valid = true;
-      let convertedValue = value;
-
-      if (value === null || value === undefined) {
-        valid = criticalityLevel === '0'; // Valid only if non-critical
-        convertedValue = null;
-      } else {
-        switch (columnType.toLowerCase()) {
-          case 'integer':
-            convertedValue = isNaN(value) ? null : parseInt(value, 10);
-            valid = !isNaN(value);
-            break;
-          case 'decimal':
-            convertedValue = isNaN(value) ? null : parseFloat(value);
-            valid = !isNaN(value);
-            break;
-          case 'date':
-            const date = new Date(value);
-            convertedValue = date && !isNaN(date.getTime()) ? date.toISOString() : null;
-            valid = date && !isNaN(date.getTime());
-            break;
-          case 'y/n':
-            convertedValue = String(value).toUpperCase() === 'Y' ? 'Y' : 'N';
-            valid = ['Y', 'N'].includes(String(value).toUpperCase());
-            break;
-          default:
-            convertedValue = String(value);
-            valid = value !== '';
-        }
-      }
-
-      return { value: convertedValue, valid };
-    }
-
-    // Prepare response data with all headers for each row
+    // 🧱 Build response
     const responseHeaders = dbHeaders.map(header => {
-      const headerData = [];
-
-      for (const { originalRowIndex, sequentialRowIndex } of sequentialRowIndices) {
-        const entry = rows[originalRowIndex]?.[header.name] ?? { value: null };
+      const headerData = sequentialRowIndices.map(({ originalRowIndex, sequentialRowIndex }) => {
+        const entry = rows.get(originalRowIndex)?.[header.name] ?? { value: null };
         const { value, valid } = validateAndConvertValue(
           entry.value ?? null,
           header.columnType,
           header.criticalityLevel
         );
 
-        headerData.push({
+        return {
           id: entry.id || `${header.id}-${sequentialRowIndex}`,
           rowIndex: sequentialRowIndex,
-          originalRowIndex: originalRowIndex,
+          originalRowIndex,
           value,
           valid,
-        });
-      }
+        };
+      });
 
       return {
         id: header.id,
@@ -2445,15 +2401,10 @@ async function evaluateRulesAndReturnFilteredData(req, res) {
       };
     });
 
-    // Calculate error pages
-    const errorPages = [];
-    const errorRowsPerPage = size;
-
-    // Send response
-    res.status(200).json({
+    return res.status(200).json({
       headers: responseHeaders,
       totalErrorRows: errorRowIndices.length,
-      errorPages: errorPages.sort((a, b) => a - b),
+      errorPages: [], // can be computed if needed
       pagination: {
         currentPage: page,
         pageSize: size,

@@ -724,7 +724,7 @@ async function processAndGetHeaderSelectedSheets(req, res) {
 
       for (const sheet of selectedSheets) {
         const selectionSheet = selection.sheets.find((s) => s.sheetName === sheet.sheetName);
-        if (selectionSheet.totalHeaders !== sheet.headers.length) {
+        if ((selectionSheet.totalHeaders !== sheet.headers.length) && (headerOrientation !== "vertical")) {
           throw new Error(
             `Header count mismatch for ${sheet.sheetName} in ${selection.fileName}: expected ${selectionSheet.totalHeaders}, got ${sheet.headers.length}`
           );
@@ -1154,7 +1154,7 @@ async function getMissingHeaders(req, res) {
   try {
     const processedFiles = await headerProcessor(files);
 
-    const headers = await Header.findAll({ where: { templateId } });
+    const headers = await Header.findAll({ where: { templateId, criticalityLevel: '1' } });
 
     const mapHeaders = await MapHeader.findAll({ where: { mappingTemplateId } });
 

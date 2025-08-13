@@ -33,7 +33,7 @@ const Header = sequelize.define(
     timestamps: true,
     indexes: [
       {
-        fields: ['id'],
+        fields: ['id', 'templateId'],
       },
     ],
   }
