@@ -1,5 +1,6 @@
 const SheetData = require('../models/SheetData');
 const sequelize = require('../config/database');
+const { v4: uuidv4 } = require('uuid');
 const { DataTypes, Op } = require('sequelize');
 const { OperationLog, SheetDataSnapshot, Header } = require('../models');
 
@@ -153,6 +154,44 @@ async function checkUndoOperationAvailable(req, res) {
   }
 }
 
+async function undoDeleteRow(operationLogId) {
+  const transaction = await sequelize.transaction();
+  try {
+    // Step 2: Fetch snapshots for this operation
+    const snapshots = await SheetDataSnapshot.findAll({
+      where: {
+        operationLogId,
+        changeType: 'DELETE'
+      },
+      transaction
+    });
+
+    if (snapshots.length === 0) {
+      await transaction.rollback();
+      return res.status(404).json({ message: 'No deletions found to undo.' });
+    }
+
+    // Step 3: Prepare restore data
+    const restoreRows = snapshots.map(snap => ({
+      id: uuidv4(),
+      headerId: snap.headerId,
+      rowIndex: snap.rowIndex,
+      value: snap.originalValue
+    }));
+
+    // Step 4: Restore data
+    await SheetData.bulkCreate(restoreRows, {
+      updateOnDuplicate: ['value'],
+      transaction
+    });
+
+    await transaction.commit();
+  } catch (error) {
+    await transaction.rollback();
+    console.error('❌ Error undoing delete:', error);
+    return res.status(500).json({ message: 'Internal server error.', details: error.message });
+  }
+}
 
 async function undoLatestOperation(req, res) {
   try {
@@ -177,6 +216,8 @@ async function undoLatestOperation(req, res) {
       await deleteLatestRowData(templateId);
     } else if (latestOperation.operationType === 'ADD_HEADER') {
       await undoHeaderOperation(templateId, latestOperation.id);
+    } else if (latestOperation.operationType === 'DELETE_ROW') {
+      await undoDeleteRow(latestOperation.id);
     } else {
       await undoUpdatedRow(latestOperation.id);
     }

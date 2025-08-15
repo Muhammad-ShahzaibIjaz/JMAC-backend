@@ -17,5 +17,6 @@ router.put('/find-zipcode', dataController.findZipCodes);
 router.put('/score-conversion', dataController.scoreConversion);
 router.put('/cip-conversion', dataController.cipConversion);
 router.post('/apply-quality-rules', dataController.evaluateRulesAndReturnFilteredData);
+router.delete('/delete-row/:templateId/:rowIndex', dataController.deleteRow);
 
 module.exports = router;

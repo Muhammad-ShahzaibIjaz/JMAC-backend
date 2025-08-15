@@ -14,7 +14,7 @@ const OperationLog = sequelize.define(
             allowNull: false,
         },
         operationType: {
-            type: DataTypes.ENUM('BULK_UPDATE', 'CALCULATION', 'GPA', 'ZIPCODE', 'ADD_ROW', 'UPDATE_ROW', 'PADDING_UPDATE', 'CONVERSION', 'ADD_HEADER'),
+            type: DataTypes.ENUM('BULK_UPDATE', 'CALCULATION', 'GPA', 'ZIPCODE', 'ADD_ROW', 'UPDATE_ROW', 'DELETE_ROW' ,'PADDING_UPDATE', 'CONVERSION', 'ADD_HEADER'),
             allowNull: false,
             defaultValue: 'CALCULATION',
         },

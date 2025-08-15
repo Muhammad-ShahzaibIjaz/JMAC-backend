@@ -2,7 +2,7 @@ const SheetData = require('../models/SheetData');
 const Header = require('../models/Header');
 const Template = require('../models/Template');
 const sequelize = require('../config/database');
-const { DataTypes, Op } = require('sequelize');
+const { DataTypes, Op, QueryTypes } = require('sequelize');
 const {generateExcelFile} = require('../services/SheetService');
 const { processFiles } = require('./fileController');
 const { getMapHeaders, getHeaderID } = require('./headerController');
@@ -366,47 +366,56 @@ async function getHeadersWithDuplicateData(req, res) {
       return res.status(400).json({ error: 'templateId must be a valid UUID' });
     }
 
-    // Fetch headers
     const headers = await Header.findAll({
       where: { templateId },
       attributes: ['id', 'name', 'criticalityLevel', 'columnType'],
       order: [['createdAt', 'ASC']],
     });
-
     if (!headers?.length) {
       return res.status(404).json({ error: `No headers found for templateId ${templateId}` });
     }
 
-    const headerIds = headers.map(h => h.id);
-    const headerMap = new Map(headers.map(h => [h.id, h]));
-    const nameMap = new Map(headers.map(h => [h.name, h]));
+    const sortedHeaders = sortHeadersFlexibleMatch(headers);
+    const headerIds = sortedHeaders.map(h => h.id);
+    const headerMap = new Map(sortedHeaders.map(h => [h.id, h]));
 
-    // Identity key logic
     const normalize = str => str.toLowerCase().replace(/[_\s]/g, '');
-    const normalizedHeaderMap = new Map(headers.map(h => [normalize(h.name), h.name]));
+    const normalizedHeaderMap = new Map(sortedHeaders.map(h => [normalize(h.name), h.name]));
     const preferredKey = normalizedHeaderMap.get('studentid');
-    const identityHeaders = preferredKey
-      ? [preferredKey]
-      : headers.slice(0, 3).map(h => h.name);
+    const identityHeaders = preferredKey ? [preferredKey] : sortedHeaders.slice(0, 3).map(h => h.name);
 
-    // Fetch sheet data
-    const sheetData = await SheetData.findAll({
-      where: { headerId: { [Op.in]: headerIds } },
-      attributes: ['id', 'rowIndex', 'value', 'headerId'],
-      order: [['rowIndex', 'ASC']],
+    const sheetData = [];
+    const stream = await sequelize.query(`
+      WITH filtered_headers AS (
+        SELECT "id", "name", "columnType", "criticalityLevel"
+        FROM "Header"
+        WHERE "templateId" = :templateId
+      )
+      SELECT sd."id", sd."rowIndex", sd."value", sd."headerId",
+             fh."name" AS "headerName", fh."columnType", fh."criticalityLevel"
+      FROM "SheetData" sd
+      JOIN filtered_headers fh ON sd."headerId" = fh."id"
+      ORDER BY sd."rowIndex" ASC
+    `, {
+      replacements: { templateId },
+      type: QueryTypes.SELECT,
+      benchmark: true,
+      logging: false,
+      raw: true,
+      plain: false,
+      stream: true
     });
 
-    // Build rows
+    for await (const row of stream) {
+      sheetData.push(row);
+    }
+
     const rowsByIndex = new Map();
-
     for (const entry of sheetData) {
-      const header = headerMap.get(entry.headerId);
-      if (!header) continue;
-
       const { value, valid } = validateAndConvertValue(
         entry.value,
-        header.columnType,
-        header.criticalityLevel
+        entry.columnType,
+        entry.criticalityLevel
       );
 
       if (!rowsByIndex.has(entry.rowIndex)) {
@@ -418,17 +427,20 @@ async function getHeadersWithDuplicateData(req, res) {
       }
 
       const row = rowsByIndex.get(entry.rowIndex);
-      row.values[header.name] = value;
+      if (!row) {
+        row = { originalRowIndex: entry.rowIndex, values: Object.create(null), sheetDataRefs: [] };
+        rowsByIndex.set(entry.rowIndex, row);
+      }
+      row.values[entry.headerName] = value;
       row.sheetDataRefs.push({
-        headerId: header.id,
-        headerName: header.name,
+        headerId: entry.headerId,
+        headerName: entry.headerName,
         id: entry.id,
         value,
         valid
       });
     }
 
-    // Group by identity key
     const grouped = new Map();
     for (const row of rowsByIndex.values()) {
       const key = identityHeaders.map(h => row.values[h] ?? '').join('|');
@@ -436,7 +448,6 @@ async function getHeadersWithDuplicateData(req, res) {
       grouped.get(key).push(row);
     }
 
-    // Extract duplicates
     const duplicateRows = [];
     for (const group of grouped.values()) {
       if (group.length > 1) {
@@ -449,17 +460,15 @@ async function getHeadersWithDuplicateData(req, res) {
       }
     }
 
-    // Build header map
     const headerDataMap = new Map();
     for (const row of duplicateRows) {
       for (const ref of row.sheetDataRefs) {
         if (!headerDataMap.has(ref.headerId)) {
-          const headerDef = headerMap.get(ref.headerId);
           headerDataMap.set(ref.headerId, {
             id: ref.headerId,
             name: ref.headerName,
-            criticalityLevel: headerDef.criticalityLevel,
-            columnType: headerDef.columnType,
+            criticalityLevel: headerMap.get(ref.headerId).criticalityLevel,
+            columnType: headerMap.get(ref.headerId).columnType,
             data: []
           });
         }
@@ -474,8 +483,12 @@ async function getHeadersWithDuplicateData(req, res) {
       }
     }
 
+    const orderedHeaderResponse = sortedHeaders
+    .map(h => headerDataMap.get(h.id))
+    .filter(Boolean);
+
     res.status(200).json({
-      headers: Array.from(headerDataMap.values())
+      headers: orderedHeaderResponse,
     });
   } catch (error) {
     console.error('Error in getHeadersWithDuplicateData:', error.message, error.stack);
@@ -2469,6 +2482,74 @@ async function applyReferenceOnData(inputHeaderId, outputHeaderId, mappings) {
   }
 }
 
+async function deleteRow(req, res) {
+  const { templateId, rowIndex } = req.params;
+  const transaction = await sequelize.transaction();
+
+  try {
+    const parsedRowIndex = parseInt(rowIndex);
+    if (isNaN(parsedRowIndex)) {
+      await transaction.rollback();
+      return res.status(400).json({ message: 'Invalid rowIndex provided.' });
+    }
+
+    const operationLog = await OperationLog.create({
+      id: uuidv4(),
+      templateId,
+      operationType: 'DELETE_ROW'
+    }, { transaction });
+
+    // Step 2: Snapshot all matching rows using raw SQL
+    await sequelize.query(
+      `
+      INSERT INTO "SheetDataSnapshot" (
+        id, "operationLogId", "headerId", "rowIndex", "originalValue", "newValue", "changeType", "createdAt", "updatedAt"
+      )
+      SELECT
+        gen_random_uuid(), :operationLogId, sd."headerId", sd."rowIndex", sd."value", NULL, 'DELETE', NOW(), NOW()
+      FROM "SheetData" sd
+      JOIN "Header" h ON sd."headerId" = h."id"
+      WHERE h."templateId" = :templateId AND sd."rowIndex" = :rowIndex
+      `,
+      {
+        replacements: {
+          operationLogId: operationLog.id,
+          templateId,
+          rowIndex: parsedRowIndex
+        },
+        transaction
+      }
+    );
+
+    // Step 3: Delete rows using raw SQL
+    await sequelize.query(
+      `
+      DELETE FROM "SheetData"
+      USING "Header"
+      WHERE "SheetData"."headerId" = "Header"."id"
+        AND "Header"."templateId" = :templateId
+        AND "SheetData"."rowIndex" = :rowIndex
+      `,
+      {
+        replacements: {
+          templateId,
+          rowIndex: parsedRowIndex
+        },
+        transaction
+      }
+    );
+
+    await transaction.commit();
+
+    return res.status(200).json({
+      message: `Row ${parsedRowIndex} deleted successfully for template ${templateId}.`
+    });
+  } catch (error) {
+    await transaction.rollback();
+    console.error('❌ Error deleting row:', error);
+    return res.status(500).json({ message: 'Internal server error.', details: error.message });
+  }
+}
 
 module.exports = {
   deleteSheetData, 
@@ -2489,5 +2570,6 @@ module.exports = {
   evaluateRulesAndReturnFilteredData,
   applyReferenceOnData,
   bulkUpdates,
-  getHeadersWithDuplicateData
+  getHeadersWithDuplicateData,
+  deleteRow
 };

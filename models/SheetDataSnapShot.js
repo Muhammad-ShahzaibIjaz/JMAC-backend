@@ -28,7 +28,7 @@ const SheetDataSnapshot = sequelize.define('SheetDataSnapshot', {
     allowNull: true,
   },
   changeType: {
-    type: DataTypes.ENUM('INSERT', 'UPDATE'),
+    type: DataTypes.ENUM('INSERT', 'UPDATE', 'DELETE'),
     allowNull: false,
     defaultValue: 'UPDATE',
   }
