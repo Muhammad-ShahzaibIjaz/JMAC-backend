@@ -262,6 +262,74 @@ async function getQualifiedHeadersFromDB(templateId) {
 // }
 
 
+// async function getQualifiedHeaders(req, res) {
+//   try {
+//     const { id: templateId } = req.params;
+
+//     if (!templateId || typeof templateId !== 'string' || templateId.trim().length === 0) {
+//       return res.status(400).json({ error: 'Template ID is required and must be a non-empty string' });
+//     }
+
+//     const headers = await Header.findAll({ where: { templateId } });
+//     if (!headers || headers.length === 0) {
+//       return res.status(404).json({ error: 'No headers found for this template' });
+//     }
+
+//     const qualifiedHeaders = [];
+
+//     for (const header of headers) {
+//       const rawValues = await SheetData.findAll({
+//         where: { headerId: header.id },
+//         attributes: ['value'],
+//       });
+
+//       const cleaned = rawValues
+//         .map(v => v.value?.trim())
+//         .filter(val => val && val.toUpperCase() !== 'NULL');
+
+//       if (cleaned.length === 0) continue; // Skip headers with no usable data
+
+//       const uniqueValues = [];
+//       const sampleSize = 20;
+
+//       for (const val of cleaned) {
+//         if (!uniqueValues.includes(val)) {
+//           uniqueValues.push(val);
+//           if (uniqueValues.length >= sampleSize) break;
+//         }
+//       }
+
+//       const numericSample = uniqueValues.filter(val => /^-?\d+(\.\d+)?$/.test(val));
+//       const numericConfidence = numericSample.length / uniqueValues.length;
+//       const isLikelyNumeric = numericConfidence > 0.8;
+
+//       let inferredType = 'category'; // default
+
+//       if (isLikelyNumeric) {
+//         inferredType = 'numeric';
+//       } else if (uniqueValues.every(val => !isNaN(Date.parse(val)))) {
+//         inferredType = 'date';
+//       }
+
+//       qualifiedHeaders.push({
+//         id: header.id,
+//         name: header.name,
+//         inferredType,
+//       });
+//     }
+
+//     if (qualifiedHeaders.length === 0) {
+//       return res.status(404).json({ error: 'No qualified headers with usable data' });
+//     }
+
+//     res.status(200).json(qualifiedHeaders);
+
+//   } catch (error) {
+//     console.error('Error fetching qualified headers:', error.message);
+//     res.status(500).json({ error: error.message || 'Internal server error' });
+//   }
+// }
+
 async function getQualifiedHeaders(req, res) {
   try {
     const { id: templateId } = req.params;
@@ -270,41 +338,49 @@ async function getQualifiedHeaders(req, res) {
       return res.status(400).json({ error: 'Template ID is required and must be a non-empty string' });
     }
 
+    // Fetch headers for the template
     const headers = await Header.findAll({ where: { templateId } });
     if (!headers || headers.length === 0) {
       return res.status(404).json({ error: 'No headers found for this template' });
     }
 
+    const sampleSize = 30;
+
+    // Parallel sampling of SheetData using raw SQL
+    const headerSamples = await Promise.all(headers.map(header =>
+      sequelize.query(`
+        SELECT "value"
+        FROM "SheetData"
+        WHERE "headerId" = :headerId
+        AND "value" IS NOT NULL
+        AND UPPER("value") != 'NULL'
+        LIMIT :limit
+      `, {
+        replacements: { headerId: header.id, limit: sampleSize * 2 }, // oversample to ensure uniqueness
+        type: sequelize.QueryTypes.SELECT,
+      }).then(rows => ({
+        header,
+        values: rows.map(r => r.value?.trim()).filter(Boolean),
+      }))
+    ));
+
     const qualifiedHeaders = [];
 
-    for (const header of headers) {
-      const rawValues = await SheetData.findAll({
-        where: { headerId: header.id },
-        attributes: ['value'],
-      });
-
-      const cleaned = rawValues
-        .map(v => v.value?.trim())
-        .filter(val => val && val.toUpperCase() !== 'NULL');
-
-      if (cleaned.length === 0) continue; // Skip headers with no usable data
-
-      const uniqueValues = [];
-      const sampleSize = 20;
-
-      for (const val of cleaned) {
-        if (!uniqueValues.includes(val)) {
-          uniqueValues.push(val);
-          if (uniqueValues.length >= sampleSize) break;
-        }
+    for (const { header, values } of headerSamples) {
+      const uniqueSet = new Set();
+      for (const val of values) {
+        uniqueSet.add(val);
+        if (uniqueSet.size >= sampleSize) break;
       }
+
+      const uniqueValues = Array.from(uniqueSet);
+      if (uniqueValues.length === 0) continue;
 
       const numericSample = uniqueValues.filter(val => /^-?\d+(\.\d+)?$/.test(val));
       const numericConfidence = numericSample.length / uniqueValues.length;
       const isLikelyNumeric = numericConfidence > 0.8;
 
-      let inferredType = 'category'; // default
-
+      let inferredType = 'category';
       if (isLikelyNumeric) {
         inferredType = 'numeric';
       } else if (uniqueValues.every(val => !isNaN(Date.parse(val)))) {

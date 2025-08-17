@@ -584,74 +584,124 @@ async function getStructuredData(templateId) {
   return Object.values(rowMap);
 }
 
+// Utility: Sort by type
+function sortByType(data, header) {
+  return [...data].sort((a, b) => {
+    const valA = a[header];
+    const valB = b[header];
+
+    // Try numeric sort
+    const numA = parseFloat(valA);
+    const numB = parseFloat(valB);
+    if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
+
+    // Try date sort
+    const dateA = new Date(valA);
+    const dateB = new Date(valB);
+    if (!isNaN(dateA) && !isNaN(dateB)) return dateA - dateB;
+
+    // Fallback to string sort
+    return String(valA).localeCompare(String(valB));
+  });
+}
+
+// Utility: Split into buckets
+function splitIntoBuckets(data, count) {
+  const size = Math.ceil(data.length / count);
+  const buckets = [];
+  for (let i = 0; i < data.length; i += size) {
+    buckets.push(data.slice(i, i + size));
+  }
+  return buckets;
+}
+
+// Utility: Extract range
+function extractRange(bucket, header) {
+  const sorted = sortByType(bucket, header);
+  return {
+    start: sorted[0]?.[header] ?? null,
+    end: sorted[sorted.length - 1]?.[header] ?? null,
+  };
+}
 
 
-function breakdownNestedFirst(data, baseHeader, targetHeader, categoryCount, nestedHeaders, manualRanges = []) {
-  const result = [];
-  const allBaseHeaderValues = getAllBaseHeaderValues(data, baseHeader);
+function autoDistribute(data, baseHeader, targetHeader, categoryCount, nestedHeaders = []) {
+  let workingData = [...data];
 
-  nestedHeaders.forEach(({ header, ranges }) => {
-    ranges.forEach(nestedRange => {
-      const nestedFiltered = data.filter(row => {
-        const val = parseFloat(row[header]);
-        return val >= nestedRange.start && val <= nestedRange.end;
-      });
+  // Step 1: Apply nested header filtering
+  if (nestedHeaders.length) {
+    nestedHeaders.forEach(({ header, ranges }) => {
+      const sorted = sortByType(workingData, header);
+      const buckets = splitIntoBuckets(sorted, categoryCount);
 
-      if (nestedFiltered.length === 0) return;
-
-      const targetRanges = manualRanges.length > 0 ? manualRanges : buildRanges(nestedFiltered, targetHeader, categoryCount);
-
-      targetRanges.forEach(targetRange => {
-        const finalFiltered = nestedFiltered.filter(row => {
-          const val = parseFloat(row[targetHeader]);
-          return val >= targetRange.start && val <= targetRange.end;
-        });
-
-        result.push({
-          targetRange,
-          total: finalFiltered.length,
-          baseHeaderCounts: countBaseHeaderValues(finalFiltered, baseHeader, allBaseHeaderValues),
-        });
+      ranges.forEach(({ start, end }) => {
+        for (const bucket of buckets) {
+          const range = extractRange(bucket, header);
+          if (range.start == start && range.end == end) {
+            workingData = bucket;
+            break;
+          }
+        }
       });
     });
-  });
+  }
 
-  return result;
+  // Step 2: Sort by targetHeader
+  const sortedTarget = sortByType(workingData, targetHeader);
+
+  console.log(categoryCount);
+  // Step 3: Slice into buckets
+  const buckets = splitIntoBuckets(sortedTarget, categoryCount);
+  console.log(buckets.length);
+  // Step 4: Build result
+  const allBaseValues = getAllBaseHeaderValues(data, baseHeader);
+  return buckets.map(bucket => ({
+    targetRange: extractRange(bucket, targetHeader),
+    total: bucket.length,
+    baseHeaderCounts: countBaseHeaderValues(bucket, baseHeader, allBaseValues),
+  }));
 }
 
 
 
+function manualDistribute(data, baseHeader, nestedHeaders = []) {
+  const allBaseValues = getAllBaseHeaderValues(data, baseHeader);
+  const breakdown = [];
+
+  nestedHeaders.forEach(({ header, ranges }) => {
+    ranges.forEach(range => {
+      const filtered = data.filter(row => {
+        const val = parseFloat(row[header]);
+        return !isNaN(val) && val >= range.start && val <= range.end;
+      });
+
+      if (!filtered.length) return;
+
+      breakdown.push({
+        targetRange: { start: range.start, end: range.end },
+        total: filtered.length,
+        baseHeaderCounts: countBaseHeaderValues(filtered, baseHeader, allBaseValues),
+      });
+    });
+  });
+
+  return breakdown;
+}
+
 
 async function getCategoryStats(req, res) {
-  const { templateId, baseHeader, targetHeader, categoryCount, nestedHeaders = [], manualRanges = [] } = req.body;
+  const { templateId, baseHeader, targetHeader, categoryCount, autoDistribution, nestedHeaders = [], manualRanges = [] } = req.body;
   try{
     const structuredData = await getStructuredData(templateId);
     let breakdown = [];
-    if (nestedHeaders.length === 0) {
-      const targetRanges = manualRanges.length > 0 ? manualRanges : buildRanges(structuredData, targetHeader, categoryCount);
-      const allBaseValues = getAllBaseHeaderValues(structuredData, baseHeader);
-
-      breakdown = targetRanges.map(targetRange => {
-        const filtered = structuredData.filter(row => {
-          const val = row[targetHeader];
-
-          // Handle string-based manual ranges
-          if (typeof targetRange.start === 'string' && typeof targetRange.end === 'string') {
-            return val?.trim().toUpperCase() === targetRange.start.trim().toUpperCase();
-          }
-
-          const numVal = parseFloat(val);
-          return !isNaN(numVal) && numVal >= targetRange.start && numVal <= targetRange.end;
-        });
-
-        return {
-          targetRange,
-          total: filtered.length,
-          baseHeaderCounts: countBaseHeaderValues(filtered, baseHeader, allBaseValues),
-        };
-      });
+    if (autoDistribution) {
+      if (!targetHeader || categoryCount > structuredData.length) {
+        return res.status(200).json([]);
+      }
+      console.log("Coming in AutoDistribution");
+      breakdown = autoDistribute(structuredData, baseHeader, targetHeader, categoryCount, nestedHeaders);
     } else {
-      breakdown = breakdownNestedFirst(structuredData, baseHeader, targetHeader, categoryCount, nestedHeaders, manualRanges);
+      breakdown = manualDistribute(structuredData, baseHeader, nestedHeaders);
     }
     res.status(200).json(breakdown);
   } catch(error) {
