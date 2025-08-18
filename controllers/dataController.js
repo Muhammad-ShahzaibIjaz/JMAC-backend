@@ -56,57 +56,67 @@ async function deleteSheetData(req, res) {
 // Validate value against columnType
 function validateAndConvertValue(value, columnType, criticalityLevel) {
   if (criticalityLevel === '3') {
-    return { value: value, valid: true };
+    return { value, valid: true };
   }
 
-  if (value === null || value === undefined) {
+  if (value == null || (typeof value === 'string' && value.trim() === '')) {
     return { value: null, valid: false };
   }
 
   const stringValue = value.toString().trim();
-  if (stringValue === '') {
-    return { value: null, valid: false };
-  }
 
   switch (columnType) {
     case 'decimal': {
       const num = parseFloat(stringValue);
-      if (!isNaN(num) && Number.isFinite(num) && stringValue.includes('.')) {
-        return { value: num.toFixed(4), valid: true };
-      }
-      if (Number.isInteger(parseFloat(stringValue))) {
-        return { value: parseFloat(stringValue).toFixed(4), valid: true };
-      }
-      return { value: stringValue, valid: false };
+      const isValid = !isNaN(num) && Number.isFinite(num);
+      return {
+        value: isValid ? num.toFixed(4) : stringValue,
+        valid: isValid,
+      };
     }
+
     case 'integer': {
       const num = parseInt(stringValue, 10);
-      if (!isNaN(num) && Number.isInteger(num)) {
-        return { value: num.toString(), valid: true };
-      }
-      return { value: stringValue, valid: false };
+      const isValid = !isNaN(num) && Number.isInteger(num);
+      return {
+        value: isValid ? num.toString() : stringValue,
+        valid: isValid,
+      };
     }
+
     case 'Date': {
       const date = new Date(stringValue);
-      if (!isNaN(date.getTime())) {
-        return { value: stringValue, valid: true };
+      const isValid = !isNaN(date.getTime());
+      if (isValid) {
+        const day = String(date.getDate()).padStart(2, '0');
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const year = date.getFullYear();
+        return {
+          value: `${day}-${month}-${year}`,
+          valid: true,
+        };
       }
       return { value: stringValue, valid: false };
     }
+
     case 'Y/N': {
       const normalized = stringValue.toUpperCase();
-      if (normalized === 'Y' || normalized === 'N') {
+      if (['Y', 'N'].includes(normalized)) {
         return { value: normalized, valid: true };
-      } else if (normalized === "YES" || normalized === "NO") {
-        return { value: normalized === "YES" ? 'Y' : 'N', valid: true}
-      } else if (normalized === "0" || normalized === "1") {
-        return { value: normalized === "1" ? 'Y' : 'N', valid: true}
-      } 
+      }
+      if (normalized === 'YES') return { value: 'Y', valid: true };
+      if (normalized === 'NO') return { value: 'N', valid: true };
+      if (normalized === '1') return { value: 'Y', valid: true };
+      if (normalized === '0') return { value: 'N', valid: true };
       return { value: stringValue, valid: false };
     }
+
     case 'text':
-    case 'character':
-      return { value: stringValue, valid: stringValue.length > 0 };
+    case 'character': {
+      const isValid = stringValue.length > 0;
+      return { value: stringValue, valid: isValid };
+    }
+
     default:
       return { value: stringValue, valid: false };
   }
@@ -615,48 +625,53 @@ async function validateTemplate(templateId) {
 
 async function getTemplateDataWithExcel(req, res) {
   try {
-    const { templateId } = req.query || req.params;
+    const { templateId, templateName } = req.query;
 
-    // Validate inputs
-    const template = await validateTemplate(templateId);
-
+    console.time('header Fetch');
     // Fetch all headers for the template
     const headers = await Header.findAll({
       where: { templateId },
       attributes: ['id', 'name', 'criticalityLevel', 'columnType'],
       order: [['id', 'ASC']],
     });
+    console.timeEnd('header Fetch');
 
     if (!headers || headers.length === 0) {
       console.log(`No headers found for templateId: ${templateId}`);
       return res.status(404).json({ error: `No headers found for templateId ${templateId}` });
     }
 
+    console.time('SheetData Fetch');
     // Fetch all SheetData for the template
-    const sheetData = await SheetData.findAll({
-      include: [{
-        model: Header,
-        where: { templateId },
-        attributes: [],
-      }],
-      attributes: ['id', 'rowIndex', 'value', 'headerId'],
-      order: [['rowIndex', 'ASC'], ['headerId', 'ASC']],
-    });
+    const sheetData = await sequelize.query(`
+        SELECT sd.id, sd."rowIndex", sd.value, sd."headerId"
+        FROM "SheetData" sd
+        INNER JOIN "Header" h ON h.id = sd."headerId"
+        WHERE h."templateId" = :templateId
+        ORDER BY sd."rowIndex" ASC, sd."headerId" ASC
+      `, {
+        replacements: { templateId },
+        type: sequelize.QueryTypes.SELECT,
+      });
+    console.timeEnd('SheetData Fetch');
 
-    // Validate data and track errors
-    const validatedDataByHeader = {};
+    console.time('header Ordering');
+    const sortedHeaders = sortHeadersFlexibleMatch(headers);
+    console.timeEnd('header Ordering');
+    const headerMap = new Map(sortedHeaders.map(h => [h.id, h]));
+    const validatedDataByHeader = new Map();
     const errorRows = new Map();
-    headers.forEach(header => {
-      validatedDataByHeader[header.id] = [];
+    let maxRowIndex = 0;
+
+    sortedHeaders.forEach(header => {
+      validatedDataByHeader.set(header.id, []);
     });
 
-    // Process SheetData
-    sheetData.forEach(data => {
-      const header = headers.find(h => h.id === data.headerId);
-      if (!header) {
-        console.warn(`No header found for SheetData.headerId: ${data.headerId}`);
-        return;
-      }
+    const rowBuckets = new Map();
+    console.time('Data Validation and Grouping');
+    for (const data of sheetData) {
+      const header = headerMap.get(data.headerId);
+      if (!header) continue;
 
       const { value, valid } = validateAndConvertValue(
         data.value,
@@ -664,51 +679,51 @@ async function getTemplateDataWithExcel(req, res) {
         header.criticalityLevel
       );
 
-      validatedDataByHeader[header.id].push({
+      validatedDataByHeader.get(header.id).push({
         id: data.id,
         rowIndex: data.rowIndex,
         value,
         valid,
       });
 
-      if (!valid) {
-        const rowIndex = data.rowIndex;
-        if (!errorRows.has(rowIndex)) {
-          errorRows.set(rowIndex, []);
-        }
-        errorRows.get(rowIndex).push(header.name);
+      if (!rowBuckets.has(data.rowIndex)) {
+        rowBuckets.set(data.rowIndex, new Map());
       }
-    });
+      rowBuckets.get(data.rowIndex).set(data.headerId, { value, valid });
 
-    // Prepare response headers with validated data
-    const responseHeaders = headers.map(header => ({
+      if (!valid) {
+        if (!errorRows.has(data.rowIndex)) {
+          errorRows.set(data.rowIndex, []);
+        }
+        errorRows.get(data.rowIndex).push(header.name);
+      }
+
+      if (data.rowIndex > maxRowIndex) {
+        maxRowIndex = data.rowIndex;
+      }
+    }
+    console.timeEnd('Data Validation and Grouping');
+    const responseHeaders = sortedHeaders.map(header => ({
       id: header.id,
       name: header.name,
       criticalityLevel: header.criticalityLevel,
       columnType: header.columnType,
-      data: validatedDataByHeader[header.id],
+      data: validatedDataByHeader.get(header.id),
     }));
 
-    // Calculate total rows
-    const totalRows = sheetData.length > 0 ? Math.max(...sheetData.map(d => d.rowIndex)) : 0;
     const totalErrorRows = errorRows.size;
-
-    // Generate Excel file
+    console.time('Excel Generation');
     const buffer = await generateExcelFile({
       headers: responseHeaders,
-      totalRows,
+      maxRowIndex,
       totalErrorRows,
       errorRows,
+      rowBuckets,
     });
-
-
-    const now = new Date();
-    const currentDate = now.toISOString().split('T')[0];
-    // Set headers for file download
+    console.timeEnd('Excel Generation');
+    const currentDate = new Date().toISOString().split('T')[0];
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename=${template.name}_${currentDate}.xlsx`);
-
-    // Send the Excel file
+    res.setHeader('Content-Disposition', `attachment; filename=${templateName}_${currentDate}.xlsx`);
     res.status(200).send(buffer);
   } catch (error) {
     console.error('Error generating template data with Excel:', error.message, error.stack);

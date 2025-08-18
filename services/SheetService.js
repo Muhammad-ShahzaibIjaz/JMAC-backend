@@ -1,6 +1,6 @@
 const ExcelJS = require('exceljs');
 
-async function generateExcelFile({ headers, totalRows, totalErrorRows, errorRows }) {
+async function generateExcelFile({ headers, maxRowIndex, totalErrorRows, errorRows, rowBuckets }) {
   const workbook = new ExcelJS.Workbook();
   const sheet1 = workbook.addWorksheet('Data');
 
@@ -20,19 +20,16 @@ async function generateExcelFile({ headers, totalRows, totalErrorRows, errorRows
     }
   });
 
-  // Find max rowIndex
-  const maxRowIndex = Math.max(...headers.flatMap(h => h.data.map(d => d.rowIndex)), 0);
-
   // Add data rows
   for (let rowIndex = 1; rowIndex <= maxRowIndex; rowIndex++) {
     const rowData = headers.map(header => {
-      const data = header.data.find(d => d.rowIndex === rowIndex);
-      return data ? data.value || '' : '';
+      const cellData = rowBuckets.get(rowIndex)?.get(header.id);
+      return cellData ? cellData.value || '' : '';
     });
     const row = sheet1.addRow(rowData);
     headers.forEach((header, colIndex) => {
-      const data = header.data.find(d => d.rowIndex === rowIndex);
-      if (data && data.valid === false) {
+      const cellData = rowBuckets.get(rowIndex)?.get(header.id);
+      if (cellData && cellData.valid === false) {
         const cell = row.getCell(colIndex + 1);
         cell.fill = {
           type: 'pattern',
@@ -55,7 +52,7 @@ async function generateExcelFile({ headers, totalRows, totalErrorRows, errorRows
   const sheet2 = workbook.addWorksheet('Errors');
   sheet2.addRows([
     ['Summary'],
-    ['Total Rows', totalRows],
+    ['Total Rows', maxRowIndex],
     ['Rows with Errors', totalErrorRows],
     [],
     ['Error Details'],
@@ -76,8 +73,7 @@ async function generateExcelFile({ headers, totalRows, totalErrorRows, errorRows
   ];
 
   // Write to buffer
-  const buffer = await workbook.xlsx.writeBuffer();
-  return buffer;
+  return await workbook.xlsx.writeBuffer();
 }
 
 module.exports = {generateExcelFile};
