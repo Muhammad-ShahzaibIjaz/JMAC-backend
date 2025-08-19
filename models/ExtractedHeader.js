@@ -37,7 +37,7 @@ const ExtractedHeader = sequelize.define(
     timestamps: true,
     indexes: [
       {
-        fields: ['id'],
+        fields: ['id', 'mappingTemplateId'],
       },
     ],
   }

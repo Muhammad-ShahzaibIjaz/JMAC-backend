@@ -8,7 +8,7 @@ const MappingTemplate = require('../models/MappingTemplate');
 const sequelize = require('../config/database');
 const { v4: uuidv4 } = require('uuid');
 const { headerProcessor, getFileSheet, selectedHeaderProcessor }  = require('../services/excelService');
-const { Op } = require('sequelize');
+const { Op, QueryTypes } = require('sequelize');
 const fs = require("fs");
 const fsSync = require("fs").promises;
 const path = require("path");
@@ -604,8 +604,6 @@ async function saveUniqueHeaders(processedFiles, templateId, transaction) {
 }
 
 
-
-
 async function uploadAndGetHeaders(req, res) {
   try {
     const { templateId, fileNames, headerOrientation, headerPosition, isRowSkipped } = req.body;
@@ -766,13 +764,13 @@ async function processAndGetSheetMapHeaders(req, res) {
     return res.status(400).json({ error: 'templateId and mappingTemplateId are required' });
   }
 
-  if (!sheetSelectionData || !Array.isArray(sheetSelectionData)) {
+  if (!Array.isArray(sheetSelectionData)) {
     return res.status(400).json({ error: 'sheetSelectionData must be an array' });
   }
 
-  // Validate sheetSelectionData
+  // Validate input structure
   for (const selection of sheetSelectionData) {
-    if (!selection.fileName || !selection.sheets || !Array.isArray(selection.sheets)) {
+    if (!selection.fileName || !Array.isArray(selection.sheets)) {
       return res.status(400).json({ error: `Invalid sheetSelectionData: ${JSON.stringify(selection)}` });
     }
     for (const sheet of selection.sheets) {
@@ -783,102 +781,85 @@ async function processAndGetSheetMapHeaders(req, res) {
   }
 
   try {
-    const files = [];
-    for (const selection of sheetSelectionData) {
+    // Step 1: Check file existence in parallel
+    const files = await Promise.all(sheetSelectionData.map(async (selection) => {
       const filePath = path.join("uploads", templateId, selection.fileName);
-      if (!fs.existsSync(filePath)) {
-        throw new Error(`File not found: ${filePath}`);
-      }
-      files.push({
-        id: uuidv4(),
-        path: filePath,
-        originalname: selection.fileName,
-      });
-    }
+      if (!fs.existsSync(filePath)) throw new Error(`File not found: ${filePath}`);
+      return { id: uuidv4(), path: filePath, originalname: selection.fileName };
+    }));
 
-    // Step 2: Process files
+    // Step 2: Process headers
     const processedFiles = await headerProcessor(files);
 
-    // Step 3: Filter processed files to include only selected sheets
+    // Step 3: Build lookup maps for fast access
+    const selectionMap = new Map();
+    for (const sel of sheetSelectionData) {
+      selectionMap.set(sel.fileName, new Map(sel.sheets.map(s => [s.sheetName, s.totalHeaders])));
+    }
+
     const filteredProcessedFiles = [];
-    for (const selection of sheetSelectionData) {
-      const processedFile = processedFiles.find((pf) => pf.fileName === selection.fileName);
-      if (!processedFile) {
-        return res.status(400).json({ error: `Processed file not found for ${selection.fileName}` });
-      }
+    for (const pf of processedFiles) {
+      const sheetMap = selectionMap.get(pf.fileName);
+      if (!sheetMap) continue;
 
-      const selectedSheets = processedFile.sheets.filter((sheet) =>
-        selection.sheets.some((s) => s.sheetName === sheet.sheetName)
-      );
+      const selectedSheets = pf.sheets.filter(sheet => {
+        const expectedCount = sheetMap.get(sheet.sheetName);
+        return expectedCount !== undefined && expectedCount === sheet.headers.length;
+      });
 
-      // Validate header count
-      for (const sheet of selectedSheets) {
-        const selectionSheet = selection.sheets.find((s) => s.sheetName === sheet.sheetName);
-        if (selectionSheet.totalHeaders !== sheet.headers.length) {
-          return res.status(400).json({
-            error: `Header count mismatch for ${sheet.sheetName} in ${selection.fileName}: expected ${selectionSheet.totalHeaders}, got ${sheet.headers.length}`,
-          });
-        }
-      }
-
-      if (selectedSheets.length > 0) {
-        filteredProcessedFiles.push({
-          ...processedFile,
-          sheets: selectedSheets,
-        });
+      if (selectedSheets.length) {
+        filteredProcessedFiles.push({ fileName: pf.fileName, sheets: selectedSheets });
       }
     }
 
-    if (filteredProcessedFiles.length === 0) {
+    if (!filteredProcessedFiles.length) {
       return res.status(400).json({ error: 'No valid sheets selected for processing' });
     }
 
-    // Step 4: Extract all unique headers from filtered processed files
+    // Step 4: Extract headers
     const extractedHeaders = [];
     for (const file of filteredProcessedFiles) {
       for (const sheet of file.sheets) {
-        sheet.headers.forEach(header => {
+        for (const header of sheet.headers) {
           if (header) {
-            extractedHeaders.push({name: header, fileBelongsTo: file.fileName,});
+            extractedHeaders.push({ name: header, fileBelongsTo: file.fileName });
           }
-        });
+        }
       }
     }
 
-    // Step 5: Get existing headers from ExtractedHeader for this mappingTemplateId
-    const existingExtractedHeaders = await ExtractedHeader.findAll({
+    // Step 5: Get existing headers
+    const existingHeaders = await ExtractedHeader.findAll({
       where: { mappingTemplateId },
       attributes: ['name'],
       raw: true,
     });
-    const existingExtractedHeaderNames = new Set(existingExtractedHeaders.map(header => header.name));
+    const existingNames = new Set(existingHeaders.map(h => h.name));
 
-    // Step 6: Filter out headers that already exist in ExtractedHeader
-    const uniqueHeaders = extractedHeaders.filter(
-      header => !existingExtractedHeaderNames.has(header.name)
-    );
+    // Step 6: Filter unique headers
+    const uniqueHeaders = extractedHeaders.filter(h => !existingNames.has(h.name));
 
-    // Step 7: Save unique headers to ExtractedHeader and prepare response
-    await ExtractedHeader.sequelize.transaction(async (t) => {
-      for (const header of uniqueHeaders) {
-        const headerData = {
-          id: uuidv4(),
-          name: header,
-          columnType: 'text',
-          criticalityLevel: '3',
-          mappingTemplateId,
-          fileBelongsTo: header.fileBelongsTo,
-        };
-        await ExtractedHeader.create(headerData, { transaction: t });
-      }
-    });
+    // Step 7: Bulk insert
+    if (uniqueHeaders.length) {
+      const bulkData = uniqueHeaders.map(h => ({
+        id: uuidv4(),
+        name: h.name,
+        columnType: 'text',
+        criticalityLevel: '3',
+        mappingTemplateId,
+        fileBelongsTo: h.fileBelongsTo,
+      }));
+      await ExtractedHeader.bulkCreate(bulkData);
+    }
 
-    // Step 9: Return all headers (existing + new) for the mappingTemplateId
-    const allHeaders = await ExtractedHeader.findAll({
-      where: { mappingTemplateId },
-      attributes: ['id', 'name', 'columnType', 'criticalityLevel', 'fileBelongsTo'],
-      raw: true,
-    });
+    // Step 8: Return all headers
+    const allHeaders = [...existingHeaders, ...uniqueHeaders.map(h => ({
+      id: uuidv4(),
+      name: h.name,
+      columnType: 'text',
+      criticalityLevel: '3',
+      fileBelongsTo: h.fileBelongsTo,
+    }))];
 
     res.status(200).json(allHeaders);
   } catch (error) {
@@ -1111,11 +1092,15 @@ async function getExtractedHeadersByTemplateId(req, res) {
     return res.status(400).json({ message: "Mapping Template Id is required" });
   }
   try {
-    const headers = await ExtractedHeader.findAll({
-      where: { mappingTemplateId },
-      attributes: ['id', 'name', 'columnType', 'criticalityLevel', 'fileBelongsTo'],
-      raw: true,
-    });
+    const headers = await sequelize.query(
+      `SELECT id, name, "columnType", "criticalityLevel", "fileBelongsTo"
+      FROM "ExtractedHeader"
+      WHERE "mappingTemplateId" = :mappingTemplateId`,
+      {
+        replacements: { mappingTemplateId },
+        type: QueryTypes.SELECT,
+      }
+    );
     res.status(200).json(headers);
   } catch (error) {
     res.status(500).json({ error: error.message })

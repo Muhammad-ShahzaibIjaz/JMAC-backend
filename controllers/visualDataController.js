@@ -173,7 +173,7 @@ const categorizer = async (req, res) => {
 
     } else if (type === "Y/N" || type === "character" || type === "string") {
       const allUniqueValues = [...new Set(cleaned)];
-      result = { type: "category", values: allUniqueValues.map(label => ({ label })) };
+      result = { type: "category", values: [{ labels: allUniqueValues }] };
 
     } else {
       throw new Error("Unsupported column type");
