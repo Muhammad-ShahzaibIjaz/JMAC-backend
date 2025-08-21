@@ -33,41 +33,74 @@ function countBaseHeaderValues(data, baseKey, allPossibleValues = []) {
   return counts;
 }
 
+function detectType(data, header) {
+  for (let i = 0; i < data.length; i++) {
+    const val = data[i][header];
+    if (val == null) continue;
+    if (!isNaN(+val)) return 'number';
+    if (!isNaN(Date.parse(val))) return 'date';
+  }
+  return 'string';
+}
+
 // Utility: Sort by type
-function sortByType(data, header) {
-  return [...data].sort((a, b) => {
+function sortByType(data, header, type) {
+  return data.sort((a, b) => {
     const valA = a[header], valB = b[header];
-
-    const numA = +valA, numB = +valB;
-    if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
-
-    const dateA = Date.parse(valA), dateB = Date.parse(valB);
-    if (!isNaN(dateA) && !isNaN(dateB)) return dateA - dateB;
-
+    if (type === 'number') return +valA - +valB;
+    if (type === 'date') return Date.parse(valA) - Date.parse(valB);
     return String(valA).localeCompare(String(valB));
   });
 }
 
+
 // Utility: Split into buckets
 function splitIntoBuckets(data, count) {
   const buckets = Array.from({ length: count }, () => []);
-  data.forEach((item, i) => {
-    buckets[Math.floor(i * count / data.length)].push(item);
-  });
+  const total = data.length;
+  const ratio = total / count;
+
+  for (let i = 0; i < total; i++) {
+    buckets[Math.floor(i / ratio)].push(data[i]);
+  }
   return buckets;
 }
 
 // Utility: Extract range
 function extractRange(bucket, header) {
   let min = null, max = null;
-  for (const row of bucket) {
-    const val = row[header];
+  let type = 'string';
+
+  for (let i = 0; i < bucket.length; i++) {
+    const val = bucket[i][header];
     if (val == null) continue;
 
-    const norm = typeof val === 'string' ? val.trim() : val;
-    if (min === null || sortByType([{ [header]: norm }], header)[0][header] < min) min = norm;
-    if (max === null || sortByType([{ [header]: norm }], header)[0][header] > max) max = norm;
+    const num = +val;
+    if (!isNaN(num)) {
+      type = 'number';
+      break;
+    }
+
+    const date = Date.parse(val);
+    if (!isNaN(date)) {
+      type = 'date';
+      break;
+    }
   }
+
+  for (let i = 0; i < bucket.length; i++) {
+    const val = bucket[i][header];
+    if (val == null) continue;
+
+    let norm;
+    if (type === 'number') norm = +val;
+    else if (type === 'date') norm = Date.parse(val);
+    else norm = String(val).trim();
+
+    if (min === null || norm < min) min = norm;
+    if (max === null || norm > max) max = norm;
+  }
+
   return { start: min, end: max };
 }
 
@@ -80,4 +113,4 @@ function looselyNormalize(value) {
   return String(value).trim().toLowerCase();
 }
 
-module.exports = { buildRanges, countBaseHeaderValues, getAllBaseHeaderValues, sortByType, splitIntoBuckets, extractRange, looselyNormalize };
+module.exports = { buildRanges, countBaseHeaderValues, getAllBaseHeaderValues, sortByType, detectType, splitIntoBuckets, extractRange, looselyNormalize };

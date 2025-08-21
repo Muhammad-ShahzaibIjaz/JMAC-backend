@@ -2,11 +2,11 @@ const SheetData = require('../models/SheetData');
 const Header = require('../models/Header');
 const Template = require('../models/Template');
 const sequelize = require('../config/database');
-const { DataTypes, Op, where, cast, col} = require('sequelize');
+const { DataTypes, Op, where, cast, col, fn} = require('sequelize');
 const { v4: uuidv4 } = require('uuid');
 const math = require('mathjs');
 const { OperationLog, SheetDataSnapshot } = require('../models');
-const { countBaseHeaderValues, getAllBaseHeaderValues, sortByType, splitIntoBuckets, extractRange, looselyNormalize} = require('../utils/rangeHelper');
+const { countBaseHeaderValues, getAllBaseHeaderValues, sortByType, detectType, splitIntoBuckets, extractRange, looselyNormalize} = require('../utils/rangeHelper');
 
 
 // const categorizer = async (req, res) => {
@@ -17,66 +17,106 @@ const { countBaseHeaderValues, getAllBaseHeaderValues, sortByType, splitIntoBuck
 
 //     if (!templateId || !targetHeader || !categoryCount) {
 //       await transaction.rollback();
-//       return res.status(400).json({ error: 'Missing required fields: templateId, targetHeader and categoryCount are required' });
+//       return res.status(400).json({
+//         error: "Missing required fields: templateId, targetHeader and categoryCount are required",
+//       });
 //     }
 
 //     const header = await Header.findOne({ where: { templateId, name: targetHeader }, transaction });
 //     if (!header) {
 //       await transaction.rollback();
-//       return res.status(400).json({ error: 'target header not found' });
+//       return res.status(404).json({ error: "Target header not found" });
 //     }
 
 //     const rawValues = await SheetData.findAll({
 //       where: { headerId: header.id },
-//       attributes: ['value'],
+//       attributes: ["value"],
 //       transaction,
 //     });
 
-//     if (rawValues.length === 0) {
+//     const cleaned = rawValues.map(v => v.value?.trim()).filter(val => val && val.toUpperCase() !== "NULL");
+//     if (cleaned.length === 0) {
 //       await transaction.rollback();
-//       return res.status(404).json({ error: 'No data found for the provided headerId' });
+//       return res.status(404).json({ error: "No data found for the provided header" });
 //     }
 
-//     const sortedValues = rawValues
-//       .map((entry) => parseFloat(entry.value))
-//       .filter((val) => !isNaN(val))
-//       .sort((a, b) => b - a);
+//     const uniqueValues = [];
+//     const sampleSize = 20;
 
-//     if (sortedValues.length === 0) {
-//       await transaction.rollback();
-//       return res.status(400).json({ error: 'No valid numerical values found in the data' });
+//     for (const val of cleaned) {
+//       if (!uniqueValues.includes(val)) {
+//         uniqueValues.push(val);
+//         if (uniqueValues.length >= sampleSize) break;
+//       }
 //     }
 
-//     const total = sortedValues.length;
-//     const bucketSize = Math.floor(total / categoryCount);
-//     const categories = [];
+//     const numericSample = uniqueValues.filter(val => /^-?\d+(\.\d+)?$/.test(val));
+//     const numericConfidence = numericSample.length / uniqueValues.length;
 
-//     if (bucketSize === 0) {
-//       await transaction.rollback();
-//       return res.status(400).json({ error: 'Too many categories requested for the available data' });
+//     const isLikelyNumeric = numericConfidence > 0.8;
+
+//     let type = header.columnType;
+//     if (type === "text") {
+
+//       if (isLikelyNumeric) type = "numeric";
+//       else if (uniqueValues.every(val => !isNaN(Date.parse(val)))) type = "Date";
+//       else type = "string";
 //     }
 
-//     for (let i = 0; i < categoryCount; i++) {
-//       const startIdx = i * bucketSize;
-//       const endIdx = i === categoryCount - 1 ? total - 1 : (i + 1) * bucketSize - 1;
+//     let result;
 
-//       const start = sortedValues[startIdx];
-//       const end = sortedValues[endIdx];
+//     if (type === "numeric" || type === "integer" || type === "decimal") {
+//       const values = cleaned.map(Number).filter(v => !isNaN(v));
+//       if (values.length === 0) throw new Error("No valid numerical values found");
 
-//       categories.push({ start, end });
+//       const min = Math.min(...values);
+//       const max = Math.max(...values);
+//       const step = (max - min) / categoryCount;
+//       const epsilon = 0.000001;
+//       const ranges = [];
+//       for (let i = 0; i < categoryCount; i++) {
+//         const start = parseFloat((min + i * step + (i > 0 ? epsilon : 0)).toFixed(6));
+//         const end = parseFloat((i === categoryCount - 1 ? max : min + (i + 1) * step).toFixed(6));
+//         ranges.push({ start, end });
+//       }
+
+//       result = { type: "numeric", ranges };
+
+//     } else if (type === "Date") {
+//       console.log("Categorizing date data");
+//       const dates = cleaned.map(val => new Date(val)).filter(d => !isNaN(d));
+//       if (dates.length === 0) throw new Error("No valid date entries found");
+
+//       const sorted = dates.sort((a, b) => a - b);
+//       const total = sorted.length;
+//       const bucketSize = Math.floor(total / categoryCount);
+//       if (bucketSize === 0) throw new Error("Too many categories for available date data");
+
+//       const ranges = [];
+//       for (let i = 0; i < categoryCount; i++) {
+//         const start = sorted[i * bucketSize].toISOString();
+//         const end = sorted[i === categoryCount - 1 ? total - 1 : (i + 1) * bucketSize - 1].toISOString();
+//         ranges.push({ start, end });
+//       }
+
+//       result = { type: "date", ranges };
+
+//     } else if (type === "Y/N" || type === "character" || type === "string") {
+//       const allUniqueValues = [...new Set(cleaned)];
+//       result = { type: "category", values: [{ labels: allUniqueValues }] };
+
+//     } else {
+//       throw new Error("Unsupported column type");
 //     }
 
 //     await transaction.commit();
-//     return res.status(200).json(categories);
+//     return res.status(200).json(result);
 
 //   } catch (error) {
 //     await transaction.rollback();
-//     return res.status(500).json({ 
-//       error: 'Failed to categorize data',
-//     });
+//     return res.status(500).json({ error: error.message || "Failed to categorize data" });
 //   }
 // };
-
 
 const categorizer = async (req, res) => {
   const transaction = await sequelize.transaction();
@@ -91,88 +131,102 @@ const categorizer = async (req, res) => {
       });
     }
 
-    const header = await Header.findOne({ where: { templateId, name: targetHeader }, transaction });
+    const header = await Header.findOne({
+      where: { templateId, name: targetHeader },
+      transaction,
+    });
+
     if (!header) {
       await transaction.rollback();
       return res.status(404).json({ error: "Target header not found" });
     }
 
-    const rawValues = await SheetData.findAll({
+    // Stream values for memory efficiency
+    const stream = await SheetData.findAll({
       where: { headerId: header.id },
       attributes: ["value"],
+      raw: true,
       transaction,
     });
 
-    const cleaned = rawValues.map(v => v.value?.trim()).filter(val => val && val.toUpperCase() !== "NULL");
+    const cleaned = [];
+    const uniqueSet = new Set();
+    const sampleSize = 20;
+
+    for (const { value } of stream) {
+      const trimmed = value?.trim();
+      if (trimmed && trimmed.toUpperCase() !== "NULL") {
+        cleaned.push(trimmed);
+        if (uniqueSet.size < sampleSize) uniqueSet.add(trimmed);
+      }
+    }
+
     if (cleaned.length === 0) {
       await transaction.rollback();
       return res.status(404).json({ error: "No data found for the provided header" });
     }
 
-    const uniqueValues = [];
-    const sampleSize = 20;
-
-    for (const val of cleaned) {
-      if (!uniqueValues.includes(val)) {
-        uniqueValues.push(val);
-        if (uniqueValues.length >= sampleSize) break;
-      }
-    }
-
-    // const sample = cleaned.slice(0, sampleSize);
-    const numericSample = uniqueValues.filter(val => /^-?\d+(\.\d+)?$/.test(val));
+    const uniqueValues = Array.from(uniqueSet);
+    const numericSample = uniqueValues.filter(val => !isNaN(Number(val)));
     const numericConfidence = numericSample.length / uniqueValues.length;
-
-    const isLikelyNumeric = numericConfidence > 0.8;
 
     let type = header.columnType;
     if (type === "text") {
-
-      if (isLikelyNumeric) type = "numeric";
+      if (numericConfidence > 0.8) type = "numeric";
       else if (uniqueValues.every(val => !isNaN(Date.parse(val)))) type = "Date";
       else type = "string";
     }
 
     let result;
 
-    if (type === "numeric" || type === "integer" || type === "decimal") {
-      const values = cleaned.map(Number).filter(v => !isNaN(v));
-      if (values.length === 0) throw new Error("No valid numerical values found");
+    if (["numeric", "integer", "decimal"].includes(type)) {
+      const numericValues = cleaned.map(Number).filter(v => !isNaN(v));
+      if (numericValues.length === 0) throw new Error("No valid numerical values found");
 
-      const min = Math.min(...values);
-      const max = Math.max(...values);
-      const step = Math.ceil((max - min + 1) / categoryCount);
+      const [minMax] = await SheetData.findAll({
+        where: { headerId: header.id },
+        attributes: [
+          [fn("MIN", col("value")), "min"],
+          [fn("MAX", col("value")), "max"]
+        ],
+        raw: true,
+        transaction
+      });
+
+      const min = Number(minMax.min);
+      const max = Number(minMax.max);
+      const step = (max - min) / categoryCount;
+      const epsilon = 0.000001;
 
       const ranges = [];
       for (let i = 0; i < categoryCount; i++) {
-        const start = min + i * step;
-        const end = i === categoryCount - 1 ? max : start + step - 1;
+        const start = parseFloat((min + i * step + (i > 0 ? epsilon : 0)).toFixed(6));
+        const end = parseFloat((i === categoryCount - 1 ? max : min + (i + 1) * step).toFixed(6));
         ranges.push({ start, end });
       }
 
       result = { type: "numeric", ranges };
 
     } else if (type === "Date") {
-      console.log("Categorizing date data");
-      const dates = cleaned.map(val => new Date(val)).filter(d => !isNaN(d));
-      if (dates.length === 0) throw new Error("No valid date entries found");
+      const dateValues = cleaned.map(val => new Date(val)).filter(d => !isNaN(d));
+      if (dateValues.length === 0) throw new Error("No valid date entries found");
 
-      const sorted = dates.sort((a, b) => a - b);
-      const total = sorted.length;
+      dateValues.sort((a, b) => a - b);
+      const total = dateValues.length;
       const bucketSize = Math.floor(total / categoryCount);
       if (bucketSize === 0) throw new Error("Too many categories for available date data");
 
       const ranges = [];
       for (let i = 0; i < categoryCount; i++) {
-        const start = sorted[i * bucketSize].toISOString();
-        const end = sorted[i === categoryCount - 1 ? total - 1 : (i + 1) * bucketSize - 1].toISOString();
+        const start = dateValues[i * bucketSize].toISOString();
+        const end = dateValues[i === categoryCount - 1 ? total - 1 : (i + 1) * bucketSize - 1].toISOString();
         ranges.push({ start, end });
       }
 
       result = { type: "date", ranges };
 
-    } else if (type === "Y/N" || type === "character" || type === "string") {
-      const allUniqueValues = [...new Set(cleaned)];
+    } else if (["Y/N", "character", "string"].includes(type)) {
+      const allUniqueValues = Array.from(new Set(cleaned));
       result = { type: "category", values: [{ labels: allUniqueValues }] };
 
     } else {
@@ -246,177 +300,6 @@ function validateAndConvertValue(value, columnType, criticalityLevel) {
       return { value: stringValue, valid: false };
   }
 }
-
-
-// async function getDataWithRange(req, res) {
-//   try {
-//     const { templateId, headerId, currentPage, pageSize, minRange, maxRange } = req.query;
-
-//     if (!templateId) {
-//       return res.status(400).json({ error: 'templateId is required' });
-//     }
-//     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(templateId)) {
-//       return res.status(400).json({ error: 'templateId must be a valid UUID' });
-//     }
-//     const page = parseInt(currentPage);
-//     const size = parseInt(pageSize);
-//     if (isNaN(page) || page < 1) {
-//       return res.status(400).json({ error: 'currentPage must be a positive integer' });
-//     }
-//     if (isNaN(size) || size < 1) {
-//       return res.status(400).json({ error: 'pageSize must be a positive integer' });
-//     }
-
-
-//     // Range validation
-//     let minRangeValue = minRange ? parseFloat(minRange) : undefined;
-//     let maxRangeValue = maxRange ? parseFloat(maxRange) : undefined;
-//     if ((minRange && isNaN(minRangeValue)) || (maxRange && isNaN(maxRangeValue))) {
-//       return res.status(400).json({ error: 'Range values must be valid numbers' });
-//     }
-//     if (minRangeValue !== undefined && maxRangeValue !== undefined && minRangeValue > maxRangeValue) {
-//       return res.status(400).json({ error: 'minRange cannot be greater than maxRange' });
-//     }
-
-
-//     const headers = await Header.findAll({
-//       where: { templateId },
-//       attributes: ['id', 'name', 'criticalityLevel', 'columnType'],
-//       order: [['createdAt', 'ASC']],
-//     });
-
-//     if (!headers || headers.length === 0) {
-//       return res.status(404).json({ error: `No headers found for templateId ${templateId}` });
-//     }
-
-//     let rowIndexes = [];
-//     if (headerId && (minRangeValue !== undefined || maxRangeValue !== undefined)) {
-//         const rangeFilter = {
-//             headerId,
-//             value: {},
-//         };
-//         if (minRangeValue !== undefined) rangeFilter.value[Op.gte] = minRangeValue;
-//         if (maxRangeValue !== undefined) rangeFilter.value[Op.lte] = maxRangeValue;
-
-//         const matchingRows = await SheetData.findAll({
-//             where: rangeFilter,
-//             attributes: ['rowIndex'],
-//         });
-
-//         rowIndexes = matchingRows.map(row => row.rowIndex);
-//         if (!rowIndexes.length) {
-//             return res.status(200).json({
-//                 headers: headers.map(h => ({ ...h.dataValues, data: [] })),
-//                 totalErrorRows: 0,
-//                 errorPages: [],
-//                 pagination: {
-//                     currentPage: page,
-//                     pageSize: size,
-//                     totalRows: 0,
-//                     totalPages: 0,
-//                 },
-//             });
-//         }
-//     }
-
-//     const allSheetData = await SheetData.findAll({
-//       include: [{
-//         model: Header,
-//         where: { templateId },
-//         attributes: [],
-//       }],
-//       where: rowIndexes.length ? { rowIndex: { [Op.in]: rowIndexes } } : { '$Header.templateId$': templateId },
-//       attributes: ['id', 'rowIndex', 'value', 'headerId'],
-//       order: [['rowIndex', 'ASC']],
-//     });
-
-//     const errorRows = new Set();
-//     const errorPages = new Set();
-//     const validatedDataByHeader = {};
-
-//     headers.forEach(header => {
-//       validatedDataByHeader[header.id] = [];
-//     });
-
-//     allSheetData.forEach(data => {
-//       const header = headers.find(h => h.id === data.headerId);
-//       if (!header) return;
-
-//       const { value, valid } = validateAndConvertValue(
-//         data.value,
-//         header.columnType,
-//         header.criticalityLevel
-//       );
-
-//       validatedDataByHeader[header.id].push({
-//         id: data.id,
-//         rowIndex: data.rowIndex,
-//         value,
-//         valid,
-//       });
-
-//       if (!valid) {
-//         errorRows.add(data.rowIndex);
-//         const pageWithError = Math.floor(data.rowIndex / size) + 1;
-//         errorPages.add(pageWithError);
-//       }
-//     });
-
-//     // Sort values in descending order for the specified headerId
-//     if (headerId) {
-//       validatedDataByHeader[headerId] = validatedDataByHeader[headerId]
-//         .map(entry => ({
-//           ...entry,
-//           value: entry.value ? parseFloat(entry.value) : null,
-//         }))
-//         .filter(entry =>
-//           entry.value !== null &&
-//           !isNaN(entry.value) &&
-//           (minRangeValue === undefined || entry.value >= minRangeValue) &&
-//           (maxRangeValue === undefined || entry.value <= maxRangeValue)
-//         )
-//         .sort((a, b) => b.value - a.value);
-//     }
-
-
-//     const offset = (page - 1) * size;
-//     const paginatedDataByHeader = {};
-
-//     headers.forEach(header => {
-//       const headerData = validatedDataByHeader[header.id];
-//       const paginatedData = headerData.filter(
-//         data => data.rowIndex >= offset && data.rowIndex < offset + size
-//       );
-//       paginatedDataByHeader[header.id] = paginatedData;
-//     });
-
-//     const responseHeaders = headers.map(header => ({
-//       id: header.id,
-//       name: header.name,
-//       criticalityLevel: header.criticalityLevel,
-//       columnType: header.columnType,
-//       data: paginatedDataByHeader[header.id],
-//     }));
-
-//     const totalRows = Math.max(...allSheetData.map(data => data.rowIndex), 0);
-//     const totalPages = Math.ceil(totalRows / size);
-
-//     res.status(200).json({
-//       headers: responseHeaders,
-//       totalErrorRows: errorRows.size,
-//       errorPages: Array.from(errorPages).sort((a, b) => a - b),
-//       pagination: {
-//         currentPage: page,
-//         pageSize: size,
-//         totalRows,
-//         totalPages,
-//       },
-//     });
-//   } catch (error) {
-//     console.error('Error retrieving headers with validated data:', error.message, error.stack);
-//     res.status(500).json({ error: 'Failed to retrieve data' });
-//   }
-// }
 
 async function getDataWithRange(req, res) {
   try {
@@ -565,102 +448,127 @@ async function getDataWithRange(req, res) {
 
 async function getStructuredData(templateId) {
   const headers = await Header.findAll({ where: { templateId }, raw: true });
-  const headerMap = new Map(headers.map(h => [h.id, h.name]));
+  const headerIds = headers.map(h => h.id);
+  const headerNames = Object.fromEntries(headers.map(h => [h.id, h.name]));
 
   const sheetRows = await SheetData.findAll({
-    where: { headerId: { [Op.in]: headers.map(h => h.id) } },
-    order: [['rowIndex', 'ASC']],
+    where: { headerId: { [Op.in]: headerIds } },
+    attributes: ['rowIndex', 'headerId', 'value'],
     raw: true,
   });
 
-  const rowMap = new Map();
-  for (const row of sheetRows) {
-    const headerName = headerMap.get(row.headerId);
-    if (!rowMap.has(row.rowIndex)) rowMap.set(row.rowIndex, {});
-    rowMap.get(row.rowIndex)[headerName] = row.value;
+  const rows = new Map();
+  for (const { rowIndex, headerId, value } of sheetRows) {
+    if (!rows.has(rowIndex)) rows.set(rowIndex, {});
+    rows.get(rowIndex)[headerNames[headerId]] = value;
   }
 
-  return Array.from(rowMap.values());
+  return Array.from(rows.values());
 }
 
 
 
 
 function handleNestedHeaders(nestedHeaders, data) {
-  if (!Array.isArray(nestedHeaders) || nestedHeaders.length === 0) return data;
+  if (!nestedHeaders?.length) return data;
 
-  let processedData = data;
+  let filteredData = data;
 
-  for (let i = 0; i < nestedHeaders.length; i++) {
-    const { header, ranges, bucketNumber } = nestedHeaders[i];
-    if (!header || !Array.isArray(ranges) || ranges.length === 0) continue;
+  for (const { header, ranges, bucketNumber } of nestedHeaders) {
+    if (!header || !ranges?.length) continue;
 
-    const sorted = sortByType(processedData, header);
+    const detectedType = detectType(filteredData, header);
+    const sorted = sortByType(filteredData, header, detectedType);
     const buckets = splitIntoBuckets(sorted, bucketNumber || ranges.length);
 
-    let matchedBucket = null;
+    const labelBuckets = new Map();
+    for (const bucket of buckets) {
+      const key = extractRange(bucket, header);
+      labelBuckets.set(`${looselyNormalize(key.start)}|${looselyNormalize(key.end)}`, bucket);
+    }
 
-    for (let r = 0; r < ranges.length; r++) {
-      const { start, end, labels } = ranges[r];
+    for (const range of ranges) {
+      const { start, end, labels } = range;
 
-      for (let b = 0; b < buckets.length; b++) {
-        const bucket = buckets[b];
-
-        if (Array.isArray(labels)) {
-          const labelSet = new Set(labels.map(l => String(l).trim().toLowerCase()));
-          const match = bucket.every(row => labelSet.has(String(row[header]).trim().toLowerCase()));
-          if (match) {
-            matchedBucket = bucket;
-            break;
-          }
-        } else {
-          const { start: bucketStart, end: bucketEnd } = extractRange(bucket, header);
-          const key = `${looselyNormalize(bucketStart)}|${looselyNormalize(bucketEnd)}`;
-          const targetKey = `${looselyNormalize(start)}|${looselyNormalize(end)}`;
-          if (key === targetKey) {
-            matchedBucket = bucket;
-            break;
-          }
+      if (labels?.length) {
+        const labelSet = new Set(labels.map(l => String(l).trim().toLowerCase()));
+        const match = buckets.find(bucket =>
+          bucket.every(row => labelSet.has(String(row[header]).trim().toLowerCase()))
+        );
+        if (match) {
+          filteredData = match;
+          break;
+        }
+      } else {
+        const key = `${looselyNormalize(start)}|${looselyNormalize(end)}`;
+        if (labelBuckets.has(key)) {
+          filteredData = labelBuckets.get(key);
+          break;
         }
       }
-
-      if (matchedBucket) break;
     }
-    if (matchedBucket) processedData = matchedBucket;
   }
 
-  return processedData;
+  return filteredData;
 }
 
 
 function autoDistribute(data, baseHeader, targetHeader, categoryCount, nestedHeaders = []) {
-  let workingData = handleNestedHeaders(nestedHeaders, data);
+  const workingData = handleNestedHeaders(nestedHeaders, data);
 
-  // Step 2: Sort by targetHeader
-  const sortedTarget = sortByType(workingData, targetHeader);
-  // Step 3: Slice into buckets
+  const detectedType = detectType(workingData, targetHeader);
+
+  const sortedTarget = sortByType(workingData, targetHeader, detectedType);
+
   const buckets = splitIntoBuckets(sortedTarget, categoryCount);
-  // Step 4: Build result
-  const allBaseValues = getAllBaseHeaderValues(data, baseHeader);
-  return buckets.map(bucket => ({
-    targetHeader: targetHeader,
-    targetRange: extractRange(bucket, targetHeader),
-    total: bucket.length,
-    baseHeaderCounts: countBaseHeaderValues(bucket, baseHeader, allBaseValues),
-  }));
-}
 
+  const allBaseValues = getAllBaseHeaderValues(data, baseHeader);
+
+  return buckets.map(bucket => {
+    let targetRange;
+
+    if (detectedType === 'number' || detectedType === 'date') {
+      targetRange = extractRange(bucket, targetHeader);
+    } else {
+      const labelSet = new Set();
+      for (const row of bucket) {
+        const val = row[targetHeader];
+        if (val != null) labelSet.add(String(val).trim());
+      }
+      targetRange = { labels: Array.from(labelSet) };
+    }
+
+    return {
+      targetHeader,
+      targetRange,
+      total: bucket.length,
+      baseHeaderCounts: countBaseHeaderValues(bucket, baseHeader, allBaseValues),
+    };
+  });
+}
 
 
 function manualDistribute(data, baseHeader, nestedHeaders = [], manualRanges = []) {
   const categoryData = nestedHeaders.length ? handleNestedHeaders(nestedHeaders, data) : data;
+
   const allBaseValues = getAllBaseHeaderValues(categoryData, baseHeader);
+
+  // Pre-normalize manualRanges labels once
+  for (const { ranges } of manualRanges) {
+    for (const range of ranges) {
+      if (Array.isArray(range.labels)) {
+        range.normalizedLabels = range.labels.map(label => String(label).trim().toLowerCase());
+      }
+    }
+  }
+
   const breakdown = [];
 
-  // Preprocess label maps per header
   const labelMaps = {};
-  for (const row of categoryData) {
-    for (const { header } of manualRanges) {
+  for (let i = 0; i < categoryData.length; i++) {
+    const row = categoryData[i];
+    for (let j = 0; j < manualRanges.length; j++) {
+      const header = manualRanges[j].header;
       const val = row[header];
       if (val == null) continue;
       const norm = String(val).trim().toLowerCase();
@@ -670,27 +578,25 @@ function manualDistribute(data, baseHeader, nestedHeaders = [], manualRanges = [
     }
   }
 
-  for (const { header, ranges } of manualRanges) {
-    for (const { start, end, labels } of ranges) {
-      let filtered;
+  for (let i = 0; i < manualRanges.length; i++) {
+    const { header, ranges } = manualRanges[i];
+    for (let j = 0; j < ranges.length; j++) {
+      const { start, end, labels, normalizedLabels } = ranges[j];
+      let filtered = [];
 
       if (Array.isArray(labels) && labels.length > 0) {
-        // Fast label lookup
-        filtered = [];
         const map = labelMaps[header];
-        if (map) {
-          for (const label of labels) {
-            const norm = String(label).trim().toLowerCase();
+        if (map && normalizedLabels) {
+          for (let k = 0; k < normalizedLabels.length; k++) {
+            const norm = normalizedLabels[k];
             if (map[norm]) filtered.push(...map[norm]);
           }
         }
       } else {
-        // Numeric range filtering
-        filtered = [];
-        for (const row of categoryData) {
-          const val = parseFloat(row[header]);
+        for (let k = 0; k < categoryData.length; k++) {
+          const val = parseFloat(categoryData[k][header]);
           if (!isNaN(val) && val >= start && val <= end) {
-            filtered.push(row);
+            filtered.push(categoryData[k]);
           }
         }
       }
@@ -705,7 +611,6 @@ function manualDistribute(data, baseHeader, nestedHeaders = [], manualRanges = [
       });
     }
   }
-
   return breakdown;
 }
 

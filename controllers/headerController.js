@@ -168,18 +168,36 @@ function normalize(str) {
 }
 
 function sortHeadersFlexibleMatch(headers) {
-  const headerMap = new Map(
-    headers.map(h => [normalize(h.name), h])
-  );
+  const normalizedToHeader = new Map();
+  const normalizedOriginals = [];
 
-  const ordered = desiredOrder
-    .map(name => headerMap.get(normalize(name)))
-    .filter(Boolean);
+  for (const h of headers) {
+    const norm = normalize(h.name);
+    normalizedToHeader.set(norm, h);
+    normalizedOriginals.push(norm);
+  }
 
-  const matchedKeys = new Set(ordered.map(h => normalize(h.name)));
-  const extras = headers.filter(h => !matchedKeys.has(normalize(h.name)));
+  const ordered = [];
+  const matchedKeys = new Set();
 
-  return [...ordered, ...extras];
+  for (const name of desiredOrder) {
+    const norm = normalize(name);
+    const match = normalizedToHeader.get(norm);
+    if (match) {
+      ordered.push(match);
+      matchedKeys.add(norm);
+    }
+  }
+
+  const extras = [];
+  for (let i = 0; i < headers.length; i++) {
+    const norm = normalizedOriginals[i];
+    if (!matchedKeys.has(norm)) {
+      extras.push(headers[i]);
+    }
+  }
+
+  return ordered.concat(extras);
 }
 
 
@@ -194,6 +212,7 @@ async function getHeader(req, res) {
       const headers = await Header.findAll({
         where: { templateId: id },
         attributes: ['id', 'name', 'columnType', 'criticalityLevel'],
+        raw: true
       });
 
       const sortedHeaders = sortHeadersFlexibleMatch(headers);
