@@ -21,7 +21,7 @@ yarn-debug.log
 .idea/
 *.sublime-project
 *.sublime-workspace
-.uploads/
+uploads/
 # OS-specific files
 .DS_Store
 Thumbs.db
