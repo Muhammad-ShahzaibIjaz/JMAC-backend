@@ -57,7 +57,6 @@ async function deleteTemplate(req, res) {
     if (!id || typeof id !== "string" || id.trim().length === 0) {
       return res.status(400).json({ error: "Template ID is required and must be a non-empty string" });
     }
-
     const result = await sequelize.transaction(async (t) => {
       // Find the template
       const template = await Template.findByPk(id, { transaction: t });
@@ -86,11 +85,10 @@ async function deleteTemplate(req, res) {
         message: "Successfully deleted template and all associated data",
       };
     });
-
     if (!result.deleted) {
       return res.status(404).json({ error: result.message });
     }
-
+  
     const dirPath = path.join(__dirname, '..', 'uploads', id);
     if (fs.existsSync(dirPath)) {
       const files = fs.readdirSync(dirPath);

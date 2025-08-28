@@ -12,9 +12,9 @@ const { headerProcessor }  = require('../services/excelService');
 
 
 const addCrossReference = async (req, res) => {
-    const { name, templateId, inputHeaderId, outputHeaderId, dependentReferenceId = null } = req.body;
+    const { name, templateId, inputHeaderIds, outputHeaderIds, dependentReferenceId = null } = req.body;
     try {
-        if (!name || !templateId || !inputHeaderId || !outputHeaderId) {
+        if (!name || !templateId || !inputHeaderIds || !outputHeaderIds) {
             return res.status(400).json({ error: 'All fields are required' });
         }
         const referenceExists = await sequelize.transaction(async (t) => {
@@ -22,8 +22,8 @@ const addCrossReference = async (req, res) => {
                 where: {
                     name,
                     templateId,
-                    inputHeaderId,
-                    outputHeaderId
+                    inputHeaderIds,
+                    outputHeaderIds
                 },
                 transaction: t
             });
@@ -37,8 +37,8 @@ const addCrossReference = async (req, res) => {
         const newReference = await CrossReference.create({
             name,
             templateId,
-            inputHeaderId,
-            outputHeaderId,
+            inputHeaderIds,
+            outputHeaderIds,
             dependentReferenceId
         });
 
@@ -61,16 +61,6 @@ const getCrossReferences = async (req, res) => {
       where: { templateId },
       include: [
         {
-          model: Header,
-          as: 'inputHeader',
-          attributes: ['name'],
-        },
-        {
-          model: Header,
-          as: 'outputHeader',
-          attributes: ['name'],
-        },
-        {
           model: CrossReferenceMapping,
           as: 'mappings',
           attributes: ['inputValue', 'outputValue'],
@@ -78,11 +68,32 @@ const getCrossReferences = async (req, res) => {
       ],
     });
 
+    // Collect all header IDs from all references
+    const allHeaderIds = [
+      ...new Set(
+        crossReferences.flatMap((ref) => [
+          ...(ref.inputHeaderIds || []),
+          ...(ref.outputHeaderIds || []),
+        ])
+      ),
+    ];
+
+    // Fetch all headers in one go
+    const headers = await Header.findAll({
+      where: { id: { [Op.in]: allHeaderIds } },
+      attributes: ['id', 'name'],
+    });
+
+    const headerMap = Object.fromEntries(
+      headers.map((h) => [h.id, h.name])
+    );
+
+
     const formattedReferences = crossReferences.map((ref) => ({
       id: ref.id,
       name: ref.name,
-      inputHeader: ref.inputHeader ? ref.inputHeader.name : '',
-      outputHeader: ref.outputHeader ? ref.outputHeader.name : '',
+      inputHeaders: (ref.inputHeaderIds || []).map((id) => headerMap[id] || ''),
+      outputHeaders: (ref.outputHeaderIds || []).map((id) => headerMap[id] || ''),
       mappings: ref.mappings.map((mapping) => ({
         inputValue: mapping.inputValue,
         outputValue: mapping.outputValue,
@@ -105,25 +116,33 @@ const getCrossReferencesWithoutMapping = async (req, res) => {
 
     const crossReferences = await CrossReference.findAll({
       where: { templateId },
-      include: [
-        {
-          model: Header,
-          as: 'inputHeader',
-          attributes: ['name'],
-        },
-        {
-          model: Header,
-          as: 'outputHeader',
-          attributes: ['name'],
-        },
-      ],
     });
+
+    // Collect all header IDs from all references
+    const allHeaderIds = [
+      ...new Set(
+        crossReferences.flatMap((ref) => [
+          ...(ref.inputHeaderIds || []),
+          ...(ref.outputHeaderIds || []),
+        ])
+      ),
+    ];
+
+    // Fetch all headers in one go
+    const headers = await Header.findAll({
+      where: { id: { [Op.in]: allHeaderIds } },
+      attributes: ['id', 'name'],
+    });
+
+    const headerMap = Object.fromEntries(
+      headers.map((h) => [h.id, h.name])
+    );
 
     const formattedReferences = crossReferences.map((ref) => ({
       id: ref.id,
       name: ref.name,
-      inputHeader: ref.inputHeader ? ref.inputHeader.name : '',
-      outputHeader: ref.outputHeader ? ref.outputHeader.name : '',
+      inputHeaders: (ref.inputHeaderIds || []).map((id) => headerMap[id] || ''),
+      outputHeaders: (ref.outputHeaderIds || []).map((id) => headerMap[id] || ''),
       dependentReferenceId: ref.dependentReferenceId ? ref.dependentReferenceId : null
     }));
 
@@ -161,20 +180,9 @@ const applyReference = async (req, res) => {
     if (!id) {
       return res.status(400).json({ error: 'Reference ID is required' });
     }
-
     const crossReferences = await CrossReference.findOne({
       where: { id },
       include: [
-        {
-          model: Header,
-          as: 'inputHeader',
-          attributes: ['id'],
-        },
-        {
-          model: Header,
-          as: 'outputHeader',
-          attributes: ['id'],
-        },
         {
           model: CrossReferenceMapping,
           as: 'mappings',
@@ -182,14 +190,17 @@ const applyReference = async (req, res) => {
         },
       ],
     });
-
     
     if (!crossReferences) {
         return res.status(404).json({ error: 'Cross-reference not found' });
     }
     
-    const inputHeaderId = crossReferences.inputHeader.id;
-    const outputHeaderId = crossReferences.outputHeader.id;
+    const inputHeaderIds = crossReferences.inputHeaderIds || [];
+    const inputHeaderNames = await Header.findAll({
+      where: { id: { [Op.in]: inputHeaderIds } },
+      attributes: ['id', 'name'],
+    });
+    const outputHeaderIds = crossReferences.outputHeaderIds || [];
     const mappings = crossReferences.mappings.map((mapping) => ({
         inputValue: mapping.inputValue,
         outputValue: mapping.outputValue,
@@ -197,8 +208,17 @@ const applyReference = async (req, res) => {
     if (!Array.isArray(mappings) || mappings.length === 0) {
       return res.status(422).json({ error: 'There is no References Rules to apply' });
     }
-    await applyReferenceOnData(inputHeaderId, outputHeaderId, mappings);
-    return res.status(200).json({ message: 'Reference applied successfully' });
+    const allUnmapped = [];
+    for (let i = 0; i < inputHeaderIds.length; i++) {
+      const unmapped = await applyReferenceOnData(inputHeaderIds[i], outputHeaderIds[i], mappings);
+      if (unmapped.length > 0) {
+        allUnmapped.push({
+          headerName: inputHeaderNames[i].name,
+          unmappedValues: unmapped,
+        });
+      }
+    }
+    return res.status(200).json(allUnmapped);
   } catch (error) {
     console.error('Error cross-references:', error);
     return res.status(500).json({ error: 'Internal server error' });
@@ -206,9 +226,9 @@ const applyReference = async (req, res) => {
 }
 
 const updateCrossReferenceWithMapping = async (req, res) => {
-  const { id, name, inputHeaderId, outputHeaderId, mappings, dependentReferenceId = null } = req.body;
+  const { id, name, inputHeaderIds, outputHeaderIds, mappings, dependentReferenceId = null } = req.body;
   try{
-    if (!id || !name || !inputHeaderId || !outputHeaderId || !mappings || !Array.isArray(mappings)) {
+    if (!id || !name || !inputHeaderIds || !outputHeaderIds || !mappings || !Array.isArray(mappings)) {
       return res.status(400).json({ error: 'All fields are required' });
     }
     const crossReference = await CrossReference.findByPk(id);
@@ -216,8 +236,8 @@ const updateCrossReferenceWithMapping = async (req, res) => {
       return res.status(404).json({ error: 'Cross-reference not found' });
     }
     crossReference.name = name;
-    crossReference.inputHeaderId = inputHeaderId;
-    crossReference.outputHeaderId = outputHeaderId;
+    crossReference.inputHeaderIds = inputHeaderIds;
+    crossReference.outputHeaderIds = outputHeaderIds;
     if (dependentReferenceId !== null) {
       crossReference.dependentReferenceId = dependentReferenceId;
     }

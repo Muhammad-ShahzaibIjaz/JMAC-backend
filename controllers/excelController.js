@@ -14,7 +14,8 @@ const fsSync = require("fs").promises;
 const path = require("path");
 const { parseRule } = require("../services/parseService");
 const crypto = require("crypto");
-const { row } = require('mathjs');
+const copySheetData = require("../utils/copySheetData");
+const { desiredOrder } = require("../utils/headerOrderList");
 
 
 async function validateTemplate(templateId) {
@@ -120,8 +121,9 @@ async function saveFileAndData(processedFiles, templateId, mappingtemplateId, tr
   };
 
   let commonHeader;
+  const potentialPrimaryKeys = ['studentid','student id', 'student id alt', 'studentidalt', 'id', 'student_id', 'student_id_alt' , 'unique_id'];
 
-  if (allSheets.length > 1 || processedFiles.length > 1) { 
+  if (allSheets.length > 1 || processedFiles.length > 1) {
     // Find common header (e.g., ID) across all sheets
     const headerCounts = new Map();
     for (const sheet of allSheets) {
@@ -135,13 +137,23 @@ async function saveFileAndData(processedFiles, templateId, mappingtemplateId, tr
       .filter(([_, count]) => count === allSheets.length)
       .map(([header]) => header);
 
-    // Find the first common header with unique values
-    for (const header of commonHeaders) {
-      if (isHeaderUnique(header)) {
-        commonHeader = header;
+    
+    for (const key of potentialPrimaryKeys) {
+      if (commonHeaders.includes(key)) {
+        commonHeader = key;
         break;
-      } else {
-        console.warn(`Common header '${header}' has non-unique values`);
+      }
+    }
+
+    if (!commonHeader) {
+      // Find the first common header with unique values
+      for (const header of commonHeaders) {
+        if (isHeaderUnique(header)) {
+          commonHeader = header;
+          break;
+        } else {
+          console.warn(`Common header '${header}' has non-unique values`);
+        }
       }
     }
 
@@ -150,7 +162,6 @@ async function saveFileAndData(processedFiles, templateId, mappingtemplateId, tr
     }
   } else {
     // Single sheet: Check predefined primary key headers
-    const potentialPrimaryKeys = ['studentid', 'studentidalt', 'id', 'student_id', 'student_id_alt' , 'unique_id'];
     const sheet = allSheets[0];
 
     for (const pk of potentialPrimaryKeys) {
@@ -528,15 +539,11 @@ async function saveFileAndSingleSheetData(processedFiles, templateId, mappingTem
   const sheet = getValidSheet(processedFiles);
   const templateHeaders = await fetchTemplateHeaders(templateId, transaction);
   const mapHeaders = await fetchMapHeaders(mappingTemplateId, transaction);
-
   const resolvedPayload = prepareInsertPayload(sheet, templateHeaders, mapHeaders);
-
-
+  
   const headerMapping = resolveHeaderMapping(sheet.headers, templateHeaders, mapHeaders);
   const rowMap = deduplicateRows(sheet.data);
   validateTextLengths(rowMap, sheet.headers, headerMapping);
-
-
 
   const savedHeaders = await ensureHeadersExist(templateHeaders, templateId, transaction, rowMap, sheet.headers);
   let rowIndex = 1;
@@ -558,7 +565,8 @@ async function saveFileAndSingleSheetData(processedFiles, templateId, mappingTem
 
 
   console.log(`⏳ Inserting ${sheetDataPayload.length} cells from ${rowMap.size} unique rows`);
-  await SheetData.bulkCreate(sheetDataPayload, { transaction });
+  // await SheetData.bulkCreate(sheetDataPayload, { transaction });
+  await copySheetData(sheetDataPayload);
   return { savedHeaders: savedHeaders.map(h => h.header) };
 }
 
@@ -653,16 +661,46 @@ async function uploadAndProcessData(req, res) {
       await saveFileAndSingleSheetData(processedFiles, templateId, mappingtemplateId ,t);
     });
 
-
-    const headers = await fetchExistingHeaders(templateId);
     res.status(201).json({
       templateId,
-      headers,
     });
 
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
+}
+
+function sortHeadersFlexibleMatch(headers) {
+  const normalizedToHeader = new Map();
+  const normalizedOriginals = [];
+
+  for (const h of headers) {
+    const norm = normalize(h.name);
+    normalizedToHeader.set(norm, h);
+    normalizedOriginals.push(norm);
+  }
+
+  const ordered = [];
+  const matchedKeys = new Set();
+
+  for (const name of desiredOrder) {
+    const norm = normalize(name);
+    const match = normalizedToHeader.get(norm);
+    if (match) {
+      ordered.push(match);
+      matchedKeys.add(norm);
+    }
+  }
+
+  const extras = [];
+  for (let i = 0; i < headers.length; i++) {
+    const norm = normalizedOriginals[i];
+    if (!matchedKeys.has(norm)) {
+      extras.push(headers[i]);
+    }
+  }
+
+  return ordered.concat(extras);
 }
 
 
@@ -745,10 +783,11 @@ async function processAndGetHeaderSelectedSheets(req, res) {
       await saveUniqueHeaders(filteredProcessedFiles, templateId, t);
     });
     const headers = await fetchExistingHeaders(templateId);
+    const sortedHeaders = sortHeadersFlexibleMatch(headers);
     res.status(201).json({
       templateId,
-      headers,
-    }); 
+      headers: sortedHeaders,
+    });
 
   } catch(error) {
     res.status(500).json({error: error.message});
@@ -867,6 +906,130 @@ async function processAndGetSheetMapHeaders(req, res) {
   }
 }
 
+async function getTemplateAndMappings(templateId, mappingTemplateId, transaction) {
+  const templateHeaders = await Header.findAll({ where: { templateId }, transaction });
+
+  const headerMap = new Map(); // templateHeader.name → [mappedNames]
+  if (mappingTemplateId) {
+    const mapHeaders = await MapHeader.findAll({ where: { mappingTemplateId }, transaction });
+    for (const th of templateHeaders) {
+      const mapped = mapHeaders
+        .filter(mh => mh.headerId === th.id)
+        .map(mh => mh.name.toLowerCase());
+      headerMap.set(th.name.toLowerCase(), mapped);
+    }
+  }
+
+  return { templateHeaders, headerMap };
+}
+
+
+function detectCommonHeaderAcrossSheets(allSheets, templateHeaders, headerMap) {
+  const normalize = str => str.trim().toLowerCase();
+  const templateHeaderNames = new Set(templateHeaders.map(h => normalize(h.name)));
+
+  const headerCounts = new Map();
+  for (const sheet of allSheets) {
+    const uniqueHeaders = new Set(sheet.headers.map(normalize));
+    for (const h of uniqueHeaders) {
+      headerCounts.set(h, (headerCounts.get(h) || 0) + 1);
+    }
+  }
+
+  const commonHeaders = [...headerCounts.entries()]
+    .filter(([_, count]) => count === allSheets.length)
+    .map(([h]) => h);
+
+  for (const h of commonHeaders) {
+    for (const [templateName, mappedList] of headerMap.entries()) {
+      if (mappedList.includes(h) || templateName === h) {
+        return h; // Found a valid common header mapped to template
+      }
+    }
+  }
+
+  return null; // No valid common header
+}
+
+function processSheetsAndMergeData(allSheets, commonHeader, templateHeaders, headerMap) {
+  const normalize = str => str.trim().toLowerCase();
+  const templateHeaderIds = new Map(templateHeaders.map(h => [normalize(h.name), h.id]));
+
+  const headerMapping = new Map(); // fileHeader → templateHeaderId
+  for (const sheet of allSheets) {
+    for (const fileHeader of sheet.headers) {
+      const lower = normalize(fileHeader);
+      for (const [templateName, mappedList] of headerMap.entries()) {
+        if (mappedList.includes(lower)) {
+          headerMapping.set(lower, templateHeaderIds.get(templateName));
+          break;
+        }
+      }
+      if (!headerMapping.has(lower) && templateHeaderIds.has(lower)) {
+        headerMapping.set(lower, templateHeaderIds.get(lower));
+      }
+    }
+  }
+
+  const dataById = new Map();
+  for (const sheet of allSheets) {
+    const idIndex = sheet.headers.findIndex(h => normalize(h) === commonHeader);
+    if (idIndex === -1) continue;
+
+    for (const row of sheet.data) {
+      const id = row[idIndex];
+      if (id == null) continue;
+
+      if (!dataById.has(id)) dataById.set(id, {});
+      const rowData = dataById.get(id);
+
+      for (let i = 0; i < sheet.headers.length; i++) {
+        const header = sheet.headers[i];
+        const templateId = headerMapping.get(normalize(header));
+        if (templateId) {
+          const value = row[i];
+          if (value != null) rowData[templateId] = value.toString();
+        }
+      }
+    }
+  }
+
+  return dataById;
+}
+
+
+async function saveFileAndDataOptimized(processedFiles, templateId, mappingTemplateId, transaction) {
+  const allSheets = processedFiles.flatMap(file =>
+    file.sheets.map(sheet => ({
+      fileName: file.fileName,
+      sheetName: sheet.sheetName,
+      headers: sheet.headers,
+      data: sheet.data
+    }))
+  );
+  const { templateHeaders, headerMap } = await getTemplateAndMappings(templateId, mappingTemplateId, transaction);
+
+  const commonHeader = detectCommonHeaderAcrossSheets(allSheets, templateHeaders, headerMap);
+  if (!commonHeader) throw new Error("❌ No valid common header found across all sheets");
+  const mergedData = processSheetsAndMergeData(allSheets, commonHeader, templateHeaders, headerMap);
+  // Save to DB
+  const bulkRows = [];
+  for (const [rowIndex, [id, rowData]] of [...mergedData.entries()].entries()) {
+    for (const [headerId, value] of Object.entries(rowData)) {
+      bulkRows.push({
+        id: uuidv4(),
+        rowIndex,
+        value,
+        headerId
+      })
+    }
+  }
+  if (bulkRows.length !== 0) {
+    await SheetData.bulkCreate(bulkRows, { transaction });
+  }
+  return { success: true };
+}
+
 
 
 async function processAndSaveSelectedSheets(req, res) {
@@ -964,13 +1127,11 @@ async function processAndSaveSelectedSheets(req, res) {
     }
 
     await sequelize.transaction(async (t) => {
-      await saveFileAndData(filteredProcessedFiles, templateId, mappingtemplateId ,t);
+      await saveFileAndDataOptimized(filteredProcessedFiles, templateId, mappingtemplateId ,t);
     });
 
-    const headers = await fetchExistingHeaders(templateId);
     res.status(201).json({
       templateId,
-      headers,
     }); 
 
   } catch(error) {
@@ -991,7 +1152,6 @@ async function getFileSheets(req, res) {
     if (!templateId) {
       return res.status(400).json({ error: 'templateId is required' });
     }
-
     const fileNames = req.files.files.map(file => file.filename);
     const filesNames = fileNames.map(fileName => ({
       path: path.join('uploads', templateId, fileName),

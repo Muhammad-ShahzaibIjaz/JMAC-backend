@@ -4,6 +4,7 @@ const dataController = require('../controllers/dataController');
 
 router.delete('/sheet-data', dataController.deleteSheetData);
 router.get('/headers-with-validated-data', dataController.getHeadersWithValidatedData);
+router.get('/headers-with-search-data', dataController.getFilteredHeaderData);
 router.get('/headers-with-duplicate-data', dataController.getHeadersWithDuplicateData);
 router.get('/pag-sheet-data', dataController.getValidatedPageData);
 router.get('/export-data', dataController.getTemplateDataWithExcel);
@@ -18,5 +19,6 @@ router.put('/score-conversion', dataController.scoreConversion);
 router.put('/cip-conversion', dataController.cipConversion);
 router.post('/apply-quality-rules', dataController.evaluateRulesAndReturnFilteredData);
 router.delete('/delete-row/:templateId/:rowIndex', dataController.deleteRow);
+router.put('/award-calculation', dataController.calculateAwardInfo);
 
 module.exports = router;

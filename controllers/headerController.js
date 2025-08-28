@@ -483,7 +483,7 @@ async function getHeadersWithMapHeaders(req, res) {
 
     const headers = await Header.findAll({
       where: { templateId },
-      attributes: ['id', 'name'],
+      attributes: ['id', 'name', 'criticalityLevel'],
       include: [
         {
           model: MapHeader,

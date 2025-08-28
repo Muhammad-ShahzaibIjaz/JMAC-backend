@@ -21,21 +21,13 @@ const CrossReference = sequelize.define(
             key: 'id',
         },
     },
-    inputHeaderId: {
-        type: DataTypes.UUID,
-          allowNull: false,
-          references: {
-            model: 'Header',
-            key: 'id',
-        },
+    inputHeaderIds: {
+      type: DataTypes.ARRAY(DataTypes.UUID),
+      allowNull: false,
     },
-    outputHeaderId: {
-        type: DataTypes.UUID,
-          allowNull: false,
-          references: {
-            model: 'Header',
-            key: 'id',
-        },
+    outputHeaderIds: {
+      type: DataTypes.ARRAY(DataTypes.UUID),
+      allowNull: false,
     },
     dependentReferenceId: {
         type: DataTypes.UUID,

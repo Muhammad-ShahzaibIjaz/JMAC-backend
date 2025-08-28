@@ -50,19 +50,19 @@ function processDataRows(jsonData, headerOrientation='horizontal', headerPositio
 
   if (headerOrientation === 'horizontal') {
     // Handle horizontal headers (normal row)
-    const headerRowIndex = headerPosition !== null ? headerPosition : findFirstNonEmptyRow(jsonData);
+    const baseHeaderRowIndex = headerPosition !== null ? Number(headerPosition) : findFirstNonEmptyRow(jsonData);
+
+    const headerRowIndex = baseHeaderRowIndex + (isRowSkipped ? 1 : 0);
     
     if (headerRowIndex === -1 || headerRowIndex >= jsonData.length || !Array.isArray(jsonData[headerRowIndex])) {
       return { headers: [], data: [] };
     }
 
-    const startRowIndex = isRowSkipped ? headerRowIndex + 1 : headerRowIndex;
-
-    headers = jsonData[startRowIndex].filter(cell => cell !== null && cell !== undefined);
+    headers = jsonData[headerRowIndex].filter(cell => cell !== null && cell !== undefined);
     
     // Process data rows
     let consecutiveEmptyRows = 0;
-    for (let i = startRowIndex + 1; i < jsonData.length; i++) {
+    for (let i = headerRowIndex + 1; i < jsonData.length; i++) {
       const row = jsonData[i];
       if (!Array.isArray(row) || isRowEmpty(row)) {
         consecutiveEmptyRows++;
@@ -74,28 +74,31 @@ function processDataRows(jsonData, headerOrientation='horizontal', headerPositio
     }
   } else {
     // Handle vertical headers (column)
-    if (!jsonData[0] || !Array.isArray(jsonData[0])) {
-      return { headers: [], data: [] };
-    }
-    // Handle vertical headers (column)
-    const headerColIndex = headerPosition !== null ? headerPosition : (() => {
-      let firstNonEmptyCol = 0;
-      while (firstNonEmptyCol < jsonData[0].length && 
-             jsonData.every(row => isRowEmpty([row[firstNonEmptyCol]]))) {
-        firstNonEmptyCol++;
+    const baseHeaderColIndex = headerPosition !== null ? Number(headerPosition) : (() => {
+      let col = 0;
+      while (
+        col < jsonData[0].length &&
+        jsonData.every(row => isRowEmpty([row[col]]))
+      ) {
+        col++;
       }
-      return firstNonEmptyCol < jsonData[0].length ? firstNonEmptyCol : -1;
+      return col < jsonData[0].length ? col : -1;
     })();
+
+    const headerColIndex = baseHeaderColIndex + (isRowSkipped ? 1 : 0);
 
     if (headerColIndex === -1 || headerColIndex >= jsonData[0].length) {
       return { headers: [], data: [] };
     }
  
-    headers = jsonData.slice(isRowSkipped ? 1 : 0).map(row => row[headerColIndex]).filter(h => h !== null && h !== undefined);
+    // Extract headers from the effective column
+    headers = jsonData
+      .map(row => Array.isArray(row) ? row[headerColIndex] : null)
+      .filter(h => h != null);
     
     // Process data columns
-    for (let i = headerColIndex + 1; i < jsonData[0].length; i++) {
-      const column = jsonData.map(row => row[i]);
+    for (let col = headerColIndex + 1; col < jsonData[0].length; col++) {
+      const column = jsonData.map(row => Array.isArray(row) ? row[col] : null);
       if (!isRowEmpty(column)) {
         data.push(column);
       }
@@ -187,7 +190,6 @@ async function headerProcessor(files, headerOrientation='horizontal', headerPosi
           return null;
         }
         const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: null, raw: false});
-
         const { headers, data } = processDataRows(jsonData, headerOrientation, headerPosition, isRowSkipped);
         return {
           sheetName,

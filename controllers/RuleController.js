@@ -106,7 +106,8 @@ const getRuleById = async (req, res) => {
     const { id } = req.query;
 
     const rule = await Rule.findByPk(id, {
-      attributes: ['id', 'name', 'conditions', 'assignments', 'headers', 'templateId']
+      attributes: ['id', 'name', 'conditions', 'assignments', 'headers', 'templateId'],
+      raw: true
     });
     if (!rule) {
       return res.status(404).json({ error: "Rule not found" });

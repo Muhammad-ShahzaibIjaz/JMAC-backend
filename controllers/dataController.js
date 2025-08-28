@@ -12,7 +12,7 @@ const math = require('mathjs');
 const { OperationLog, SheetDataSnapshot } = require('../models');
 const { convertScore } = require('../services/conversion');
 const { getCipTitle } = require('../services/cipService');
-const desiredOrder = require('../utils/headerOrderList').desiredOrder;
+const { desiredOrder, requiredHeadersName, awardTypePatterns } = require('../utils/headerOrderList');
 
 async function deleteSheetData(req, res) {
   try {
@@ -360,6 +360,144 @@ async function getHeadersWithValidatedData(req, res) {
     });
   } catch (error) {
     console.error('Error retrieving headers with validated data:', error.message, error.stack);
+    res.status(500).json({ error: 'Failed to retrieve data' });
+  }
+}
+
+async function getFilteredHeaderData(req, res) {
+  try {
+    const { templateId, selectedHeader, dataSearchQuery, currentPage, pageSize } = req.query;
+
+    // 🔒 Basic Validation
+    if (!templateId || !selectedHeader || !dataSearchQuery) {
+      return res.status(400).json({ error: 'templateId, selectedHeader, and dataSearchQuery are required' });
+    }
+
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(templateId)) {
+      return res.status(400).json({ error: 'templateId must be a valid UUID' });
+    }
+
+    const page = parseInt(currentPage);
+    const size = parseInt(pageSize);
+    if (isNaN(page) || page < 1 || isNaN(size) || size < 1) {
+      return res.status(400).json({ error: 'Invalid pagination values' });
+    }
+
+    const offset = (page - 1) * size;
+
+    // ⚡ Indexed Header Lookup
+    const headers = await Header.findAll({
+      where: { templateId },
+      attributes: ['id', 'name', 'criticalityLevel', 'columnType'],
+      order: [['createdAt', 'ASC']],
+      raw: true,
+    });
+
+    if (!headers.length) {
+      return res.status(404).json({ error: `No headers found for templateId ${templateId}` });
+    }
+
+    const sortedHeaders = sortHeadersFlexibleMatch(headers);
+    const headerMap = new Map(sortedHeaders.map(h => [h.id, h]));
+
+    // 🔍 Efficient RowIndex Fetch with fuzzy match
+    const matchedRows = await SheetData.findAll({
+      where: {
+        headerId: selectedHeader,
+        value: { [Op.iLike]: `%${dataSearchQuery}%` },
+      },
+      attributes: ['rowIndex'],
+      group: ['rowIndex'],
+      order: [['rowIndex', 'ASC']],
+      offset,
+      limit: size,
+      raw: true,
+    });
+
+    const rowIndexList = matchedRows.map(r => r.rowIndex);
+    if (!rowIndexList.length) {
+      return res.status(404).json({ error: 'No matching data found' });
+    }
+
+    // 🎯 Fetch paginated data for matched rows
+    const paginatedData = await SheetData.findAll({
+      include: [{ model: Header, where: { templateId }, attributes: [] }],
+      where: {
+        rowIndex: { [Op.in]: rowIndexList },
+      },
+      attributes: ['id', 'rowIndex', 'value', 'headerId'],
+      order: [['rowIndex', 'ASC'], ['headerId', 'ASC']],
+      raw: true,
+    });
+
+    // 📊 Total matching rows count
+    const totalRows = await SheetData.count({
+      where: {
+        headerId: selectedHeader,
+        value: { [Op.iLike]: `%${dataSearchQuery}%` },
+      },
+      distinct: true,
+      col: 'rowIndex',
+    });
+
+    const totalPages = Math.ceil(totalRows / size);
+
+    // ✅ Validate and format
+    const paginatedDataByHeader = {};
+    const errorRows = new Set();
+    const errorPages = new Set();
+
+    for (const header of sortedHeaders) {
+      paginatedDataByHeader[header.id] = [];
+    }
+
+    for (const item of paginatedData) {
+      const header = headerMap.get(item.headerId);
+
+      if (!header) continue;
+
+      const { value, valid } = validateAndConvertValue(
+        item.value,
+        header.columnType,
+        header.criticalityLevel
+      );
+
+      paginatedDataByHeader[header.id].push({
+        id: item.id,
+        rowIndex: item.rowIndex,
+        value,
+        valid,
+      });
+
+      if (!valid) {
+        errorRows.add(item.rowIndex);
+        errorPages.add(Math.floor(item.rowIndex / size) + 1);
+      }
+    }
+
+    const responseHeaders = sortedHeaders.map(header => ({
+      id: header.id,
+      name: header.name,
+      criticalityLevel: header.criticalityLevel,
+      columnType: header.columnType,
+      data: paginatedDataByHeader[header.id],
+    }));
+
+
+    // 🧠 Final Response
+    res.status(200).json({
+      headers: responseHeaders,
+      totalErrorRows: errorRows.size,
+      errorPages: Array.from(errorPages).sort((a, b) => a - b),
+      pagination: {
+        currentPage: page,
+        pageSize: size,
+        totalRows,
+        totalPages,
+      },
+    });
+  } catch (error) {
+    console.error('Error retrieving filtered header data:', error.message, error.stack);
     res.status(500).json({ error: 'Failed to retrieve data' });
   }
 }
@@ -2453,47 +2591,71 @@ async function evaluateRulesAndReturnFilteredData(req, res) {
 async function applyReferenceOnData(inputHeaderId, outputHeaderId, mappings) {
   try {
     const allData = await SheetData.findAll({
-      where: {
-        headerId: { [Op.in]: [inputHeaderId, outputHeaderId] },
-      },
+      where: { headerId: { [Op.in]: [inputHeaderId, outputHeaderId] } },
+      raw: true,
     });
 
-
-    const grouped = {};
+    const grouped = new Map();
     for (const row of allData) {
-      if (!grouped[row.rowIndex]) grouped[row.rowIndex] = {};
-      grouped[row.rowIndex][row.headerId] = row;
+      if (!grouped.has(row.rowIndex)) grouped.set(row.rowIndex, {});
+      grouped.get(row.rowIndex)[row.headerId] = row;
     }
 
-    const toRegex = (pattern) => {
-      const escaped = pattern.replace(/[-[\]/{}()+?.\\^$|]/g, '\\$&');
-      const regexStr = escaped.replace(/\*/g, '.*').replace(/\?/g, '.');
-      return new RegExp(`^${regexStr}$`, 'i');
-    };
+    const compiledMappings = mappings.map(({ inputValue, outputValue }) => ({
+      regex: new RegExp(`^${inputValue.replace(/[-[\]/{}()+?.\\^$|]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.')}$`, 'i'),
+      outputValue,
+    }));
 
-    for (const { inputValue, outputValue } of mappings) {
-      const regex = toRegex(inputValue);
-      for (const rowIndex in grouped) {
-        const inputRow = grouped[rowIndex][inputHeaderId];
-        const outputRow = grouped[rowIndex][outputHeaderId];
+    const updates = [];
+    const inserts = [];
+    const unmappedValues = [];
 
-        if (inputRow?.value && regex.test(inputRow.value.trim())) {
+    for (const [rowIndex, rowGroup] of grouped.entries()) {
+      const inputRow = rowGroup[inputHeaderId];
+      const outputRow = rowGroup[outputHeaderId];
+
+      if (!inputRow?.value) continue;
+
+      let matched = false;
+      for (const { regex, outputValue } of compiledMappings) {
+        if (regex.test(inputRow.value.trim())) {
+          matched = true;
           if (outputRow) {
-            outputRow.value = outputValue;
-            await outputRow.save();
+            updates.push({ id: outputRow.id, value: outputValue });
           } else {
-            await SheetData.create({
-              rowIndex: parseInt(rowIndex),
+            inserts.push({
+              rowIndex: Number(rowIndex),
               headerId: outputHeaderId,
               value: outputValue,
             });
           }
+          break;
+        }
+        if (inputRow.value === outputValue) {
+          matched = true;
         }
       }
+
+      if (!matched) {
+        unmappedValues.push(inputRow.value);
+      }
     }
+
+    if (updates.length > 0) {
+      await Promise.all(updates.map(({ id, value }) =>
+        SheetData.update({ value }, { where: { id } })
+      ));
+    }
+
+    if (inserts.length > 0) {
+      await SheetData.bulkCreate(inserts);
+    }
+
+    return unmappedValues;
+
   } catch (err) {
     console.error('Error in applyReferenceOnData:', err);
-    throw err; // Let the parent handler catch it
+    throw err;
   }
 }
 
@@ -2566,6 +2728,129 @@ async function deleteRow(req, res) {
   }
 }
 
+
+async function calculateAwards(templateId, acceptedStatuses, transaction) {
+  const headers = await Header.findAll({
+    where: { templateId, name: requiredHeadersName },
+    transaction
+  });
+
+  const headerMap = Object.fromEntries(headers.map(h => [h.name, h.id]));
+  const requiredHeaderIds = headers.map(h => h.id);
+  const awardHeaderIds = Object.fromEntries(
+    Object.keys(awardTypePatterns).map(name => [name, headerMap[name]])
+  );
+
+  const sheetData = await SheetData.findAll({
+    where: { headerId: requiredHeaderIds },
+    attributes: ['rowIndex', 'headerId', 'value'],
+    raw: true,
+    transaction
+  });
+
+  if (sheetData.length === 0) {
+    await transaction.rollback();
+    return;
+  }
+
+  const sheetDataMap = {};
+  for (const cell of sheetData) {
+    sheetDataMap[`${cell.rowIndex}_${cell.headerId}`] = cell.value;
+  }
+
+  const rowIndexes = [...new Set(sheetData.map(d => d.rowIndex))];
+  const acceptedStatusSet = new Set(acceptedStatuses.map(s => s.toLowerCase()));
+
+  const operationLog = await OperationLog.create({
+    templateId,
+    operationType: 'CALCULATION',
+    transaction
+  });
+
+  const updates = [];
+  const snapshots = [];
+
+  for (const rowIndex of rowIndexes) {
+    const rowData = {};
+    for (const headerId of requiredHeaderIds) {
+      rowData[headerId] = sheetDataMap[`${rowIndex}_${headerId}`];
+    }
+
+    const awardSums = Object.fromEntries(
+      Object.keys(awardTypePatterns).map(name => [name, 0])
+    );
+
+    for (let i = 1; i <= 20; i++) {
+      const cd = rowData[headerMap[`Awd_Cd${i}`]];
+      const amtRaw = rowData[headerMap[`Awd_Amt${i}`]];
+      const status = rowData[headerMap[`Awd_Status${i}`]];
+
+      if (!cd || !acceptedStatusSet.has(status?.toLowerCase())) continue;
+
+      const amt = parseFloat(amtRaw);
+      if (isNaN(amt)) continue;
+
+      for (const [awardName, pattern] of Object.entries(awardTypePatterns)) {
+        if (pattern.test(cd)) {
+          awardSums[awardName] += amt;
+        }
+      }
+    }
+
+    for (const [awardName, total] of Object.entries(awardSums)) {
+      const headerId = awardHeaderIds[awardName];
+      if (!headerId) continue;
+
+      updates.push({
+        rowIndex: parseInt(rowIndex),
+        headerId,
+        value: total.toString()
+      });
+
+      const originalValue = sheetDataMap[`${rowIndex}_${headerId}`] ?? null;
+      snapshots.push({
+        operationLogId: operationLog.id,
+        headerId,
+        rowIndex: parseInt(rowIndex),
+        originalValue,
+        newValue: total.toString(),
+        changeType: originalValue ? 'UPDATE' : 'INSERT'
+      });
+    }
+  }
+
+  await SheetData.bulkCreate(updates, {
+    updateOnDuplicate: ['value'],
+    transaction
+  });
+
+  await SheetDataSnapshot.bulkCreate(snapshots, {
+    validate: false,
+    transaction
+  });
+
+  await transaction.commit();
+}
+
+
+async function calculateAwardInfo(req, res) {
+  const transaction = await sequelize.transaction();
+  try{
+    const { templateId, acceptedStatuses } = req.body;
+    if (!templateId || !Array.isArray(acceptedStatuses) || acceptedStatuses.length === 0) {
+      await transaction.rollback();
+      return res.status(400).json({ message: 'Invalid input. templateId and acceptedStatuses are required.' });
+    }
+    await calculateAwards(templateId, acceptedStatuses, transaction);
+    res.status(200).json({ message: 'Award information calculated successfully.' });
+  } catch(error){
+    await transaction.rollback();
+    console.error('Error calculating award info:', error);
+    return res.status(500).json({ message: 'Internal server error.', details: error.message });
+  }
+}
+
+
 module.exports = {
   deleteSheetData, 
   getMatrixPop, 
@@ -2586,5 +2871,7 @@ module.exports = {
   applyReferenceOnData,
   bulkUpdates,
   getHeadersWithDuplicateData,
-  deleteRow
+  deleteRow,
+  getFilteredHeaderData,
+  calculateAwardInfo
 };

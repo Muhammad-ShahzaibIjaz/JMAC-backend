@@ -53,8 +53,6 @@ SheetDataSnapshot.belongsTo(OperationLog, { foreignKey: 'operationLogId' });
 CrossReference.hasMany(CrossReferenceMapping, { foreignKey: 'crossReferenceId', onDelete: 'CASCADE', as: 'mappings' });
 CrossReferenceMapping.belongsTo(CrossReference, { foreignKey: 'crossReferenceId' });
 
-CrossReference.belongsTo(Header, { foreignKey: 'inputHeaderId', as: 'inputHeader' });
-CrossReference.belongsTo(Header, { foreignKey: 'outputHeaderId', as: 'outputHeader' });
 
 
 module.exports = {

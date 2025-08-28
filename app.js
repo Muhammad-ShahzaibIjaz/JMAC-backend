@@ -10,7 +10,7 @@ const mapheaderRoutes = require("./routes/mapheaderRoutes");
 const maptemplateRoutes = require("./routes/maptemplateRoutes");
 const ruleRoutes = require("./routes/ruleRoutes");
 const revertRoutes = require("./routes/revertRoutes");
-const visualDataRoutes = require("./routes/visualDataRoutes");
+const visualDataRoutes = require("./routes/populationRoutes");
 const referencesRoutes = require("./routes/crossReferenceRoutes");
 
 app.use(express.urlencoded({ extended: true, limit: '100mb' }));

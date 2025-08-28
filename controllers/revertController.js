@@ -11,6 +11,7 @@ async function undoUpdatedRow(operationLogId) {
     try{
         const snapshots = await SheetDataSnapshot.findAll({
             where: { operationLogId },
+            raw: true,
             transaction,
         });
 
