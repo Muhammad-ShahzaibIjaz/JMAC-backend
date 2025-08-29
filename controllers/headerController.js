@@ -1,4 +1,5 @@
-const { Header, Template, SheetData, SheetDataSnapshot, OperationLog } = require('../models');
+const { Header, SheetData, SheetDataSnapshot, OperationLog } = require('../models');
+const Template = require('../models/Template');
 const MapHeader = require('../models/MapHeader');
 const MappingTemplate = require('../models/MappingTemplate');
 const sequelize = require('../config/database');
