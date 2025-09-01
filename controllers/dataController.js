@@ -329,6 +329,7 @@ async function getHeadersWithValidatedData(req, res) {
       paginatedDataByHeader[header.id].push({
         id: data.id,
         rowIndex: data.rowIndex,
+        originalRowIndex: data.rowIndex,
         value,
         valid,
       });

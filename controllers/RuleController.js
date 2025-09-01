@@ -126,13 +126,15 @@ const getBulkRulesByTemplateId = async (req, res) => {
     const { id } = req.query;
     const rules = await CalculationRule.findAll({
       where: { templateId: id, isGlobal: true },
-      attributes: ['id', 'name'],
+      attributes: ['id', 'name', 'header', 'assignments'],
       order: [['createdAt', 'DESC']]
     });
 
     const transformedRules = rules.map((rule) => ({
       id: rule.id,
       name: rule.name,
+      headerName: rule.header,
+      assignment: rule.assignments
     }));
     return res.status(200).json(transformedRules);
   } catch (error) {
