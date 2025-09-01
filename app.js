@@ -4,7 +4,7 @@ const app = express();
 
 
 const corsOptions = {
-  origin: ['http://localhost:3000', 'https://mac-insight.vercel.app', 'https://j-mac.vercel.app', 'https://mac-insight-dev.vercel.app'],
+  origin: ['http://localhost:3000', 'https://mac-insight.vercel.app', 'https://j-mac.vercel.app', 'https://mac-insight-dev.vercel.app', 'https://macinsight-dev.vercel.app'],
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   credentials: true
 };
