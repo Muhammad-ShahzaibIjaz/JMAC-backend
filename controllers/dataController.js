@@ -13,6 +13,7 @@ const { OperationLog, SheetDataSnapshot } = require('../models');
 const { convertScore } = require('../services/conversion');
 const { getCipTitle } = require('../services/cipService');
 const { desiredOrder, requiredHeadersName, awardTypePatterns } = require('../utils/headerOrderList');
+const { buildZipCountyMap } = require('../services/countyService');
 
 async function deleteSheetData(req, res) {
   try {
@@ -92,7 +93,7 @@ function validateAndConvertValue(value, columnType, criticalityLevel) {
         const month = String(date.getMonth() + 1).padStart(2, '0');
         const year = date.getFullYear();
         return {
-          value: `${day}-${month}-${year}`,
+          value: `${month}-${day}-${year}`,
           valid: true,
         };
       }
@@ -2404,6 +2405,137 @@ const cipConversion = async (req, res) => {
 };
 
 
+const zipCountyConversion = async (req, res) => {
+  const transaction = await sequelize.transaction();
+  try {
+    const { templateId, sourceHeader, targetHeader } = req.body;
+    if (!templateId || !sourceHeader || !targetHeader) {
+      await transaction.rollback();
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    const operationLog = await OperationLog.create({
+      id: uuidv4(),
+      templateId,
+      operationType: 'CONVERSION'
+    }, { transaction });
+
+    const sourceHeaderID = await Header.findOne({
+      where: { templateId, name: sourceHeader },
+      transaction
+    });
+
+    const targetHeaderID = await Header.findOne({
+      where: { templateId, name: targetHeader },
+      transaction
+    });
+
+    if (!sourceHeaderID || !targetHeaderID) {
+      await transaction.rollback();
+      return res.status(404).json({ error: 'One or more headers not found' });
+    }
+
+    const data = await SheetData.findAll({
+      where: {
+        headerId: {
+          [Op.in]: [sourceHeaderID.id, targetHeaderID.id],
+        }
+      },
+      transaction
+    });
+
+    const rows = {};
+    const originalValues = new Map();
+    const zipSet = new Set();
+
+    data.forEach((entry) => {
+      const rowIndex = entry.rowIndex;
+      if (!rows[rowIndex]) rows[rowIndex] = {};
+
+      if (entry.headerId === sourceHeaderID.id) {
+        const rawZip = entry.value?.trim();
+        if (rawZip && rawZip.length >= 5) {
+          const normalizedZip = rawZip.slice(0, 5);
+          rows[rowIndex].sourceValue = normalizedZip;
+          zipSet.add(normalizedZip);
+        }
+      } else if (entry.headerId === targetHeaderID.id) {
+        rows[rowIndex].targetValue = entry.value;
+        originalValues.set(rowIndex, entry.value);
+      }
+    });
+
+    const zipCountyMap = await buildZipCountyMap(zipSet);
+
+    const updates = [];
+    const snapshots = [];
+    const skippedRows = [];
+    const errors = [];
+
+    for (const rowIndex in rows) {
+      const row = rows[rowIndex];
+      const zip = row.sourceValue;
+
+      if (!zip) {
+        skippedRows.push(parseInt(rowIndex));
+        continue;
+      }
+
+      const county = zipCountyMap.get(zip);
+      if (!county) {
+        errors.push({ rowIndex: parseInt(rowIndex), error: 'County not found for ZIP' });
+        continue;
+      }
+
+      const originalTargetValue = row.targetValue || null;
+
+      if (county !== originalTargetValue) {
+        updates.push({
+          id: uuidv4(),
+          headerId: targetHeaderID.id,
+          rowIndex: parseInt(rowIndex),
+          value: county
+        });
+
+        snapshots.push({
+          id: uuidv4(),
+          operationLogId: operationLog.id,
+          headerId: targetHeaderID.id,
+          rowIndex: parseInt(rowIndex),
+          originalValue: originalTargetValue,
+          newValue: county,
+          changeType: originalTargetValue ? 'UPDATE' : 'INSERT'
+        });
+      }
+    }
+
+    if (updates.length > 0) {
+      await SheetDataSnapshot.bulkCreate(snapshots, { transaction });
+      await SheetData.bulkCreate(updates, {
+        updateOnDuplicate: ['value'],
+        transaction
+      });
+    }
+
+    await transaction.commit();
+    return res.status(200).json({
+      message: 'ZIP to County Conversion Done',
+      updated: updates.length,
+      skipped: skippedRows.length,
+      errors
+    });
+
+  } catch (error) {
+    await transaction.rollback();
+    console.error('ZIP to County conversion error:', error);
+    return res.status(500).json({
+      error: 'Failed to Convert ZIP to County',
+      details: error.message
+    });
+  }
+};
+
+
 async function evaluateRulesAndReturnFilteredData(req, res) {
   try {
     // Validate request
@@ -2874,5 +3006,6 @@ module.exports = {
   getHeadersWithDuplicateData,
   deleteRow,
   getFilteredHeaderData,
-  calculateAwardInfo
+  calculateAwardInfo,
+  zipCountyConversion
 };

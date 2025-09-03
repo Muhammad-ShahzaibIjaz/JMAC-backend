@@ -670,6 +670,10 @@ async function uploadAndProcessData(req, res) {
   }
 }
 
+function normalize(str) {
+  return str.toLowerCase().replace(/[_\s]/g, '');
+}
+
 function sortHeadersFlexibleMatch(headers) {
   const normalizedToHeader = new Map();
   const normalizedOriginals = [];
