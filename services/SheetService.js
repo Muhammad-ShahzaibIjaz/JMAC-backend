@@ -24,13 +24,21 @@ async function generateExcelFile({ headers, maxRowIndex, totalErrorRows, errorRo
   for (let rowIndex = 1; rowIndex <= maxRowIndex; rowIndex++) {
     const rowData = headers.map(header => {
       const cellData = rowBuckets.get(rowIndex)?.get(header.id);
-      return cellData ? cellData.value || '' : '';
+      let value = cellData ? cellData.value || '' : '';
+      if (header.columnType === 'Date' && value) {
+        return new Date(value);
+      }
+      return value;
     });
     const row = sheet1.addRow(rowData);
     headers.forEach((header, colIndex) => {
       const cellData = rowBuckets.get(rowIndex)?.get(header.id);
       if (cellData && cellData.valid === false) {
         const cell = row.getCell(colIndex + 1);
+        if (header.columnType === 'Date') {
+          cell.value = new Date(cellData.value);
+          cell.numFmt = 'mm-dd-yyyy';
+        }
         cell.fill = {
           type: 'pattern',
           pattern: 'solid',
