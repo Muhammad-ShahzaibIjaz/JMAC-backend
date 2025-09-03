@@ -15,6 +15,10 @@ const SheetDataSnapshot = sequelize.define('SheetDataSnapshot', {
     type: DataTypes.UUID,
     allowNull: false,
   },
+  sheetId: {
+    type: DataTypes.UUID,
+    allowNull: false,
+  },
   rowIndex: {
     type: DataTypes.INTEGER,
     allowNull: false,

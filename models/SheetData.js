@@ -21,6 +21,10 @@ const SheetData = sequelize.define(
       type: DataTypes.UUID,
       allowNull: false,
     },
+    sheetId: {
+      type: DataTypes.UUID,
+      allowNull: false,
+    },
   },
   {
     tableName: 'SheetData',

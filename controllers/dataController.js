@@ -1177,6 +1177,7 @@ async function updateData(updates, templateId) {
           id: uuidv4(),
           operationLogId: operationLog.id,
           headerId: datum.headerId,
+          sheetId: currentRecord.sheetId,
           rowIndex: update.rowIndex,
           originalValue: currentRecord.value,
           newValue: datum.value,
@@ -1231,7 +1232,7 @@ async function updateRows(req, res) {
 }
 
 
-async function bulkUpdates(headerId, value, templateId) {
+async function bulkUpdates(headerId, value, templateId, sheetId) {
   const transaction = await sequelize.transaction();
   const snapshots = [];
   try {
@@ -1266,6 +1267,7 @@ async function bulkUpdates(headerId, value, templateId) {
         id: uuidv4(),
         operationLogId: operationLog.id,
         headerId,
+        sheetId,
         rowIndex: record.rowIndex,
         originalValue: record.value,
         newValue: value
@@ -1291,6 +1293,7 @@ async function bulkUpdates(headerId, value, templateId) {
           id: uuidv4(),
           operationLogId: operationLog.id,
           headerId,
+          sheetId,
           rowIndex: i,
           originalValue: null,
           newValue: value
@@ -1318,10 +1321,9 @@ async function bulkUpdates(headerId, value, templateId) {
 
 async function bulkUpdateData(req, res) {
   try{
-    const {headerId, value, templateId} = req.body;
+    const {headerId, value, templateId, sheetId} = req.body;
 
-    const result = await bulkUpdates(headerId, value, templateId);
-    
+    const result = await bulkUpdates(headerId, value, templateId, sheetId);
     res.status(200).json({ message: "OK" });
   } catch(error) {
     res.status(500).json({ error: error.message });
@@ -1329,7 +1331,7 @@ async function bulkUpdateData(req, res) {
 }
 
 
-async function addPaddingInData(headerId, templateId, padValue, padLength) {
+async function addPaddingInData(headerId, templateId, sheetId, padValue, padLength) {
   const transaction = await sequelize.transaction();
   let affectedRows = 0;
   const snapshots = [];
@@ -1366,6 +1368,7 @@ async function addPaddingInData(headerId, templateId, padValue, padLength) {
           id: uuidv4(),
           operationLogId: operationLog.id,
           headerId,
+          sheetId,
           rowIndex: record.rowIndex,
           originalValue: rawValue,
           newValue: ""
@@ -1383,6 +1386,7 @@ async function addPaddingInData(headerId, templateId, padValue, padLength) {
         id: uuidv4(),
         operationLogId: operationLog.id,
         headerId,
+        sheetId,
         rowIndex: record.rowIndex,
         originalValue,
         newValue: paddedValue
@@ -1416,13 +1420,13 @@ async function addPaddingInData(headerId, templateId, padValue, padLength) {
 
 async function addPadding(req,res) {
   try{
-    const {headerId, templateId, padValue, padLength} = req.body;
+    const {headerId, templateId, sheetId, padValue, padLength} = req.body;
 
-    if (!headerId || !templateId) {
-      return res.status(400).json({ message: "headerId and templateId is required" });
+    if (!headerId || !templateId || !sheetId) {
+      return res.status(400).json({ message: "headerId, templateId, and sheetId are required" });
     }
 
-    const result = await addPaddingInData(headerId, templateId, padValue, padLength);
+    const result = await addPaddingInData(headerId, templateId, sheetId, padValue, padLength);
 
     res.status(200).json({ message: "OK" });
   } catch(error) {
@@ -1569,7 +1573,7 @@ function createStringComparisonEvaluator(math) {
 mathInstance.evaluate = createStringComparisonEvaluator(mathInstance);
 
 async function applyCalculations(req, res) {
-  const { templateId, conditions, assignments, headers } = req.body;
+  const { templateId, sheetId, conditions, assignments, headers } = req.body;
   const transaction = await sequelize.transaction();
   let snapshots = [];
   try {
@@ -1732,6 +1736,7 @@ async function applyCalculations(req, res) {
                   id: uuidv4(),
                   operationLogId: operationLog.id,
                   headerId: headerMap[assignment.header].id,
+                  sheetId,
                   rowIndex: parseInt(rowIndex),
                   originalValue: String(originalValue),
                   newValue: String(targetValue)
@@ -1877,10 +1882,10 @@ const processBatch = async (batch, maxRetries = 3) => {
 const findZipCodes = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
-    const { templateId, streetAddress, city, state, zipcode } = req.body;
+    const { templateId, sheetId, streetAddress, city, state, zipcode } = req.body;
     
     // Validate request body
-    if (!templateId || !streetAddress || !city || !state || !zipcode) {
+    if (!templateId || !sheetId || !streetAddress || !city || !state || !zipcode) {
       await transaction.rollback();
       return res.status(400).json({ error: 'Missing required fields' });
     }
@@ -1989,6 +1994,7 @@ const findZipCodes = async (req, res) => {
               id: uuidv4(),
               operationLogId: operationLog.id,
               headerId: zipcodeHeader.id,
+              sheetId,
               rowIndex: result.rowIndex,
               originalValue: originalZipCode,
               newValue: newZipCode,
@@ -2037,8 +2043,8 @@ const findZipCodes = async (req, res) => {
 const scoreConversion = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
-    const { templateId, subject, testType, sourceHeader, sourceCompHeader, targetHeader } = req.body;
-    if (!templateId || !subject || !testType || !sourceHeader || !targetHeader) {
+    const { templateId, sheetId, subject, testType, sourceHeader, sourceCompHeader, targetHeader } = req.body;
+    if (!templateId || !subject || !testType || !sourceHeader || !targetHeader || !sheetId) {
       await transaction.rollback();
       return res.status(400).json({ error: 'Missing required fields' });
     }
@@ -2197,6 +2203,7 @@ const scoreConversion = async (req, res) => {
               id: uuidv4(),
               operationLogId: operationLog.id,
               headerId: targetHeaderID.id,
+              sheetId,
               rowIndex: row.rowIndex,
               originalValue: originalTargetValue,
               newValue: newTargetValue,
@@ -2248,8 +2255,8 @@ const scoreConversion = async (req, res) => {
 const cipConversion = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
-    const { templateId, sourceHeader, targetHeader } = req.body;
-    if (!templateId || !sourceHeader || !targetHeader) {
+    const { templateId, sheetId, sourceHeader, targetHeader } = req.body;
+    if (!templateId || !sheetId || !sourceHeader || !targetHeader) {
       await transaction.rollback();
       return res.status(400).json({ error: 'Missing required fields' });
     }
@@ -2357,6 +2364,7 @@ const cipConversion = async (req, res) => {
               id: uuidv4(),
               operationLogId: operationLog.id,
               headerId: targetHeaderID.id,
+              sheetId,
               rowIndex: row.rowIndex,
               originalValue: originalTargetValue,
               newValue: newTargetValue,
@@ -2661,7 +2669,7 @@ async function applyReferenceOnData(inputHeaderId, outputHeaderId, mappings) {
 }
 
 async function deleteRow(req, res) {
-  const { templateId, rowIndex } = req.params;
+  const { templateId, sheetId, rowIndex } = req.params;
   const transaction = await sequelize.transaction();
 
   try {
@@ -2681,19 +2689,20 @@ async function deleteRow(req, res) {
     await sequelize.query(
       `
       INSERT INTO "SheetDataSnapshot" (
-        id, "operationLogId", "headerId", "rowIndex", "originalValue", "newValue", "changeType", "createdAt", "updatedAt"
+        id, "operationLogId", "headerId", "sheetId", "rowIndex", "originalValue", "newValue", "changeType", "createdAt", "updatedAt"
       )
       SELECT
-        gen_random_uuid(), :operationLogId, sd."headerId", sd."rowIndex", sd."value", NULL, 'DELETE', NOW(), NOW()
+        gen_random_uuid(), :operationLogId, sd."headerId", sd."sheetId", sd."rowIndex", sd."value", NULL, 'DELETE', NOW(), NOW()
       FROM "SheetData" sd
       JOIN "Header" h ON sd."headerId" = h."id"
-      WHERE h."templateId" = :templateId AND sd."rowIndex" = :rowIndex
+      WHERE h."templateId" = :templateId AND sd."rowIndex" = :rowIndex AND sd."sheetId" = :sheetId
       `,
       {
         replacements: {
           operationLogId: operationLog.id,
           templateId,
-          rowIndex: parsedRowIndex
+          rowIndex: parsedRowIndex,
+          sheetId,
         },
         transaction
       }
@@ -2707,11 +2716,13 @@ async function deleteRow(req, res) {
       WHERE "SheetData"."headerId" = "Header"."id"
         AND "Header"."templateId" = :templateId
         AND "SheetData"."rowIndex" = :rowIndex
+        AND "SheetData"."sheetId" = :sheetId
       `,
       {
         replacements: {
           templateId,
-          rowIndex: parsedRowIndex
+          rowIndex: parsedRowIndex,
+          sheetId
         },
         transaction
       }
@@ -2730,7 +2741,7 @@ async function deleteRow(req, res) {
 }
 
 
-async function calculateAwards(templateId, acceptedStatuses, transaction) {
+async function calculateAwards(templateId, sheetId, acceptedStatuses, transaction) {
   const headers = await Header.findAll({
     where: { templateId, name: requiredHeadersName },
     transaction
@@ -2812,6 +2823,7 @@ async function calculateAwards(templateId, acceptedStatuses, transaction) {
       snapshots.push({
         operationLogId: operationLog.id,
         headerId,
+        sheetId,
         rowIndex: parseInt(rowIndex),
         originalValue,
         newValue: total.toString(),
@@ -2837,12 +2849,12 @@ async function calculateAwards(templateId, acceptedStatuses, transaction) {
 async function calculateAwardInfo(req, res) {
   const transaction = await sequelize.transaction();
   try{
-    const { templateId, acceptedStatuses } = req.body;
-    if (!templateId || !Array.isArray(acceptedStatuses) || acceptedStatuses.length === 0) {
+    const { templateId, sheetId, acceptedStatuses } = req.body;
+    if (!templateId || !sheetId || !Array.isArray(acceptedStatuses) || acceptedStatuses.length === 0) {
       await transaction.rollback();
-      return res.status(400).json({ message: 'Invalid input. templateId and acceptedStatuses are required.' });
+      return res.status(400).json({ message: 'Invalid input. templateId, sheetId, and acceptedStatuses are required.' });
     }
-    await calculateAwards(templateId, acceptedStatuses, transaction);
+    await calculateAwards(templateId, sheetId, acceptedStatuses, transaction);
     res.status(200).json({ message: 'Award information calculated successfully.' });
   } catch(error){
     await transaction.rollback();
