@@ -2914,7 +2914,7 @@ async function calculateAwards(templateId, acceptedStatuses, transaction) {
     );
 
     for (let i = 1; i <= 20; i++) {
-      const cd = rowData[headerMap[`Awd_Cd${i}`]];
+      const cd = rowData[headerMap[`Awd_CR${i}`]];
       const amtRaw = rowData[headerMap[`Awd_Amt${i}`]];
       const status = rowData[headerMap[`Awd_Status${i}`]];
 
