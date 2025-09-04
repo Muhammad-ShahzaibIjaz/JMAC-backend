@@ -1,4 +1,5 @@
 const SheetData = require('../models/SheetData');
+const Sheet = require('../models/Sheet');
 const Header = require('../models/Header');
 const Template = require('../models/Template');
 const sequelize = require('../config/database');
@@ -1144,7 +1145,7 @@ async function updateSheetData(updates, options = {}) {
 }
 
 
-async function updateData(updates, templateId) {
+async function updateData(updates, templateId) { 
   const transaction = await SheetData.sequelize.transaction();
   let updatedCount = 0;
   const snapshots = [];
@@ -1231,7 +1232,7 @@ async function updateRows(req, res) {
 }
 
 
-async function bulkUpdates(headerId, value, templateId) {
+async function bulkUpdates(headerId, value, templateId, sheetId) { // Update this according to sheet id
   const transaction = await sequelize.transaction();
   const snapshots = [];
   try {
@@ -1243,19 +1244,15 @@ async function bulkUpdates(headerId, value, templateId) {
     }, { transaction });
 
     const currentRecords = await SheetData.findAll({
-      where: { headerId },
+      where: { headerId, sheetId },
       attributes: ['id', 'rowIndex', 'value'],
       transaction
     });
 
     const maxRowIndexRecord = await SheetData.findOne({
-      include: [{
-        model: Header,
-        where: { templateId },
-        attributes: [],
-      }],
-      order: [['rowIndex', 'DESC']],
-      attributes: ['rowIndex'],
+      where: { sheetId },
+      order: [["rowIndex", "DESC"]],
+      attributes: ["rowIndex"],
       transaction,
     });
     const maxRowIndex = maxRowIndexRecord?.rowIndex ?? 0;
@@ -1266,6 +1263,7 @@ async function bulkUpdates(headerId, value, templateId) {
         id: uuidv4(),
         operationLogId: operationLog.id,
         headerId,
+        sheetId,
         rowIndex: record.rowIndex,
         originalValue: record.value,
         newValue: value
@@ -1274,7 +1272,7 @@ async function bulkUpdates(headerId, value, templateId) {
 
     const [affectedRows] = await SheetData.update(
       { value: value },
-      { where: { headerId: headerId }, transaction }
+      { where: { headerId: headerId, sheetId: sheetId }, transaction }
     );
 
     const newRows = [];
@@ -1283,6 +1281,7 @@ async function bulkUpdates(headerId, value, templateId) {
         newRows.push({
           id: uuidv4(),
           headerId: headerId,
+          sheetId: sheetId,
           rowIndex: i,
           value: value
         });
@@ -1291,6 +1290,7 @@ async function bulkUpdates(headerId, value, templateId) {
           id: uuidv4(),
           operationLogId: operationLog.id,
           headerId,
+          sheetId,
           rowIndex: i,
           originalValue: null,
           newValue: value
@@ -1318,9 +1318,9 @@ async function bulkUpdates(headerId, value, templateId) {
 
 async function bulkUpdateData(req, res) {
   try{
-    const {headerId, value, templateId} = req.body;
+    const {headerId, value, templateId, sheetId} = req.body;
 
-    const result = await bulkUpdates(headerId, value, templateId);
+    const result = await bulkUpdates(headerId, value, templateId, sheetId);
     
     res.status(200).json({ message: "OK" });
   } catch(error) {
@@ -1329,7 +1329,7 @@ async function bulkUpdateData(req, res) {
 }
 
 
-async function addPaddingInData(headerId, templateId, padValue, padLength) {
+async function addPaddingInData(headerId, templateId, padValue, padLength, sheetId) { 
   const transaction = await sequelize.transaction();
   let affectedRows = 0;
   const snapshots = [];
@@ -1342,9 +1342,9 @@ async function addPaddingInData(headerId, templateId, padValue, padLength) {
       operationType: 'PADDING_UPDATE',
     }, { transaction });
 
-    // Fetch all records for the given headerId
+    // Fetch all records for the given headerId and Sheet Id
     const records = await SheetData.findAll({ 
-      where: { headerId },
+      where: { headerId, sheetId },
       transaction 
     });
 
@@ -1357,7 +1357,7 @@ async function addPaddingInData(headerId, templateId, padValue, padLength) {
         await SheetData.update(
           { value: "" }, // or null if you prefer
           {
-            where: { id: record.id },
+            where: { id: record.id, sheetId: sheetId },
             transaction
           }
         );
@@ -1366,6 +1366,7 @@ async function addPaddingInData(headerId, templateId, padValue, padLength) {
           id: uuidv4(),
           operationLogId: operationLog.id,
           headerId,
+          sheetId,
           rowIndex: record.rowIndex,
           originalValue: rawValue,
           newValue: ""
@@ -1383,6 +1384,7 @@ async function addPaddingInData(headerId, templateId, padValue, padLength) {
         id: uuidv4(),
         operationLogId: operationLog.id,
         headerId,
+        sheetId,
         rowIndex: record.rowIndex,
         originalValue,
         newValue: paddedValue
@@ -1391,7 +1393,7 @@ async function addPaddingInData(headerId, templateId, padValue, padLength) {
       const [count] = await SheetData.update(
         { value: paddedValue },
         {
-          where: { id: record.id },
+          where: { id: record.id, sheetId: sheetId },
           transaction
         }
       );
@@ -1414,15 +1416,15 @@ async function addPaddingInData(headerId, templateId, padValue, padLength) {
   }
 }
 
-async function addPadding(req,res) {
+async function addPadding(req,res) { // Update this according to sheet id
   try{
-    const {headerId, templateId, padValue, padLength} = req.body;
+    const {headerId, templateId, padValue, padLength, sheetId} = req.body;
 
-    if (!headerId || !templateId) {
-      return res.status(400).json({ message: "headerId and templateId is required" });
+    if (!headerId || !templateId || !sheetId) {
+      return res.status(400).json({ message: "headerId, templateId, and sheetId are required" });
     }
 
-    const result = await addPaddingInData(headerId, templateId, padValue, padLength);
+    const result = await addPaddingInData(headerId, templateId, padValue, padLength, sheetId);
 
     res.status(200).json({ message: "OK" });
   } catch(error) {
@@ -1431,12 +1433,13 @@ async function addPadding(req,res) {
 }
 
 
-async function getMatrixPop(req, res) {
+async function getMatrixPop(req, res) { // Update this according to sheet id
   try {
     const { templateId } = req.params;
+    const { sheetId } = req.query; 
 
-    if (!templateId) {
-      return res.status(400).json({ message: "Template ID is required" });
+    if (!templateId || !sheetId) {
+      return res.status(400).json({ message: "Template ID and Sheet ID are required" });
     }
 
     const headerID = await getHeaderID(templateId);
@@ -1446,7 +1449,8 @@ async function getMatrixPop(req, res) {
 
     const values = await SheetData.findAll({
       where: {
-        headerId: headerID
+        headerId: headerID,
+        sheetId: sheetId
       },
       attributes: [[sequelize.fn('DISTINCT', sequelize.col('value')), 'value']],
       raw: true
@@ -1777,14 +1781,23 @@ async function applyCalculations(req, res) {
 }
 
 
-const addRow = async (req, res) => {
+const addRow = async (req, res) => { // Update this according to sheet id
   const { templateId } = req.params;
+  const { sheetId } = req.query;
 
   try {
     // Check if template exists
     const template = await Template.findByPk(templateId);
     if (!template) {
       return res.status(404).json({ error: 'Template not found' });
+    }
+
+    // Check if sheet exists under this template
+    const sheet = await Sheet.findOne({
+      where: { id: sheetId, templateId },
+    });
+    if (!sheet) {
+      return res.status(404).json({ error: "Sheet not found for this template" });
     }
 
     const headers = await Header.findAll({
@@ -1800,6 +1813,7 @@ const addRow = async (req, res) => {
       const maxRowIndex = await SheetData.max('rowIndex', {
         where: {
           headerId: headers.map((h) => h.id),
+          sheetId: sheetId
         },
         transaction: t,
       });
@@ -1814,6 +1828,7 @@ const addRow = async (req, res) => {
               rowIndex: newRowIndex,
               value: "",
               headerId: header.id,
+              sheetId: sheetId
             },
             { transaction: t },
           ),
@@ -1874,13 +1889,13 @@ const processBatch = async (batch, maxRetries = 3) => {
   return results;
 };
 
-const findZipCodes = async (req, res) => {
+const findZipCodes = async (req, res) => { // Update this according to sheet id
   const transaction = await sequelize.transaction();
   try {
-    const { templateId, streetAddress, city, state, zipcode } = req.body;
-    
+    const { templateId, streetAddress, city, state, zipcode, sheetId } = req.body;
+
     // Validate request body
-    if (!templateId || !streetAddress || !city || !state || !zipcode) {
+    if (!templateId || !sheetId || !streetAddress || !city || !state || !zipcode) {
       await transaction.rollback();
       return res.status(400).json({ error: 'Missing required fields' });
     }
@@ -1913,6 +1928,7 @@ const findZipCodes = async (req, res) => {
     // Fetch data for all relevant headers
     const data = await SheetData.findAll({
       where: {
+        sheetId,
         headerId: {
           [Op.in]: [streetAddressHeader.id, cityHeader.id, stateHeader.id, zipcodeHeader.id],
         },
@@ -1981,6 +1997,7 @@ const findZipCodes = async (req, res) => {
             updates.push({
               id: uuidv4(),
               headerId: zipcodeHeader.id,
+              sheetId: sheetId,
               rowIndex: result.rowIndex,
               value: result.zipCode,
             });
@@ -1989,6 +2006,7 @@ const findZipCodes = async (req, res) => {
               id: uuidv4(),
               operationLogId: operationLog.id,
               headerId: zipcodeHeader.id,
+              sheetId: sheetId,
               rowIndex: result.rowIndex,
               originalValue: originalZipCode,
               newValue: newZipCode,
@@ -2034,11 +2052,11 @@ const findZipCodes = async (req, res) => {
   }
 };
 
-const scoreConversion = async (req, res) => {
+const scoreConversion = async (req, res) => {  // Update this according to sheet id
   const transaction = await sequelize.transaction();
   try {
-    const { templateId, subject, testType, sourceHeader, sourceCompHeader, targetHeader } = req.body;
-    if (!templateId || !subject || !testType || !sourceHeader || !targetHeader) {
+    const { templateId, subject, testType, sourceHeader, sourceCompHeader, targetHeader, sheetId } = req.body;
+    if (!templateId || !subject || !testType || !sourceHeader || !targetHeader || !sheetId) {
       await transaction.rollback();
       return res.status(400).json({ error: 'Missing required fields' });
     }
@@ -2089,6 +2107,7 @@ const scoreConversion = async (req, res) => {
     // Get all relevant sheet data
     const data = await SheetData.findAll({
       where: {
+        sheetId: sheetId,
         headerId: {
           [Op.in]: headerIds,
         }
@@ -2189,6 +2208,7 @@ const scoreConversion = async (req, res) => {
             updates.push({
               id: uuidv4(),
               headerId: targetHeaderID.id,
+              sheetId: sheetId,
               rowIndex: row.rowIndex,
               value: newTargetValue,
             });
@@ -2197,6 +2217,7 @@ const scoreConversion = async (req, res) => {
               id: uuidv4(),
               operationLogId: operationLog.id,
               headerId: targetHeaderID.id,
+              sheetId: sheetId,
               rowIndex: row.rowIndex,
               originalValue: originalTargetValue,
               newValue: newTargetValue,
@@ -2245,11 +2266,11 @@ const scoreConversion = async (req, res) => {
 
 
 
-const cipConversion = async (req, res) => {
+const cipConversion = async (req, res) => { // Update this according to sheet id 
   const transaction = await sequelize.transaction();
   try {
-    const { templateId, sourceHeader, targetHeader } = req.body;
-    if (!templateId || !sourceHeader || !targetHeader) {
+    const { templateId, sourceHeader, targetHeader, sheetId } = req.body;
+    if (!templateId || !sourceHeader || !targetHeader || !sheetId) {
       await transaction.rollback();
       return res.status(400).json({ error: 'Missing required fields' });
     }
@@ -2280,6 +2301,7 @@ const cipConversion = async (req, res) => {
     // Get all relevant sheet data
     const data = await SheetData.findAll({
       where: {
+        sheetId: sheetId,
         headerId: {
           [Op.in]: [sourceHeaderID.id, targetHeaderID.id],
         }
@@ -2349,14 +2371,16 @@ const cipConversion = async (req, res) => {
             updates.push({
               id: uuidv4(),
               headerId: targetHeaderID.id,
+              sheetId: sheetId,
               rowIndex: row.rowIndex,
               value: newTargetValue,
             });
 
-            snapshots.push({
+            snapshots.push({ 
               id: uuidv4(),
               operationLogId: operationLog.id,
               headerId: targetHeaderID.id,
+              sheetId: sheetId,
               rowIndex: row.rowIndex,
               originalValue: originalTargetValue,
               newValue: newTargetValue,
@@ -2660,8 +2684,10 @@ async function applyReferenceOnData(inputHeaderId, outputHeaderId, mappings) {
   }
 }
 
-async function deleteRow(req, res) {
+async function deleteRow(req, res) { // Update it according to sheet id
   const { templateId, rowIndex } = req.params;
+  const { sheetId } = req.query;
+
   const transaction = await sequelize.transaction();
 
   try {
@@ -2681,18 +2707,20 @@ async function deleteRow(req, res) {
     await sequelize.query(
       `
       INSERT INTO "SheetDataSnapshot" (
-        id, "operationLogId", "headerId", "rowIndex", "originalValue", "newValue", "changeType", "createdAt", "updatedAt"
+        id, "operationLogId", "headerId", "sheetId", "rowIndex", "originalValue", "newValue", "changeType", "createdAt", "updatedAt"
       )
       SELECT
-        gen_random_uuid(), :operationLogId, sd."headerId", sd."rowIndex", sd."value", NULL, 'DELETE', NOW(), NOW()
+        :id, :operationLogId, sd."headerId", sd."sheetId", sd."rowIndex", sd."value", NULL, 'DELETE', NOW(), NOW()
       FROM "SheetData" sd
       JOIN "Header" h ON sd."headerId" = h."id"
-      WHERE h."templateId" = :templateId AND sd."rowIndex" = :rowIndex
+      WHERE h."templateId" = :templateId AND sd."sheetId" = :sheetId AND sd."rowIndex" = :rowIndex
       `,
       {
         replacements: {
+          id: uuidv4(),
           operationLogId: operationLog.id,
           templateId,
+          sheetId,
           rowIndex: parsedRowIndex
         },
         transaction
@@ -2706,11 +2734,13 @@ async function deleteRow(req, res) {
       USING "Header"
       WHERE "SheetData"."headerId" = "Header"."id"
         AND "Header"."templateId" = :templateId
+        AND "SheetData"."sheetId" = :sheetId
         AND "SheetData"."rowIndex" = :rowIndex
       `,
       {
         replacements: {
           templateId,
+          sheetId,
           rowIndex: parsedRowIndex
         },
         transaction
