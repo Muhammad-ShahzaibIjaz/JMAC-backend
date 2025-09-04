@@ -12,6 +12,7 @@ const ruleRoutes = require("./routes/ruleRoutes");
 const revertRoutes = require("./routes/revertRoutes");
 const visualDataRoutes = require("./routes/populationRoutes");
 const referencesRoutes = require("./routes/crossReferenceRoutes");
+const sheetRoutes = require("./routes/sheetRoute");
 
 app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 app.use(express.json({ limit: '100mb' }));
@@ -30,6 +31,6 @@ app.use("/api", ruleRoutes);
 app.use("/api", revertRoutes);
 app.use("/api", visualDataRoutes);
 app.use("/api", referencesRoutes);
-
+app.use("/api", sheetRoutes);
 
 module.exports = app;
