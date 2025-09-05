@@ -501,18 +501,18 @@ const requiredHeadersName = [
 
 const awardTypePatterns = {
   "Total_Performance_Gift": /^I[TA].G$/,
-  "Total_Merit_Gift": /^I[MI].G$/,
-  "Total_Need_Gift": /^IN.G$/,
-  "Total_Other_Gift": /^IO.G$/,
-  "Total_Honors_Gift": /^IH.G$/,
-  "Total_Inst_Unfunded_Gift": /^I..UG$/,
-  "Total_Inst_Gift": /^I..G$/,
-  "Inst_Work": /^I..W$/,
-  "Fed_Work": /^F..W$/,
+  "Total_Institutional_Merit_Gift": /^I[MI].G$/,
+  "Total_Institutional_Need_Gift": /^IN.G$/,
+  "Total_Institutional_Other_Gift": /^IO.G$/,
+  "Total_Institutional_Honors_Gift": /^IH.G$/,
+  "Total_Institutional_Unfunded_Gift": /^I..UG$/,
+  "Total_Institutional_Gift": /^I..G$/,
+  "Institutional_Work": /^I..W$/,
+  "Federal_Work": /^F..W$/,
   "Total_Loans": /^...L$/,
-  "Total_Emp_Ben": /^E...$/,
-  "Total_Tuit_Exch": /^T...$/,
-  "Total_Ouside": /^O...$/,
+  "Total_Employee_Benefit": /^E...$/,
+  "Total_Tuition_Exchange": /^T...$/,
+  "Total_Outside_Gift+Work+Loan": /^O...$/,
 };
 
 
