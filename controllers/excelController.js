@@ -1289,18 +1289,18 @@ async function processNLP(req, res) {
 }
 
 async function getMissingHeaders(req, res) {
-  const { templateId, mappingTemplateId, fileNames } = req.body;
+  const { templateId, sheetId, mappingTemplateId, fileNames } = req.body;
 
   if (!templateId || !Array.isArray(fileNames) || fileNames.length === 0) {
     return res.status(400).json({ error: 'templateId and fileNames array are required' });
   }
 
-  if (!mappingTemplateId) {
-    return res.status(400).json({ error: 'mappingTemplateId is required' });
+  if (!mappingTemplateId || !sheetId) {
+    return res.status(400).json({ error: 'mappingTemplateId and sheetId are required' });
   }
 
   const files = fileNames.map(fileName => ({
-    path: path.join('uploads', templateId, fileName),
+    path: path.join('uploads', templateId, sheetId, fileName),
     originalname: fileName
   }));
 
