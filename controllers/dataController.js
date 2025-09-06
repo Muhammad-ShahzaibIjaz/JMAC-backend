@@ -14,6 +14,7 @@ const { convertScore } = require('../services/conversion');
 const { getCipTitle } = require('../services/cipService');
 const { desiredOrder, requiredHeadersName, awardTypePatterns } = require('../utils/headerOrderList');
 const { buildZipCountyMap } = require('../services/countyService');
+const { calculateNACUBODiscountRate, calculateNetCharges, calculateGap, calculateNeedMet, calculateTotalDiscountRate, calculateNetTuition, calculateNeed } = require('../utils/calculationHelper');
 
 async function deleteSheetData(req, res) {
   try {
@@ -2965,6 +2966,798 @@ async function calculateAwards(templateId, acceptedStatuses, transaction) {
   await transaction.commit();
 }
 
+async function processNACUBODiscountRates(templateId) {
+  const transaction = await sequelize.transaction();
+  try {
+    // Step 1: Fetch headers
+    const headers = await Header.findAll({
+      where: {
+        templateId,
+        name: ['Tuition', 'Fees', 'Total_Institutional_Unfunded_Gift', 'NACUBO_Discount_Rate']
+      },
+      transaction
+    });
+
+    const headerMap = {};
+    headers.forEach(h => headerMap[h.name] = h.id);
+
+    if (!headerMap['NACUBO_Discount_Rate']) {
+      await transaction.rollback();
+      return { message: 'NACUBO_Discount_Rate header not found.' };
+    }
+
+    // Step 2: Fetch relevant SheetData
+    const sheetData = await SheetData.findAll({
+      where: {
+        headerId: [headerMap['Tuition'], headerMap['Fees'], headerMap['Total_Institutional_Unfunded_Gift']]
+      },
+      transaction
+    });
+
+    // Step 3: Group by rowIndex
+    const grouped = {};
+    sheetData.forEach(data => {
+      if (!grouped[data.rowIndex]) grouped[data.rowIndex] = {};
+      grouped[data.rowIndex][data.headerId] = parseFloat(data.value) || 0;
+    });
+
+    // Step 4: Create OperationLog
+    const operationLog = await OperationLog.create({
+      templateId,
+      operationType: 'CALCULATION'
+    }, { transaction });
+
+    // Step 5: Prepare payloads
+    const insertPayload = [];
+    const snapshotPayload = [];
+
+    for (const [rowIndex, values] of Object.entries(grouped)) {
+      const tuition = values[headerMap['Tuition']] || 0;
+      const fees = values[headerMap['Fees']] || 0;
+      const gift = values[headerMap['Total_Institutional_Unfunded_Gift']] || 0;
+      const discountRate = calculateNACUBODiscountRate(tuition, fees, gift);
+
+      const existing = await SheetData.findOne({
+        where: {
+          headerId: headerMap['NACUBO_Discount_Rate'],
+          rowIndex: parseInt(rowIndex)
+        },
+        transaction
+      });
+
+      if (existing) {
+        snapshotPayload.push({
+          operationLogId: operationLog.id,
+          headerId: headerMap['NACUBO_Discount_Rate'],
+          rowIndex: parseInt(rowIndex),
+          originalValue: existing.value,
+          newValue: discountRate.toString(),
+          changeType: 'UPDATE'
+        });
+
+        existing.value = discountRate.toString();
+        await existing.save({ transaction });
+      } else {
+        snapshotPayload.push({
+          operationLogId: operationLog.id,
+          headerId: headerMap['NACUBO_Discount_Rate'],
+          rowIndex: parseInt(rowIndex),
+          originalValue: null,
+          newValue: discountRate.toString(),
+          changeType: 'INSERT'
+        });
+
+        insertPayload.push({
+          headerId: headerMap['NACUBO_Discount_Rate'],
+          rowIndex: parseInt(rowIndex),
+          value: discountRate.toString()
+        });
+      }
+    }
+
+    // Step 6: Bulk insert new SheetData
+    if (insertPayload.length > 0) {
+      await SheetData.bulkCreate(insertPayload, { transaction });
+    }
+
+    // Step 7: Bulk insert SheetDataSnapshot
+    if (snapshotPayload.length > 0) {
+      await SheetDataSnapshot.bulkCreate(snapshotPayload, { transaction });
+    }
+
+    await transaction.commit();
+    return {
+      message: 'Processed NACUBO Discount Rates with logging and snapshots.',
+      rowsAffected: insertPayload.length + snapshotPayload.length
+    };
+  } catch (error) {
+    await transaction.rollback();
+    console.error('Error processing NACUBO Discount Rates:', error);
+    throw error;
+  }
+}
+
+async function processNetCharges(templateId) {
+  const transaction = await sequelize.transaction();
+  try {
+    // Step 1: Fetch headers
+    const headers = await Header.findAll({
+      where: {
+        templateId,
+        name: ['Tuition', 'Fees', 'Housing_Cost', 'Food', 'Net_Charges']
+      },
+      transaction
+    });
+
+    const headerMap = {};
+    headers.forEach(h => headerMap[h.name] = h.id);
+
+    if (!headerMap['Net_Charges']) {
+      await transaction.rollback();
+      return { message: 'Net_Charges header not found.' };
+    }
+
+    // Step 2: Fetch relevant SheetData
+    const sheetData = await SheetData.findAll({
+      where: {
+        headerId: [
+          headerMap['Tuition'],
+          headerMap['Fees'],
+          headerMap['Housing Cost'],
+          headerMap['Food']
+        ]
+      },
+      transaction
+    });
+
+    // Step 3: Group by rowIndex
+    const grouped = {};
+    sheetData.forEach(data => {
+      if (!grouped[data.rowIndex]) grouped[data.rowIndex] = {};
+      grouped[data.rowIndex][data.headerId] = parseFloat(data.value) || 0;
+    });
+
+    // Step 4: Create OperationLog
+    const operationLog = await OperationLog.create({
+      templateId,
+      operationType: 'CALCULATION'
+    }, { transaction });
+
+    // Step 5: Prepare payloads
+    const insertPayload = [];
+    const snapshotPayload = [];
+
+    for (const [rowIndex, values] of Object.entries(grouped)) {
+      const tuition = values[headerMap['Tuition']] || 0;
+      const fees = values[headerMap['Fees']] || 0;
+      const housing = values[headerMap['Housing Cost']] || 0;
+      const food = values[headerMap['Food']] || 0;
+
+      const netCharges = calculateNetCharges(tuition, fees, housing, food);
+
+      const existing = await SheetData.findOne({
+        where: {
+          headerId: headerMap['Net_Charges'],
+          rowIndex: parseInt(rowIndex)
+        },
+        transaction
+      });
+
+      if (existing) {
+        snapshotPayload.push({
+          operationLogId: operationLog.id,
+          headerId: headerMap['Net_Charges'],
+          rowIndex: parseInt(rowIndex),
+          originalValue: existing.value,
+          newValue: netCharges.toString(),
+          changeType: 'UPDATE'
+        });
+
+        existing.value = netCharges.toString();
+        await existing.save({ transaction });
+      } else {
+        snapshotPayload.push({
+          operationLogId: operationLog.id,
+          headerId: headerMap['Net_Charges'],
+          rowIndex: parseInt(rowIndex),
+          originalValue: null,
+          newValue: netCharges.toString(),
+          changeType: 'INSERT'
+        });
+
+        insertPayload.push({
+          headerId: headerMap['Net_Charges'],
+          rowIndex: parseInt(rowIndex),
+          value: netCharges.toString()
+        });
+      }
+    }
+
+    // Step 6: Bulk insert new SheetData
+    if (insertPayload.length > 0) {
+      await SheetData.bulkCreate(insertPayload, { transaction });
+    }
+
+    // Step 7: Bulk insert SheetDataSnapshot
+    if (snapshotPayload.length > 0) {
+      await SheetDataSnapshot.bulkCreate(snapshotPayload, { transaction });
+    }
+
+    await transaction.commit();
+    return {
+      message: 'Processed Net_Charges with logging and snapshots.',
+      rowsAffected: insertPayload.length + snapshotPayload.length
+    };
+  } catch (error) {
+    await transaction.rollback();
+    console.error('Error processing Net_Charges:', error);
+    throw error;
+  }
+}
+
+async function processNetTuition(templateId) {
+  const transaction = await sequelize.transaction();
+  try {
+    // Step 1: Fetch headers
+    const headers = await Header.findAll({
+      where: {
+        templateId,
+        name: ['Tuition', 'Total_Institutional_Gift', 'Net_Tuition']
+      },
+      transaction
+    });
+
+    const headerMap = {};
+    headers.forEach(h => headerMap[h.name] = h.id);
+
+    if (!headerMap['Net_Tuition']) {
+      await transaction.rollback();
+      return { message: 'Net_Tuition header not found.' };
+    }
+
+    // Step 2: Fetch relevant SheetData
+    const sheetData = await SheetData.findAll({
+      where: {
+        headerId: [headerMap['Tuition'], headerMap['Total_Institutional_Gift']]
+      },
+      transaction
+    });
+
+    // Step 3: Group by rowIndex
+    const grouped = {};
+    sheetData.forEach(data => {
+      if (!grouped[data.rowIndex]) grouped[data.rowIndex] = {};
+      grouped[data.rowIndex][data.headerId] = parseFloat(data.value) || 0;
+    });
+
+    // Step 4: Create OperationLog
+    const operationLog = await OperationLog.create({
+      templateId,
+      operationType: 'CALCULATION'
+    }, { transaction });
+
+    // Step 5: Prepare payloads
+    const insertPayload = [];
+    const snapshotPayload = [];
+
+    for (const [rowIndex, values] of Object.entries(grouped)) {
+      const tuition = values[headerMap['Tuition']] || 0;
+      const gift = values[headerMap['Total_Institutional_Gift']] || 0;
+
+      const netTuition = calculateNetTuition(tuition, gift);
+
+      const existing = await SheetData.findOne({
+        where: {
+          headerId: headerMap['Net_Tuition'],
+          rowIndex: parseInt(rowIndex)
+        },
+        transaction
+      });
+
+      if (existing) {
+        snapshotPayload.push({
+          operationLogId: operationLog.id,
+          headerId: headerMap['Net_Tuition'],
+          rowIndex: parseInt(rowIndex),
+          originalValue: existing.value,
+          newValue: netTuition.toString(),
+          changeType: 'UPDATE'
+        });
+
+        existing.value = netTuition.toString();
+        await existing.save({ transaction });
+      } else {
+        snapshotPayload.push({
+          operationLogId: operationLog.id,
+          headerId: headerMap['Net_Tuition'],
+          rowIndex: parseInt(rowIndex),
+          originalValue: null,
+          newValue: netTuition.toString(),
+          changeType: 'INSERT'
+        });
+
+        insertPayload.push({
+          headerId: headerMap['Net_Tuition'],
+          rowIndex: parseInt(rowIndex),
+          value: netTuition.toString()
+        });
+      }
+    }
+
+    // Step 6: Bulk insert new SheetData
+    if (insertPayload.length > 0) {
+      await SheetData.bulkCreate(insertPayload, { transaction });
+    }
+
+    // Step 7: Bulk insert SheetDataSnapshot
+    if (snapshotPayload.length > 0) {
+      await SheetDataSnapshot.bulkCreate(snapshotPayload, { transaction });
+    }
+
+    await transaction.commit();
+    return {
+      message: 'Processed Net_Tuition with logging and snapshots.',
+      rowsAffected: insertPayload.length + snapshotPayload.length
+    };
+  } catch (error) {
+    await transaction.rollback();
+    console.error('Error processing Net_Tuition:', error);
+    throw error;
+  }
+}
+
+async function processTotalDiscountRate(templateId) {
+  const transaction = await sequelize.transaction();
+  try {
+    // Step 1: Fetch headers
+    const headers = await Header.findAll({
+      where: {
+        templateId,
+        name: ['Net_Charges', 'Total_Institutional_Gift', 'Total_Discount_Rate']
+      },
+      transaction
+    });
+
+    const headerMap = {};
+    headers.forEach(h => headerMap[h.name] = h.id);
+
+    if (!headerMap['Total_Discount_Rate']) {
+      await transaction.rollback();
+      return { message: 'Total_Discount_Rate header not found.' };
+    }
+
+    // Step 2: Fetch relevant SheetData
+    const sheetData = await SheetData.findAll({
+      where: {
+        headerId: [headerMap['Net_Charges'], headerMap['Total_Institutional_Gift']]
+      },
+      transaction
+    });
+
+    // Step 3: Group by rowIndex
+    const grouped = {};
+    sheetData.forEach(data => {
+      if (!grouped[data.rowIndex]) grouped[data.rowIndex] = {};
+      grouped[data.rowIndex][data.headerId] = parseFloat(data.value) || 0;
+    });
+
+    // Step 4: Create OperationLog
+    const operationLog = await OperationLog.create({
+      templateId,
+      operationType: 'CALCULATION'
+    }, { transaction });
+
+    // Step 5: Prepare payloads
+    const insertPayload = [];
+    const snapshotPayload = [];
+
+    for (const [rowIndex, values] of Object.entries(grouped)) {
+      const netCharges = values[headerMap['Net_Charges']] || 0;
+      const gift = values[headerMap['Total_Institutional_Gift']] || 0;
+
+      const discountRate = calculateTotalDiscountRate(netCharges, gift);
+
+      const existing = await SheetData.findOne({
+        where: {
+          headerId: headerMap['Total_Discount_Rate'],
+          rowIndex: parseInt(rowIndex)
+        },
+        transaction
+      });
+
+      if (existing) {
+        snapshotPayload.push({
+          operationLogId: operationLog.id,
+          headerId: headerMap['Total_Discount_Rate'],
+          rowIndex: parseInt(rowIndex),
+          originalValue: existing.value,
+          newValue: discountRate.toString(),
+          changeType: 'UPDATE'
+        });
+
+        existing.value = discountRate.toString();
+        await existing.save({ transaction });
+      } else {
+        snapshotPayload.push({
+          operationLogId: operationLog.id,
+          headerId: headerMap['Total_Discount_Rate'],
+          rowIndex: parseInt(rowIndex),
+          originalValue: null,
+          newValue: discountRate.toString(),
+          changeType: 'INSERT'
+        });
+
+        insertPayload.push({
+          headerId: headerMap['Total_Discount_Rate'],
+          rowIndex: parseInt(rowIndex),
+          value: discountRate.toString()
+        });
+      }
+    }
+
+    // Step 6: Bulk insert new SheetData
+    if (insertPayload.length > 0) {
+      await SheetData.bulkCreate(insertPayload, { transaction });
+    }
+
+    // Step 7: Bulk insert SheetDataSnapshot
+    if (snapshotPayload.length > 0) {
+      await SheetDataSnapshot.bulkCreate(snapshotPayload, { transaction });
+    }
+
+    await transaction.commit();
+    return {
+      message: 'Processed Total_Discount_Rate with logging and snapshots.',
+      rowsAffected: insertPayload.length + snapshotPayload.length
+    };
+  } catch (error) {
+    await transaction.rollback();
+    console.error('Error processing Total_Discount_Rate:', error);
+    throw error;
+  }
+}
+
+async function processNeed(templateId) {
+  const transaction = await sequelize.transaction();
+  try {
+    // Step 1: Fetch headers
+    const headers = await Header.findAll({
+      where: {
+        templateId,
+        name: ['COA', 'SAI', 'Need']
+      },
+      transaction
+    });
+
+    const headerMap = {};
+    headers.forEach(h => headerMap[h.name] = h.id);
+
+    if (!headerMap['Need']) {
+      await transaction.rollback();
+      return { message: 'Need header not found.' };
+    }
+
+    // Step 2: Fetch relevant SheetData
+    const sheetData = await SheetData.findAll({
+      where: {
+        headerId: [headerMap['COA'], headerMap['SAI']]
+      },
+      transaction
+    });
+
+    // Step 3: Group by rowIndex
+    const grouped = {};
+    sheetData.forEach(data => {
+      if (!grouped[data.rowIndex]) grouped[data.rowIndex] = {};
+      grouped[data.rowIndex][data.headerId] = parseFloat(data.value) || 0;
+    });
+
+    // Step 4: Create OperationLog
+    const operationLog = await OperationLog.create({
+      templateId,
+      operationType: 'CALCULATION'
+    }, { transaction });
+
+    // Step 5: Prepare payloads
+    const insertPayload = [];
+    const snapshotPayload = [];
+
+    for (const [rowIndex, values] of Object.entries(grouped)) {
+      const COA = values[headerMap['COA']] || 0;
+      const SAI = values[headerMap['SAI']] || 0;
+
+      const need = calculateNeed(COA, SAI);
+
+      const existing = await SheetData.findOne({
+        where: {
+          headerId: headerMap['Need'],
+          rowIndex: parseInt(rowIndex)
+        },
+        transaction
+      });
+
+      if (existing) {
+        snapshotPayload.push({
+          operationLogId: operationLog.id,
+          headerId: headerMap['Need'],
+          rowIndex: parseInt(rowIndex),
+          originalValue: existing.value,
+          newValue: need.toString(),
+          changeType: 'UPDATE'
+        });
+
+        existing.value = need.toString();
+        await existing.save({ transaction });
+      } else {
+        snapshotPayload.push({
+          operationLogId: operationLog.id,
+          headerId: headerMap['Need'],
+          rowIndex: parseInt(rowIndex),
+          originalValue: null,
+          newValue: need.toString(),
+          changeType: 'INSERT'
+        });
+
+        insertPayload.push({
+          headerId: headerMap['Need'],
+          rowIndex: parseInt(rowIndex),
+          value: need.toString()
+        });
+      }
+    }
+
+    // Step 6: Bulk insert new SheetData
+    if (insertPayload.length > 0) {
+      await SheetData.bulkCreate(insertPayload, { transaction });
+    }
+
+    // Step 7: Bulk insert SheetDataSnapshot
+    if (snapshotPayload.length > 0) {
+      await SheetDataSnapshot.bulkCreate(snapshotPayload, { transaction });
+    }
+
+    await transaction.commit();
+    return {
+      message: 'Processed Need with logging and snapshots.',
+      rowsAffected: insertPayload.length + snapshotPayload.length
+    };
+  } catch (error) {
+    await transaction.rollback();
+    console.error('Error processing Need:', error);
+    throw error;
+  }
+}
+
+async function processNeedMet(templateId) {
+  const transaction = await sequelize.transaction();
+  try {
+    // Step 1: Fetch headers
+    const headers = await Header.findAll({
+      where: {
+        templateId,
+        name: ['Need', 'Total_Institutional_Gift', 'Need_Met']
+      },
+      transaction
+    });
+
+    const headerMap = {};
+    headers.forEach(h => headerMap[h.name] = h.id);
+
+    if (!headerMap['Need_Met']) {
+      await transaction.rollback();
+      return { message: 'Need_Met header not found.' };
+    }
+
+    // Step 2: Fetch relevant SheetData
+    const sheetData = await SheetData.findAll({
+      where: {
+        headerId: [headerMap['Need'], headerMap['Total_Institutional_Gift']]
+      },
+      transaction
+    });
+
+    // Step 3: Group by rowIndex
+    const grouped = {};
+    sheetData.forEach(data => {
+      if (!grouped[data.rowIndex]) grouped[data.rowIndex] = {};
+      grouped[data.rowIndex][data.headerId] = parseFloat(data.value) || 0;
+    });
+
+    // Step 4: Create OperationLog
+    const operationLog = await OperationLog.create({
+      templateId,
+      operationType: 'CALCULATION'
+    }, { transaction });
+
+    // Step 5: Prepare payloads
+    const insertPayload = [];
+    const snapshotPayload = [];
+
+    for (const [rowIndex, values] of Object.entries(grouped)) {
+      const need = values[headerMap['Need']] || 0;
+      const gift = values[headerMap['Total_Institutional_Gift']] || 0;
+
+      const needMet = calculateNeedMet(need, gift);
+
+      const existing = await SheetData.findOne({
+        where: {
+          headerId: headerMap['Need_Met'],
+          rowIndex: parseInt(rowIndex)
+        },
+        transaction
+      });
+
+      if (existing) {
+        snapshotPayload.push({
+          operationLogId: operationLog.id,
+          headerId: headerMap['Need_Met'],
+          rowIndex: parseInt(rowIndex),
+          originalValue: existing.value,
+          newValue: needMet.toString(),
+          changeType: 'UPDATE'
+        });
+
+        existing.value = needMet.toString();
+        await existing.save({ transaction });
+      } else {
+        snapshotPayload.push({
+          operationLogId: operationLog.id,
+          headerId: headerMap['Need_Met'],
+          rowIndex: parseInt(rowIndex),
+          originalValue: null,
+          newValue: needMet.toString(),
+          changeType: 'INSERT'
+        });
+
+        insertPayload.push({
+          headerId: headerMap['Need_Met'],
+          rowIndex: parseInt(rowIndex),
+          value: needMet.toString()
+        });
+      }
+    }
+
+    // Step 6: Bulk insert new SheetData
+    if (insertPayload.length > 0) {
+      await SheetData.bulkCreate(insertPayload, { transaction });
+    }
+
+    // Step 7: Bulk insert SheetDataSnapshot
+    if (snapshotPayload.length > 0) {
+      await SheetDataSnapshot.bulkCreate(snapshotPayload, { transaction });
+    }
+
+    await transaction.commit();
+    return {
+      message: 'Processed Need_Met with logging and snapshots.',
+      rowsAffected: insertPayload.length + snapshotPayload.length
+    };
+  } catch (error) {
+    await transaction.rollback();
+    console.error('Error processing Need_Met:', error);
+    throw error;
+  }
+}
+
+async function processGap(templateId) {
+  const transaction = await sequelize.transaction();
+  try {
+    // Step 1: Fetch headers
+    const headers = await Header.findAll({
+      where: {
+        templateId,
+        name: ['Need_Met', 'Gap']
+      },
+      transaction
+    });
+
+    const headerMap = {};
+    headers.forEach(h => headerMap[h.name] = h.id);
+
+    if (!headerMap['Gap']) {
+      await transaction.rollback();
+      return { message: 'Gap header not found.' };
+    }
+
+    // Step 2: Fetch relevant SheetData
+    const sheetData = await SheetData.findAll({
+      where: {
+        headerId: [headerMap['Need_Met']]
+      },
+      transaction
+    });
+
+    // Step 3: Group by rowIndex
+    const grouped = {};
+    sheetData.forEach(data => {
+      if (!grouped[data.rowIndex]) grouped[data.rowIndex] = {};
+      grouped[data.rowIndex][data.headerId] = parseFloat(data.value) || 0;
+    });
+
+    // Step 4: Create OperationLog
+    const operationLog = await OperationLog.create({
+      templateId,
+      operationType: 'CALCULATION'
+    }, { transaction });
+
+    // Step 5: Prepare payloads
+    const insertPayload = [];
+    const snapshotPayload = [];
+
+    for (const [rowIndex, values] of Object.entries(grouped)) {
+      const needMet = values[headerMap['Need_Met']] || 0;
+      const gap = calculateGap(needMet);
+
+      const existing = await SheetData.findOne({
+        where: {
+          headerId: headerMap['Gap'],
+          rowIndex: parseInt(rowIndex)
+        },
+        transaction
+      });
+
+      if (existing) {
+        snapshotPayload.push({
+          operationLogId: operationLog.id,
+          headerId: headerMap['Gap'],
+          rowIndex: parseInt(rowIndex),
+          originalValue: existing.value,
+          newValue: gap === 0 ? "" : gap.toString(),
+          changeType: 'UPDATE'
+        });
+
+        existing.value = gap === 0 ? "" : gap.toString();
+        await existing.save({ transaction });
+      } else {
+        snapshotPayload.push({
+          operationLogId: operationLog.id,
+          headerId: headerMap['Gap'],
+          rowIndex: parseInt(rowIndex),
+          originalValue: null,
+          newValue: gap === 0 ? "" : gap.toString(),
+          changeType: 'INSERT'
+        });
+
+        insertPayload.push({
+          headerId: headerMap['Gap'],
+          rowIndex: parseInt(rowIndex),
+          value: gap === 0 ? "" : gap.toString()
+        });
+      }
+    }
+
+    // Step 6: Bulk insert new SheetData
+    if (insertPayload.length > 0) {
+      await SheetData.bulkCreate(insertPayload, { transaction });
+    }
+
+    // Step 7: Bulk insert SheetDataSnapshot
+    if (snapshotPayload.length > 0) {
+      await SheetDataSnapshot.bulkCreate(snapshotPayload, { transaction });
+    }
+
+    await transaction.commit();
+    return {
+      message: 'Processed Gap with logging and snapshots.',
+      rowsAffected: insertPayload.length + snapshotPayload.length
+    };
+  } catch (error) {
+    await transaction.rollback();
+    console.error('Error processing Gap:', error);
+    throw error;
+  }
+}
+
+
+async function calculateFurtherMetrics(templateId) {
+  await processNACUBODiscountRates(templateId);
+  await processNetCharges(templateId);
+  await processNetTuition(templateId);
+  await processTotalDiscountRate(templateId);
+  await processNeed(templateId);
+  await processNeedMet(templateId);
+  await processGap(templateId);
+}
 
 async function calculateAwardInfo(req, res) {
   const transaction = await sequelize.transaction();
@@ -2975,6 +3768,7 @@ async function calculateAwardInfo(req, res) {
       return res.status(400).json({ message: 'Invalid input. templateId and acceptedStatuses are required.' });
     }
     await calculateAwards(templateId, acceptedStatuses, transaction);
+    await calculateFurtherMetrics(templateId);
     res.status(200).json({ message: 'Award information calculated successfully.' });
   } catch(error){
     await transaction.rollback();
