@@ -173,6 +173,7 @@ const createBulkRule = async (req, res) => {
 
 const applyBulkRule = async (req, res) => {
   const { id } = req.query;
+  const { sheetId } = req.body;
   try {
     const isBulkRuleExist = await CalculationRule.findByPk(id);
     if (!isBulkRuleExist) {
@@ -184,7 +185,7 @@ const applyBulkRule = async (req, res) => {
       return res.status(404).json({ error: "Header not found" });
     }
 
-    await bulkUpdates(headerId.id, isBulkRuleExist.assignments, isBulkRuleExist.templateId);
+    await bulkUpdates(headerId.id, isBulkRuleExist.assignments, isBulkRuleExist.templateId, sheetId);
     return res.status(200).json({ message: "Bulk rule applied successfully" });
   } catch (error) {
     console.error("Error applying bulk rule:", error);

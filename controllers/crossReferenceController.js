@@ -176,6 +176,7 @@ const deleteCrossReference = async (req, res) => {
 
 const applyReference = async (req, res) => {
   const { id } = req.query;
+  const { sheetId } = req.body;
   try {
     if (!id) {
       return res.status(400).json({ error: 'Reference ID is required' });
@@ -196,6 +197,7 @@ const applyReference = async (req, res) => {
     }
     
     const inputHeaderIds = crossReferences.inputHeaderIds || [];
+    const templateId = crossReferences.templateId || "";
     const inputHeaderNames = await Header.findAll({
       where: { id: { [Op.in]: inputHeaderIds } },
       attributes: ['id', 'name'],
@@ -210,7 +212,7 @@ const applyReference = async (req, res) => {
     }
     const allUnmapped = [];
     for (let i = 0; i < inputHeaderIds.length; i++) {
-      const unmapped = await applyReferenceOnData(inputHeaderIds[i], outputHeaderIds[i], mappings);
+      const unmapped = await applyReferenceOnData(inputHeaderIds[i], outputHeaderIds[i], mappings, sheetId, templateId);
       if (unmapped.length > 0) {
         allUnmapped.push({
           headerName: inputHeaderNames[i].name,

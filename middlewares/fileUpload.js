@@ -6,13 +6,20 @@ const fs = require("fs");
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     const templateId = (req.body.templateId || "").replace(/[^a-zA-Z0-9-]/g, "");
+    const sheetId = (req.body.sheetId || "").replace(/[^a-zA-Z0-9-]/g, "");
     if (!templateId) {
       const error = new Error("templateId is required");
       error.statusCode = 400;
       return cb(error);
     }
+    
+    let uploadDir;
 
-    const uploadDir = path.join("uploads", templateId);
+    if (sheetId) {
+      uploadDir = path.join("uploads", templateId, sheetId);
+    } else {
+      uploadDir = path.join("uploads", templateId);
+    }
 
     fs.mkdirSync(uploadDir, { recursive: true });
 
@@ -20,7 +27,13 @@ const storage = multer.diskStorage({
   },
   filename: (req, file, cb) => {
     const templateId = (req.body.templateId || "").replace(/[^a-zA-Z0-9-]/g, "");
-    const uploadDir = path.join("uploads", templateId);
+    const sheetId = (req.body.sheetId || "").replace(/[^a-zA-Z0-9-]/g, "");
+    let uploadDir;
+    if (sheetId) {
+      uploadDir = path.join("uploads", templateId, sheetId);
+    } else {
+      uploadDir = path.join("uploads", templateId);
+    }
     const targetFilename = file.originalname;
 
     if (fs.existsSync(path.join(uploadDir, targetFilename))) {
@@ -39,7 +52,7 @@ const upload = multer({
   limits: {
     fileSize: 100 * 1024 * 1024,
     files: 10,
-    fields: 5,
+    fields: 6,
   },
   fileFilter: (req, file, cb) => {
     const allowedTypes = [
@@ -60,7 +73,8 @@ const upload = multer({
   { name: "files", maxCount: 10 },
   { name: "headerOrientation", maxCount: 1 },
   { name: "headerPosition", maxCount: 1 },
-  { name: "isRowSkipped", maxCount: 1 }
+  { name: "isRowSkipped", maxCount: 1 },
+  { name: "sheetId", maxCount: 1 },
 ]);
 
 module.exports = upload;

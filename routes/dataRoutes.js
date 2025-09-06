@@ -11,15 +11,14 @@ router.get('/export-data', dataController.getTemplateDataWithExcel);
 router.put('/update-rows', dataController.updateRows);
 router.put('/bulk-update', dataController.bulkUpdateData);
 router.put('/padding', dataController.addPadding);
-router.get('/get-matrixpop/:templateId', dataController.getMatrixPop);
 router.put('/apply-calculation', dataController.applyCalculations);
-router.post('/add-row/:templateId', dataController.addRow);
+router.post('/add-row/:templateId/:sheetId', dataController.addRow);
 router.put('/find-zipcode', dataController.findZipCodes);
 router.put('/score-conversion', dataController.scoreConversion);
 router.put('/cip-conversion', dataController.cipConversion);
 router.put('/zip-county-conversion', dataController.zipCountyConversion);
 router.post('/apply-quality-rules', dataController.evaluateRulesAndReturnFilteredData);
-router.delete('/delete-row/:templateId/:rowIndex', dataController.deleteRow);
+router.delete('/delete-row/:templateId/:sheetId/:rowIndex', dataController.deleteRow);
 router.put('/award-calculation', dataController.calculateAwardInfo);
 
 module.exports = router;

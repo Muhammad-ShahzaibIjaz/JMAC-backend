@@ -17,6 +17,10 @@ const File = sequelize.define(
       type: DataTypes.UUID,
       allowNull: false,
     },
+    sheetId: {
+      type: DataTypes.UUID,
+      allowNull: true,
+    }
   },
   {
     tableName: 'File',

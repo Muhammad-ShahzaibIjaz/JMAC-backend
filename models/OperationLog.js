@@ -13,6 +13,10 @@ const OperationLog = sequelize.define(
             type: DataTypes.UUID,
             allowNull: false,
         },
+        sheetId: {
+            type: DataTypes.UUID,
+            allowNull: false,
+        },
         operationType: {
             type: DataTypes.ENUM('BULK_UPDATE', 'CALCULATION', 'GPA', 'ZIPCODE', 'ADD_ROW', 'UPDATE_ROW', 'DELETE_ROW' ,'PADDING_UPDATE', 'CONVERSION', 'ADD_HEADER'),
             allowNull: false,

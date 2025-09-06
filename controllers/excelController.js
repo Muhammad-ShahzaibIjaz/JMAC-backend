@@ -458,7 +458,7 @@ function validateTextLengths(rowMap, headers, headerMapping) {
   }
 }
 
-async function ensureHeadersExist(templateHeaders, templateId, transaction, rowMap, headers) {
+async function ensureHeadersExist(templateHeaders, templateId, transaction, rowMap, headers, sheetId) {
   const saved = [];
 
   for (const th of templateHeaders) {
@@ -467,7 +467,7 @@ async function ensureHeadersExist(templateHeaders, templateId, transaction, rowM
       header = await Header.create({ ...th, templateId }, { transaction });
     }
 
-    const existing = await SheetData.findAll({ where: { headerId: header.id }, transaction });
+    const existing = await SheetData.findAll({ where: { headerId: header.id, sheetId }, transaction });
     const existingCount = existing.length;
     const nonNullExisting = existing.filter(d => d.value != null).length;
 
@@ -482,7 +482,7 @@ async function ensureHeadersExist(templateHeaders, templateId, transaction, rowM
       (newNonNull === nonNullExisting && newCount > existingCount);
 
     if (shouldUpdate) {
-      await SheetData.destroy({ where: { headerId: header.id }, transaction });
+      await SheetData.destroy({ where: { headerId: header.id, sheetId }, transaction });
     }
 
     saved.push({ header, shouldUpdate });
@@ -535,7 +535,7 @@ function prepareInsertPayload(sheet, templateHeadersFromDB, dbMappings) {
 }
 
 
-async function saveFileAndSingleSheetData(processedFiles, templateId, mappingTemplateId, transaction) {
+async function saveFileAndSingleSheetData(processedFiles, templateId, mappingTemplateId, sheetId, transaction) {
   const sheet = getValidSheet(processedFiles);
   const templateHeaders = await fetchTemplateHeaders(templateId, transaction);
   const mapHeaders = await fetchMapHeaders(mappingTemplateId, transaction);
@@ -545,7 +545,7 @@ async function saveFileAndSingleSheetData(processedFiles, templateId, mappingTem
   const rowMap = deduplicateRows(sheet.data);
   validateTextLengths(rowMap, sheet.headers, headerMapping);
 
-  const savedHeaders = await ensureHeadersExist(templateHeaders, templateId, transaction, rowMap, sheet.headers);
+  const savedHeaders = await ensureHeadersExist(templateHeaders, templateId, transaction, rowMap, sheet.headers, sheetId);
   let rowIndex = 1;
   const sheetDataPayload = [];
 
@@ -557,7 +557,8 @@ async function saveFileAndSingleSheetData(processedFiles, templateId, mappingTem
         id: uuidv4(),
         rowIndex,
         value: row[header.id] ?? null,
-        headerId: header.id
+        headerId: header.id,
+        sheetId: sheetId
       });
     }
     rowIndex++;
@@ -644,21 +645,21 @@ async function uploadAndGetHeaders(req, res) {
 
 async function uploadAndProcessData(req, res) {
   try {
-    const { templateId, mappingtemplateId, fileNames } = req.body;
-    if (!templateId || !mappingtemplateId) {
-      return res.status(400).json({ error: 'templateId and Mapping TemplateId are required' });
+    const { templateId, mappingtemplateId, fileNames, sheetId } = req.body;
+    if (!templateId || !mappingtemplateId || !sheetId) {
+      return res.status(400).json({ error: 'templateId, Mapping TemplateId, and sheetId are required' });
     }
 
     // Construct file objects for headerProcessor
     const files = fileNames.map(fileName => ({
-      path: path.join('uploads', templateId, fileName),
+      path: path.join('uploads', templateId, sheetId, fileName),
       originalname: fileName
     }));
 
     const processedFiles = await headerProcessor(files);
     
     await sequelize.transaction(async (t) => {
-      await saveFileAndSingleSheetData(processedFiles, templateId, mappingtemplateId ,t);
+      await saveFileAndSingleSheetData(processedFiles, templateId, mappingtemplateId, sheetId, t);
     });
 
     res.status(201).json({
@@ -1002,7 +1003,7 @@ function processSheetsAndMergeData(allSheets, commonHeader, templateHeaders, hea
 }
 
 
-async function saveFileAndDataOptimized(processedFiles, templateId, mappingTemplateId, transaction) {
+async function saveFileAndDataOptimized(processedFiles, templateId, mappingTemplateId, sheetId, transaction) {
   const allSheets = processedFiles.flatMap(file =>
     file.sheets.map(sheet => ({
       fileName: file.fileName,
@@ -1024,7 +1025,8 @@ async function saveFileAndDataOptimized(processedFiles, templateId, mappingTempl
         id: uuidv4(),
         rowIndex,
         value,
-        headerId
+        headerId,
+        sheetId
       })
     }
   }
@@ -1039,13 +1041,13 @@ async function saveFileAndDataOptimized(processedFiles, templateId, mappingTempl
 async function processAndSaveSelectedSheets(req, res) {
   try{
 
-    const { templateId, sheetSelectionData, mappingtemplateId} = req.body;
+    const { templateId, sheetSelectionData, mappingtemplateId, sheetId} = req.body;
 
     if (!templateId) {
       throw new Error("templateId is required");
     }
-    if (!templateId) {
-      throw new Error("mappingtemplateId is required");
+    if (!mappingtemplateId || !sheetId) {
+      throw new Error("mappingtemplateId and sheetId is required");
     }
     if (!sheetSelectionData || !Array.isArray(sheetSelectionData)) {
       throw new Error("sheetSelectionData must be an array");
@@ -1066,7 +1068,8 @@ async function processAndSaveSelectedSheets(req, res) {
     const existingFiles = await File.findAll({
       where: {
         templateId,
-        filename: sheetSelectionData.map(s => s.fileName)
+        filename: sheetSelectionData.map(s => s.fileName),
+        sheetId
       },
       attributes: ['filename']
     });
@@ -1079,7 +1082,7 @@ async function processAndSaveSelectedSheets(req, res) {
 
     const files = [];
     for (const selection of sheetSelectionData) {
-      const filePath = path.join("uploads", templateId, selection.fileName);
+      const filePath = path.join("uploads", templateId, sheetId, selection.fileName);
       if (!fs.existsSync(filePath)) {
         throw new Error(`File not found: ${filePath}`);
       }
@@ -1087,6 +1090,7 @@ async function processAndSaveSelectedSheets(req, res) {
         id: uuidv4(),
         path: filePath,
         originalname: selection.fileName,
+        sheetId
       });
     }
 
@@ -1131,7 +1135,7 @@ async function processAndSaveSelectedSheets(req, res) {
     }
 
     await sequelize.transaction(async (t) => {
-      await saveFileAndDataOptimized(filteredProcessedFiles, templateId, mappingtemplateId ,t);
+      await saveFileAndDataOptimized(filteredProcessedFiles, templateId, mappingtemplateId, sheetId, t);
     });
 
     res.status(201).json({
@@ -1145,10 +1149,9 @@ async function processAndSaveSelectedSheets(req, res) {
 
 
 
-
 async function getFileSheets(req, res) {
   try{
-    const { templateId, headerOrientation, headerPosition } = req.body; // Assuming templateId is sent in the request body
+    const { templateId, headerOrientation, headerPosition, sheetId=null } = req.body; // Assuming templateId is sent in the request body
     if (!req.files.files || req.files.files.length === 0) {
       return res.status(400).json({ error: 'No files uploaded' });
     }
@@ -1168,6 +1171,7 @@ async function getFileSheets(req, res) {
           {
             filename: file.originalname,
             templateId,
+            sheetId
           }
         );
       } catch (createError) {

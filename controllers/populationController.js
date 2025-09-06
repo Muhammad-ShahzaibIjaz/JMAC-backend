@@ -13,12 +13,12 @@ const categorizer = async (req, res) => {
   const transaction = await sequelize.transaction();
 
   try {
-    const { templateId, targetHeader, categoryCount } = req.query;
+    const { templateId, sheetId, targetHeader, categoryCount } = req.query;
 
-    if (!templateId || !targetHeader || !categoryCount) {
+    if (!templateId || !sheetId || !targetHeader || !categoryCount) {
       await transaction.rollback();
       return res.status(400).json({
-        error: "Missing required fields: templateId, targetHeader and categoryCount are required",
+        error: "Missing required fields: templateId, sheetId, targetHeader and categoryCount are required",
       });
     }
 
@@ -34,7 +34,7 @@ const categorizer = async (req, res) => {
 
     // Stream values for memory efficiency
     const stream = await SheetData.findAll({
-      where: { headerId: header.id },
+      where: { headerId: header.id, sheetId },
       attributes: ["value"],
       raw: true,
       transaction,
@@ -75,7 +75,7 @@ const categorizer = async (req, res) => {
       if (numericValues.length === 0) throw new Error("No valid numerical values found");
 
       const [minMax] = await SheetData.findAll({
-        where: { headerId: header.id },
+        where: { headerId: header.id, sheetId },
         attributes: [
           [fn("MIN", col("value")), "min"],
           [fn("MAX", col("value")), "max"]
@@ -337,13 +337,13 @@ async function getDataWithRange(req, res) {
   }
 }
 
-async function getStructuredData(templateId) {
+async function getStructuredData(templateId, sheetId) {
   const headers = await Header.findAll({ where: { templateId }, raw: true });
   const headerIds = headers.map(h => h.id);
   const headerNames = Object.fromEntries(headers.map(h => [h.id, h.name]));
 
   const sheetRows = await SheetData.findAll({
-    where: { headerId: { [Op.in]: headerIds } },
+    where: { headerId: { [Op.in]: headerIds }, sheetId },
     attributes: ['rowIndex', 'headerId', 'value'],
     raw: true,
   });
@@ -507,9 +507,9 @@ function manualDistribute(data, baseHeader, nestedHeaders = [], manualRanges = [
 
 
 async function getCategoryStats(req, res) {
-  const { templateId, baseHeader, targetHeader, categoryCount, autoDistribution, nestedHeaders = [], manualRanges = [] } = req.body;
+  const { templateId, sheetId, baseHeader, targetHeader, categoryCount, autoDistribution, nestedHeaders = [], manualRanges = [] } = req.body;
   try{
-    const structuredData = await getStructuredData(templateId);
+    const structuredData = await getStructuredData(templateId, sheetId);
     let breakdown = [];
     if (autoDistribution) {
       if (!targetHeader || categoryCount > structuredData.length) {
@@ -527,17 +527,17 @@ async function getCategoryStats(req, res) {
 }
 
 
-async function countStudentsByTemplateRaw(templateId) {
+async function countStudentsByTemplateRaw(templateId, sheetId) {
   try {
     const query = `
       SELECT COUNT(DISTINCT sd."rowIndex") AS "studentCount"
       FROM "SheetData" sd
       JOIN "Header" h ON sd."headerId" = h."id"
-      WHERE h."templateId" = :templateId
+      WHERE h."templateId" = :templateId AND sd."sheetId" = :sheetId
     `;
 
     const [result] = await sequelize.query(query, {
-      replacements: { templateId },
+      replacements: { templateId, sheetId },
       type: sequelize.QueryTypes.SELECT,
     });
 
@@ -549,9 +549,9 @@ async function countStudentsByTemplateRaw(templateId) {
 }
 
 async function countStudentsByTemplate(req, res) {
-  const { templateId } = req.params;
+  const { templateId, sheetId } = req.params;
   try {
-    const count = await countStudentsByTemplateRaw(templateId);
+    const count = await countStudentsByTemplateRaw(templateId, sheetId);
     res.status(200).json({ count });
   } catch (err) {
     console.error('Error counting students by template:', err);

@@ -6,7 +6,7 @@ async function copySheetData(sheetDataPayload) {
   const client = await pool.connect();
   try {
     const stream = client.query(copyFrom(`
-      COPY "SheetData" ("id", "rowIndex", "value", "headerId", "createdAt", "updatedAt")
+      COPY "SheetData" ("id", "rowIndex", "value", "headerId", "sheetId", "createdAt", "updatedAt")
       FROM STDIN WITH (FORMAT csv)
     `));
 
@@ -20,6 +20,7 @@ async function copySheetData(sheetDataPayload) {
         row.rowIndex ?? '',
         row.value ?? '',
         row.headerId ?? '',
+        row.sheetId ?? '',
         now,
         now,
       ]);

@@ -6,7 +6,7 @@ const path = require('path');
 
 async function deleteFile(req, res) {
   try {
-    const { templateId, fileName } = req.query;
+    const { templateId, fileName, sheetId=null } = req.query;
 
     if (!templateId) {
       return res.status(400).json({ error: 'templateId is required' });
@@ -15,13 +15,19 @@ async function deleteFile(req, res) {
       return res.status(400).json({ error: 'fileName is required' });
     }
 
-    const filePath = path.join('uploads', templateId, fileName);
+    let filePath;
+    if (sheetId) {
+      filePath = path.join('uploads', templateId, sheetId, fileName);
+    } else {
+      filePath = path.join('uploads', templateId, fileName);
+    }
 
     await sequelize.transaction(async (transaction) => {
       const fileRecord = await File.findOne({
         where: {
           templateId,
           filename: fileName,
+          sheetId 
         },
         transaction,
       });
@@ -153,11 +159,12 @@ async function processFiles(files) {
 
 async function getFiles(req, res) {
   try {
-    const { templateId } = req.params;
+    const { templateId, sheetId } = req.query;
     
     const files = await File.findAll({
       where: {
-        templateId: templateId
+        templateId: templateId,
+        sheetId: sheetId ? sheetId : null
       },
       attributes: ['filename']
     });

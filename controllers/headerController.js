@@ -593,7 +593,15 @@ async function getHeaderID(templateId) {
 async function createRunTimeHeader(req, res) {
   const transaction = await sequelize.transaction();
   try {
-    const { templateId, name, criticalityLevel, columnType } = req.body;
+    const { templateId, sheetId, name, criticalityLevel, columnType } = req.body;
+
+    if (!templateId || templateId.trim().length === 0) {
+      throw new Error('Template ID is required and must be non-empty');
+    }
+
+    if (!sheetId || sheetId.trim().length === 0) {
+      throw new Error('sheetId is required and must be non-empty');
+    }
 
     // Validate inputs
     if (!name || typeof name !== 'string' || name.trim().length === 0) {
@@ -611,6 +619,7 @@ async function createRunTimeHeader(req, res) {
       {
         id: uuidv4(),
         templateId,
+        sheetId,
         operationType: 'ADD_HEADER',
       },
       { transaction }
@@ -634,10 +643,10 @@ async function createRunTimeHeader(req, res) {
       SELECT MAX(sd."rowIndex") as "maxRow"
       FROM "SheetData" sd
       JOIN "Header" h ON sd."headerId" = h.id
-      WHERE h."templateId" = :templateId
+      WHERE h."templateId" = :templateId AND sd."sheetId" = :sheetId
       `,
       {
-        replacements: { templateId },
+        replacements: { templateId, sheetId },
         type: sequelize.QueryTypes.SELECT,
         transaction,
       }
@@ -654,8 +663,9 @@ async function createRunTimeHeader(req, res) {
       sheetDataEntries.push({
         id: sheetDataId,
         rowIndex: i+1,
-        value: null,
+        value: "",
         headerId: header.id,
+        sheetId
       });
 
       // Create snapshot for potential revert
@@ -663,9 +673,10 @@ async function createRunTimeHeader(req, res) {
         id: uuidv4(),
         operationLogId: operationLog.id,
         headerId: header.id,
+        sheetId,
         rowIndex: i,
-        originalValue: null,
-        newValue: null,
+        originalValue: "",
+        newValue: "",
         changeType: 'INSERT',
       });
     }

@@ -247,15 +247,23 @@ function sortHeadersFlexibleMatch(headers) {
 
 async function getHeadersWithValidatedData(req, res) {
   try {
-    const { templateId, currentPage, pageSize } = req.query;
+    const { templateId, sheetId, currentPage, pageSize } = req.query;
 
     // Validation checks
     if (!templateId) {
       return res.status(400).json({ error: 'templateId is required' });
     }
 
+    if (!sheetId) {
+      return res.status(400).json({ error: 'sheetId is required' });
+    }
+
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(templateId)) {
       return res.status(400).json({ error: 'templateId must be a valid UUID' });
+    }
+
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sheetId)) {
+      return res.status(400).json({ error: 'sheetId must be a valid UUID' });
     }
 
     const page = parseInt(currentPage);
@@ -280,7 +288,9 @@ async function getHeadersWithValidatedData(req, res) {
     const sortedHeaders = sortHeadersFlexibleMatch(headers);
     const headerMap = new Map(sortedHeaders.map(h => [h.id, h]));
 
+    console.time('Distinct RowIndex Fetch');
     const distinctRowIndices = await SheetData.findAll({
+      where: { sheetId },
       include: [{ model: Header, where: { templateId }, attributes: [] }],
       attributes: ['rowIndex'],
       group: ['rowIndex'],
@@ -289,24 +299,31 @@ async function getHeadersWithValidatedData(req, res) {
       limit: size,
       raw: true,
     });
+    console.timeEnd('Distinct RowIndex Fetch');
 
     const rowIndexList = distinctRowIndices.map(r => r.rowIndex);
 
+    console.time('Paginated Data Fetch');
     const paginatedData = await SheetData.findAll({
       include: [{ model: Header, where: { templateId }, attributes: [] }],
       attributes: ['id', 'rowIndex', 'value', 'headerId'],
       where: { 
         rowIndex: rowIndexList,
-       },
+        sheetId
+      },
       order: [['rowIndex', 'ASC']],
     });
+    console.timeEnd('Paginated Data Fetch');
 
     // Count total rows efficiently
+    console.time('Total Rows Count');
     const totalRows = await SheetData.count({
+      where: { sheetId },
       include: [{ model: Header, where: { templateId }, attributes: [] }],
       distinct: true,
       col: 'rowIndex',
     });
+    console.timeEnd('Total Rows Count');
     const totalPages = Math.ceil(totalRows / size);
 
     const paginatedDataByHeader = {};
@@ -368,11 +385,11 @@ async function getHeadersWithValidatedData(req, res) {
 
 async function getFilteredHeaderData(req, res) {
   try {
-    const { templateId, selectedHeader, dataSearchQuery, currentPage, pageSize } = req.query;
+    const { templateId, sheetId, selectedHeader, dataSearchQuery, currentPage, pageSize } = req.query;
 
     // 🔒 Basic Validation
-    if (!templateId || !selectedHeader || !dataSearchQuery) {
-      return res.status(400).json({ error: 'templateId, selectedHeader, and dataSearchQuery are required' });
+    if (!templateId || !sheetId || !selectedHeader || !dataSearchQuery) {
+      return res.status(400).json({ error: 'templateId, sheetId, selectedHeader, and dataSearchQuery are required' });
     }
 
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(templateId)) {
@@ -406,6 +423,7 @@ async function getFilteredHeaderData(req, res) {
     const matchedRows = await SheetData.findAll({
       where: {
         headerId: selectedHeader,
+        sheetId,
         value: { [Op.iLike]: `%${dataSearchQuery}%` },
       },
       attributes: ['rowIndex'],
@@ -426,6 +444,7 @@ async function getFilteredHeaderData(req, res) {
       include: [{ model: Header, where: { templateId }, attributes: [] }],
       where: {
         rowIndex: { [Op.in]: rowIndexList },
+        sheetId
       },
       attributes: ['id', 'rowIndex', 'value', 'headerId'],
       order: [['rowIndex', 'ASC'], ['headerId', 'ASC']],
@@ -436,6 +455,7 @@ async function getFilteredHeaderData(req, res) {
     const totalRows = await SheetData.count({
       where: {
         headerId: selectedHeader,
+        sheetId,
         value: { [Op.iLike]: `%${dataSearchQuery}%` },
       },
       distinct: true,
@@ -506,10 +526,10 @@ async function getFilteredHeaderData(req, res) {
 
 async function getHeadersWithDuplicateData(req, res) {
   try {
-    const { templateId } = req.query;
+    const { templateId, sheetId } = req.query;
 
-    if (!templateId) {
-      return res.status(400).json({ error: 'templateId is required' });
+    if (!templateId || !sheetId) {
+      return res.status(400).json({ error: 'templateId and sheetId are required' });
     }
 
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(templateId)) {
@@ -541,13 +561,14 @@ async function getHeadersWithDuplicateData(req, res) {
         FROM "Header"
         WHERE "templateId" = :templateId
       )
-      SELECT sd."id", sd."rowIndex", sd."value", sd."headerId",
+      SELECT sd."id", sd."rowIndex", sd."value", sd."headerId", sd."sheetId",
              fh."name" AS "headerName", fh."columnType", fh."criticalityLevel"
       FROM "SheetData" sd
       JOIN filtered_headers fh ON sd."headerId" = fh."id"
+      WHERE sd."sheetId" = :sheetId
       ORDER BY sd."rowIndex" ASC
     `, {
-      replacements: { templateId },
+      replacements: { templateId, sheetId },
       type: QueryTypes.SELECT,
       benchmark: true,
       logging: false,
@@ -765,7 +786,7 @@ async function validateTemplate(templateId) {
 
 async function getTemplateDataWithExcel(req, res) {
   try {
-    const { templateId, templateName } = req.query;
+    const { templateId, sheetId, templateName } = req.query;
 
     console.time('header Fetch');
     // Fetch all headers for the template
@@ -787,10 +808,10 @@ async function getTemplateDataWithExcel(req, res) {
         SELECT sd.id, sd."rowIndex", sd.value, sd."headerId"
         FROM "SheetData" sd
         INNER JOIN "Header" h ON h.id = sd."headerId"
-        WHERE h."templateId" = :templateId
+        WHERE h."templateId" = :templateId AND sd."sheetId" = :sheetId
         ORDER BY sd."rowIndex" ASC, sd."headerId" ASC
       `, {
-        replacements: { templateId },
+        replacements: { templateId, sheetId },
         type: sequelize.QueryTypes.SELECT,
       });
     console.timeEnd('SheetData Fetch');
@@ -1145,7 +1166,7 @@ async function updateSheetData(updates, options = {}) {
 }
 
 
-async function updateData(updates, templateId) {
+async function updateData(updates, templateId, sheetId) {
   const transaction = await SheetData.sequelize.transaction();
   let updatedCount = 0;
   const snapshots = [];
@@ -1154,6 +1175,7 @@ async function updateData(updates, templateId) {
     const operationLog = await OperationLog.create({
       id: uuidv4(),
       templateId,
+      sheetId,
       operationType: 'UPDATE_ROW',
     }, { transaction });
 
@@ -1164,6 +1186,7 @@ async function updateData(updates, templateId) {
         const currentRecord = await SheetData.findOne({
           where: {
             headerId: datum.headerId,
+            sheetId: sheetId,
             rowIndex: update.rowIndex, 
           },
           transaction,
@@ -1190,6 +1213,7 @@ async function updateData(updates, templateId) {
           {
             where: {
               headerId: datum.headerId,
+              sheetId: sheetId,
               rowIndex: update.rowIndex,
             },
             transaction,
@@ -1216,15 +1240,15 @@ async function updateData(updates, templateId) {
 
 async function updateRows(req, res) {
   try{
-    const {updates, templateId} = req.body;
-    if(!templateId) {
-      throw new Error('templateId is not provided');
+    const {updates, templateId, sheetId} = req.body;
+    if(!templateId || !sheetId) {
+      throw new Error('templateId and sheetId are not provided');
     }
     if (!Array.isArray(updates) || updates.length === 0) {
       throw new Error('Updates must be a non-empty array');
     }
 
-    const result = await updateData(updates, templateId);
+    const result = await updateData(updates, templateId, sheetId);
     
     res.status(200).json({ message: "OK" });
   } catch(error) {
@@ -1241,16 +1265,18 @@ async function bulkUpdates(headerId, value, templateId, sheetId) {
     const operationLog = await OperationLog.create({
       id: uuidv4(),
       templateId,
+      sheetId,
       operationType: 'BULK_UPDATE',
     }, { transaction });
 
     const currentRecords = await SheetData.findAll({
-      where: { headerId },
+      where: { headerId, sheetId },
       attributes: ['id', 'rowIndex', 'value'],
       transaction
     });
 
     const maxRowIndexRecord = await SheetData.findOne({
+      where: { sheetId },
       include: [{
         model: Header,
         where: { templateId },
@@ -1277,7 +1303,7 @@ async function bulkUpdates(headerId, value, templateId, sheetId) {
 
     const [affectedRows] = await SheetData.update(
       { value: value },
-      { where: { headerId: headerId }, transaction }
+      { where: { headerId: headerId, sheetId: sheetId }, transaction }
     );
 
     const newRows = [];
@@ -1286,6 +1312,7 @@ async function bulkUpdates(headerId, value, templateId, sheetId) {
         newRows.push({
           id: uuidv4(),
           headerId: headerId,
+          sheetId: sheetId,
           rowIndex: i,
           value: value
         });
@@ -1342,12 +1369,13 @@ async function addPaddingInData(headerId, templateId, sheetId, padValue, padLeng
     const operationLog = await OperationLog.create({
       id: uuidv4(),
       templateId,
+      sheetId,
       operationType: 'PADDING_UPDATE',
     }, { transaction });
 
     // Fetch all records for the given headerId
     const records = await SheetData.findAll({ 
-      where: { headerId },
+      where: { headerId, sheetId },
       transaction 
     });
 
@@ -1360,7 +1388,7 @@ async function addPaddingInData(headerId, templateId, sheetId, padValue, padLeng
         await SheetData.update(
           { value: "" }, // or null if you prefer
           {
-            where: { id: record.id },
+            where: { id: record.id, sheetId },
             transaction
           }
         );
@@ -1396,7 +1424,7 @@ async function addPaddingInData(headerId, templateId, sheetId, padValue, padLeng
       const [count] = await SheetData.update(
         { value: paddedValue },
         {
-          where: { id: record.id },
+          where: { id: record.id, sheetId },
           transaction
         }
       );
@@ -1582,6 +1610,7 @@ async function applyCalculations(req, res) {
     const operationLog = await OperationLog.create({
       id: uuidv4(),
       templateId,
+      sheetId,
       operationType: 'CALCULATION',
     }, { transaction });
 
@@ -1630,7 +1659,10 @@ async function applyCalculations(req, res) {
 
     // Fetch SheetData
     const sheetData = await SheetData.findAll({
-      where: { headerId: dbHeaders.map(h => h.id) },
+      where: { 
+        headerId: { [Op.in]: dbHeaders.map(h => h.id) },
+        sheetId, 
+      },
       attributes: ['headerId', 'rowIndex', 'value'],
       transaction
     });
@@ -1746,6 +1778,7 @@ async function applyCalculations(req, res) {
 
               upserts.push({
                 headerId: headerMap[assignment.header].id,
+                sheetId,
                 rowIndex: parseInt(rowIndex),
                 value: String(targetValue),
               });
@@ -1784,13 +1817,17 @@ async function applyCalculations(req, res) {
 
 
 const addRow = async (req, res) => {
-  const { templateId } = req.params;
+  const { templateId, sheetId } = req.params;
 
   try {
     // Check if template exists
     const template = await Template.findByPk(templateId);
     if (!template) {
       return res.status(404).json({ error: 'Template not found' });
+    }
+
+    if (!sheetId) {
+      return res.status(400).json({ error: 'sheetId is required' });
     }
 
     const headers = await Header.findAll({
@@ -1806,6 +1843,7 @@ const addRow = async (req, res) => {
       const maxRowIndex = await SheetData.max('rowIndex', {
         where: {
           headerId: headers.map((h) => h.id),
+          sheetId,
         },
         transaction: t,
       });
@@ -1820,13 +1858,14 @@ const addRow = async (req, res) => {
               rowIndex: newRowIndex,
               value: "",
               headerId: header.id,
+              sheetId,
             },
             { transaction: t },
           ),
         ),
       );
 
-      await OperationLog.create({ id: uuidv4(), templateId, operationType: 'ADD_ROW' }, { transaction: t });
+      await OperationLog.create({ id: uuidv4(), templateId, sheetId, operationType: 'ADD_ROW' }, { transaction: t });
     });
     return res.status(201).json({ message: "Row Added"});
   } catch (error) {
@@ -1894,6 +1933,7 @@ const findZipCodes = async (req, res) => {
     const operationLog = await OperationLog.create({
       id: uuidv4(),
       templateId,
+      sheetId,
       operationType: 'ZIPCODE'
     }, { transaction });
 
@@ -1922,6 +1962,7 @@ const findZipCodes = async (req, res) => {
         headerId: {
           [Op.in]: [streetAddressHeader.id, cityHeader.id, stateHeader.id, zipcodeHeader.id],
         },
+        sheetId,
       },
     });
 
@@ -1987,6 +2028,7 @@ const findZipCodes = async (req, res) => {
             updates.push({
               id: uuidv4(),
               headerId: zipcodeHeader.id,
+              sheetId,
               rowIndex: result.rowIndex,
               value: result.zipCode,
             });
@@ -2054,6 +2096,7 @@ const scoreConversion = async (req, res) => {
     const operationLog = await OperationLog.create({
       id: uuidv4(),
       templateId,
+      sheetId,
       operationType: 'CONVERSION'
     }, { transaction });
 
@@ -2098,7 +2141,8 @@ const scoreConversion = async (req, res) => {
       where: {
         headerId: {
           [Op.in]: headerIds,
-        }
+        },
+        sheetId,
       },
       transaction
     });
@@ -2196,6 +2240,7 @@ const scoreConversion = async (req, res) => {
             updates.push({
               id: uuidv4(),
               headerId: targetHeaderID.id,
+              sheetId,
               rowIndex: row.rowIndex,
               value: newTargetValue,
             });
@@ -2266,6 +2311,7 @@ const cipConversion = async (req, res) => {
     const operationLog = await OperationLog.create({
       id: uuidv4(),
       templateId,
+      sheetId,
       operationType: 'CONVERSION'
     }, { transaction });
 
@@ -2290,7 +2336,8 @@ const cipConversion = async (req, res) => {
       where: {
         headerId: {
           [Op.in]: [sourceHeaderID.id, targetHeaderID.id],
-        }
+        },
+        sheetId,
       },
       transaction
     });
@@ -2357,6 +2404,7 @@ const cipConversion = async (req, res) => {
             updates.push({
               id: uuidv4(),
               headerId: targetHeaderID.id,
+              sheetId,
               rowIndex: row.rowIndex,
               value: newTargetValue,
             });
@@ -2416,8 +2464,8 @@ const cipConversion = async (req, res) => {
 const zipCountyConversion = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
-    const { templateId, sourceHeader, targetHeader } = req.body;
-    if (!templateId || !sourceHeader || !targetHeader) {
+    const { templateId, sheetId, sourceHeader, targetHeader } = req.body;
+    if (!templateId || !sheetId || !sourceHeader || !targetHeader) {
       await transaction.rollback();
       return res.status(400).json({ error: 'Missing required fields' });
     }
@@ -2425,6 +2473,7 @@ const zipCountyConversion = async (req, res) => {
     const operationLog = await OperationLog.create({
       id: uuidv4(),
       templateId,
+      sheetId,
       operationType: 'CONVERSION'
     }, { transaction });
 
@@ -2447,7 +2496,8 @@ const zipCountyConversion = async (req, res) => {
       where: {
         headerId: {
           [Op.in]: [sourceHeaderID.id, targetHeaderID.id],
-        }
+        },
+        sheetId,
       },
       transaction
     });
@@ -2501,6 +2551,7 @@ const zipCountyConversion = async (req, res) => {
         updates.push({
           id: uuidv4(),
           headerId: targetHeaderID.id,
+          sheetId,
           rowIndex: parseInt(rowIndex),
           value: county
         });
@@ -2509,6 +2560,7 @@ const zipCountyConversion = async (req, res) => {
           id: uuidv4(),
           operationLogId: operationLog.id,
           headerId: targetHeaderID.id,
+          sheetId,
           rowIndex: parseInt(rowIndex),
           originalValue: originalTargetValue,
           newValue: county,
@@ -2547,10 +2599,10 @@ const zipCountyConversion = async (req, res) => {
 async function evaluateRulesAndReturnFilteredData(req, res) {
   try {
     // Validate request
-    const { templateId, conditions = [], currentPage = 1, pageSize = 10, headers = [] } = req.body;
+    const { templateId, sheetId, conditions = [], currentPage = 1, pageSize = 10, headers = [] } = req.body;
 
-    if (!templateId) {
-      return res.status(400).json({ error: 'templateId is required' });
+    if (!templateId || !sheetId) {
+      return res.status(400).json({ error: 'templateId and sheetId is required' });
     }
 
     // Validate pagination
@@ -2604,7 +2656,10 @@ async function evaluateRulesAndReturnFilteredData(req, res) {
 
     // ⚡ Fetch and organize SheetData
     const allSheetData = await SheetData.findAll({
-      where: { headerId: dbHeaders.map(h => h.id) },
+      where: {
+        headerId: { [Op.in]: dbHeaders.map(h => h.id) },
+        sheetId,
+      },
       attributes: ['id', 'headerId', 'rowIndex', 'value'],
       order: [['rowIndex', 'ASC'], ['headerId', 'ASC']],
       raw: true,
@@ -2729,11 +2784,21 @@ async function evaluateRulesAndReturnFilteredData(req, res) {
 }
 
 
-async function applyReferenceOnData(inputHeaderId, outputHeaderId, mappings) {
+async function applyReferenceOnData(inputHeaderId, outputHeaderId, mappings, sheetId, templateId) {
+  const transaction = await sequelize.transaction();
   try {
+
+    const operationLog = await OperationLog.create({
+      id: uuidv4(),
+      templateId,
+      sheetId,
+      operationType: 'CALCULATION'
+    }, { transaction });
+
     const allData = await SheetData.findAll({
-      where: { headerId: { [Op.in]: [inputHeaderId, outputHeaderId] } },
+      where: { headerId: { [Op.in]: [inputHeaderId, outputHeaderId] }, sheetId },
       raw: true,
+      transaction
     });
 
     const grouped = new Map();
@@ -2749,6 +2814,7 @@ async function applyReferenceOnData(inputHeaderId, outputHeaderId, mappings) {
 
     const updates = [];
     const inserts = [];
+    const snapshots = [];
     const unmappedValues = [];
 
     for (const [rowIndex, rowGroup] of grouped.entries()) {
@@ -2763,11 +2829,30 @@ async function applyReferenceOnData(inputHeaderId, outputHeaderId, mappings) {
           matched = true;
           if (outputRow) {
             updates.push({ id: outputRow.id, value: outputValue });
+            snapshots.push({
+              operationLogId: operationLog.id,
+              headerId: outputHeaderId,
+              sheetId: sheetId,
+              rowIndex: Number(rowIndex),
+              originalValue: outputRow.value,
+              newValue: outputValue,
+              changeType: 'UPDATE'
+            });
           } else {
             inserts.push({
               rowIndex: Number(rowIndex),
               headerId: outputHeaderId,
+              sheetId: sheetId,
               value: outputValue,
+            });
+            snapshots.push({
+              operationLogId: operationLog.id,
+              headerId: outputHeaderId,
+              sheetId: sheetId,
+              rowIndex: Number(rowIndex),
+              originalValue: "",
+              newValue: outputValue,
+              changeType: 'INSERT'
             });
           }
           break;
@@ -2784,7 +2869,7 @@ async function applyReferenceOnData(inputHeaderId, outputHeaderId, mappings) {
 
     if (updates.length > 0) {
       await Promise.all(updates.map(({ id, value }) =>
-        SheetData.update({ value }, { where: { id } })
+        SheetData.update({ value }, { where: { id, sheetId } })
       ));
     }
 
@@ -2792,9 +2877,14 @@ async function applyReferenceOnData(inputHeaderId, outputHeaderId, mappings) {
       await SheetData.bulkCreate(inserts);
     }
 
+    if (snapshotsWithLogId.length > 0) {
+      await SheetDataSnapshot.bulkCreate(snapshotsWithLogId);
+    }
+    await transaction.commit();
     return unmappedValues;
 
   } catch (err) {
+    await transaction.rollback();
     console.error('Error in applyReferenceOnData:', err);
     throw err;
   }
@@ -2814,6 +2904,7 @@ async function deleteRow(req, res) {
     const operationLog = await OperationLog.create({
       id: uuidv4(),
       templateId,
+      sheetId,
       operationType: 'DELETE_ROW'
     }, { transaction });
 
@@ -2886,7 +2977,10 @@ async function calculateAwards(templateId, sheetId, acceptedStatuses, transactio
   );
 
   const sheetData = await SheetData.findAll({
-    where: { headerId: requiredHeaderIds },
+    where: {
+      headerId: { [Op.in]: requiredHeaderIds },
+      sheetId
+    },
     attributes: ['rowIndex', 'headerId', 'value'],
     raw: true,
     transaction
@@ -2907,6 +3001,7 @@ async function calculateAwards(templateId, sheetId, acceptedStatuses, transactio
 
   const operationLog = await OperationLog.create({
     templateId,
+    sheetId,
     operationType: 'CALCULATION',
     transaction
   });
@@ -2948,6 +3043,7 @@ async function calculateAwards(templateId, sheetId, acceptedStatuses, transactio
       updates.push({
         rowIndex: parseInt(rowIndex),
         headerId,
+        sheetId,
         value: total.toString()
       });
 
