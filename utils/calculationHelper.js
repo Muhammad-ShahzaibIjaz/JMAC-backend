@@ -26,6 +26,21 @@ function calculateGap(needMet) {
   return needMet > 0 ? needMet : 0;
 }
 
+function matchCriteria(value, criteria) {
+  if (criteria.includes('*') || criteria.includes('?')) {
+    // Convert custom pattern to regex
+    const regexPattern = '^' + criteria
+      .replace(/\*/g, '.')
+      .replace(/\?/g, '.*')
+      + '$';
+
+    const regex = new RegExp(regexPattern, 'i');
+    return regex.test(value);
+  } else {
+    return value === criteria;
+  }
+}
+
 
 module.exports = {
   calculateNACUBODiscountRate,
@@ -35,4 +50,5 @@ module.exports = {
   calculateNeed,
   calculateNeedMet,
   calculateGap,
+  matchCriteria
 };

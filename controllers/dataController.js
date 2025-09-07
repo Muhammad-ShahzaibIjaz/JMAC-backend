@@ -7,14 +7,14 @@ const {generateExcelFile} = require('../services/SheetService');
 const { processFiles } = require('./fileController');
 const { getMapHeaders, getHeaderID } = require('./headerController');
 const { v4: uuidv4 } = require('uuid');
-const { addressAPI } = require('../services/addressService');
+const { processAddress } = require('../services/addressService');
 const math = require('mathjs');
 const { OperationLog, SheetDataSnapshot } = require('../models');
 const { convertScore } = require('../services/conversion');
 const { getCipTitle } = require('../services/cipService');
 const { desiredOrder, requiredHeadersName, awardTypePatterns } = require('../utils/headerOrderList');
 const { buildZipCountyMap } = require('../services/countyService');
-const { calculateNACUBODiscountRate, calculateNetCharges, calculateGap, calculateNeedMet, calculateTotalDiscountRate, calculateNetTuition, calculateNeed } = require('../utils/calculationHelper');
+const { calculateNACUBODiscountRate, calculateNetCharges, calculateGap, calculateNeedMet, calculateTotalDiscountRate, calculateNetTuition, calculateNeed, matchCriteria } = require('../utils/calculationHelper');
 
 async function deleteSheetData(req, res) {
   try {
@@ -1843,9 +1843,9 @@ const processBatch = async (batch, maxRetries = 3) => {
     while (retries < maxRetries && !success) {
       try {
         // Call addressAPI with individual parameters
-        result = await addressAPI(row.streetAddress, row.city, row.state);
+        result = await processAddress(row.streetAddress, row.city, row.state);
         // Validate response: expect { ZipCode: string }
-        if (result && result.ZipCode && typeof result.ZipCode === 'string') {
+        if (result && result !== "") {
           success = true;
         } else {
           throw new Error('Invalid API response: Missing or invalid zip code');
@@ -3777,6 +3777,207 @@ async function calculateAwardInfo(req, res) {
   }
 }
 
+async function evaluatePellRowsSmart({ templateId, pellSource, criteria, targetHeader }) {
+  const transaction = await sequelize.transaction();
+  try {
+    const operationLog = await OperationLog.create({
+      templateId,
+      operationType: 'CALCULATION',
+    }, { transaction });
+
+    const headers = await Header.findAll({ where: { templateId }, raw: true });
+
+    // Step 2: Identify targetHeader
+    const target = headers.find(h => h.name === targetHeader);
+    if (!target) throw new Error(`Target header "${targetHeader}" not found`);
+
+    // Step 3: Identify Awd_* headers based on pellSource
+    const pellHeaders = [];
+    const statusHeaders = [];
+
+    for (let i = 1; i <= 20; i++) { // assuming max 20 pairs
+      const pellName = `Awd_${pellSource}${i}`;
+      const statusName = `Awd_Status${i}`;
+
+      const pell = headers.find(h => h.name === pellName);
+      const status = headers.find(h => h.name === statusName);
+
+      if (pell && status) {
+        pellHeaders.push(pell);
+        statusHeaders.push(status);
+      }
+    }
+
+    if (!pellHeaders.length) throw new Error(`No headers found for source "${pellSource}"`);
+
+    // Step 4: Fetch all relevant SheetData
+    const allHeaderIds = [...pellHeaders.map(h => h.id), ...statusHeaders.map(h => h.id), target.id];
+    const sheetData = await SheetData.findAll({
+      where: { headerId: { [Op.in]: allHeaderIds } },
+      raw: true,
+    });
+
+    // Step 5: Group data by rowIndex
+    const rowMap = {};
+    sheetData.forEach(({ rowIndex, headerId, value }) => {
+      if (!rowMap[rowIndex]) rowMap[rowIndex] = {};
+      rowMap[rowIndex][headerId] = value;
+    });
+
+    const updates = [];
+    const snapshots = [];
+
+    // Step 6: Evaluate each row
+    for (const [rowIndex, row] of Object.entries(rowMap)) {
+      let isEligible = false;
+
+      for (let i = 0; i < pellHeaders.length; i++) {
+        const pellValue = row[pellHeaders[i].id];
+        const statusValue = row[statusHeaders[i].id];
+
+        if (matchCriteria(pellValue, criteria) && ['accepted', 'pending'].includes(statusValue.toLowerCase())) {
+          isEligible = true;
+          break;
+        }
+      }
+
+      const newValue = isEligible ? 'Y' : 'N';
+      const oldValue = row[target.id];
+
+      if (oldValue !== newValue) {
+        updates.push({
+          rowIndex: parseInt(rowIndex),
+          headerId: target.id,
+          value: newValue,
+        });
+
+        snapshots.push({
+          operationLogId: operationLog.id,
+          headerId: target.id,
+          rowIndex: parseInt(rowIndex),
+          originalValue: oldValue || null,
+          newValue,
+          changeType: 'UPDATE',
+        });
+      }
+
+    }
+
+    // Step 7: Bulk upsert targetHeader values
+    for (const update of updates) {
+      await SheetData.upsert(update, { transaction });
+    }
+
+    if (snapshots.length) {
+      await SheetDataSnapshot.bulkCreate(snapshots, { transaction });
+    }
+
+    await transaction.commit();
+    return { updatedRows: updates.length, status: 'success' };
+
+  } catch (err) {
+    console.error('evaluatePellRowsSmart error:', err.message);
+    throw err;
+  }
+}
+
+async function calculatePellFlag(req, res) {
+  try{
+    const { templateId, pellSource, criteria, targetHeader } = req.body;
+    if (!templateId || !pellSource || !criteria || !targetHeader) {
+      return res.status(400).json({ message: 'Invalid input. templateId, pellSource, criteria, and targetHeader are required.' });
+    }
+    const result = await evaluatePellRowsSmart({ templateId, pellSource, criteria, targetHeader });
+    return res.status(200).json({ message: 'Pell flag calculation completed.', details: result });
+  } catch(error){
+    console.error('Error in calculatePellFlag:', error);
+    return res.status(500).json({ message: 'Internal server error.', details: error.message });
+  }
+}
+
+async function replaceSheetValues(templateId, originalValue, replaceValue) {
+  const transaction = await sequelize.transaction();
+  try {
+    const matchValue = originalValue === null ? null : originalValue.trim();
+
+    const operationLog = await OperationLog.create({
+      templateId,
+      operationType: 'BULK_UPDATE',
+    }, { transaction });
+
+    const headers = await Header.findAll({
+      where: { templateId },
+      attributes: ['id'],
+      raw: true,
+    });
+
+    const headerIds = headers.map(h => h.id);
+    if (!headerIds.length) throw new Error('No headers found for given templateId');
+
+    const batchSize = 10000;
+    let offset = 0;
+    let totalUpdated = 0;
+
+    while (true) {
+      const rows = await SheetData.findAll({
+        where: {
+          headerId: { [Op.in]: headerIds },
+          value: matchValue,
+        },
+        attributes: ['id', 'headerId', 'rowIndex', 'value'],
+        offset,
+        limit: batchSize,
+        raw: true,
+      });
+
+      if (!rows.length) break;
+
+      const idsToUpdate = rows.map(r => r.id);
+
+      await SheetData.update(
+        { value: replaceValue },
+        { where: { id: { [Op.in]: idsToUpdate } }, transaction }
+      );
+
+      const snapshots = rows.map(r => ({
+        operationLogId: operationLog.id,
+        headerId: r.headerId,
+        rowIndex: r.rowIndex,
+        originalValue: r.value,
+        newValue: replaceValue,
+        changeType: 'UPDATE',
+      }));
+
+      await SheetDataSnapshot.bulkCreate(snapshots, { transaction });
+
+      totalUpdated += rows.length;
+      offset += batchSize;
+    }
+
+    await transaction.commit();
+    return { updated: totalUpdated, status: 'success' };
+
+  } catch (err) {
+    await transaction.rollback();
+    console.error('replaceSheetValuesWithAudit error:', err.message);
+    throw err;
+  }
+}
+
+async function bulkReplaceValues(req, res) {
+  try {
+    const { templateId, originalValue, replaceValue } = req.body;
+    if (templateId === undefined || originalValue === undefined || replaceValue === undefined) {
+      return res.status(400).json({ message: 'templateId, originalValue, and replaceValue are required.' });
+    }
+
+    const result = await replaceSheetValues(templateId, originalValue, replaceValue);
+    return res.status(200).json({ message: 'Bulk replace completed.', details: result });
+  } catch (error) {
+    console.error('Error in bulkReplaceValues:', error);
+    return res.status(500).json({ message: 'Internal server error.', details: error.message });
+  }
+}
 
 module.exports = {
   deleteSheetData, 
@@ -3801,5 +4002,7 @@ module.exports = {
   deleteRow,
   getFilteredHeaderData,
   calculateAwardInfo,
-  zipCountyConversion
+  zipCountyConversion,
+  calculatePellFlag,
+  bulkReplaceValues
 };
