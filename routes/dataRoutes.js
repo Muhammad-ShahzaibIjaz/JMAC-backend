@@ -20,5 +20,7 @@ router.put('/zip-county-conversion', dataController.zipCountyConversion);
 router.post('/apply-quality-rules', dataController.evaluateRulesAndReturnFilteredData);
 router.delete('/delete-row/:templateId/:sheetId/:rowIndex', dataController.deleteRow);
 router.put('/award-calculation', dataController.calculateAwardInfo);
+router.put('/find-pell', dataController.calculatePellFlag);
+router.put('/replace-value', dataController.bulkReplaceValues);
 
 module.exports = router;

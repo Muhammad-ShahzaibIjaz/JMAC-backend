@@ -7,13 +7,14 @@ const {generateExcelFile} = require('../services/SheetService');
 const { processFiles } = require('./fileController');
 const { getMapHeaders, getHeaderID } = require('./headerController');
 const { v4: uuidv4 } = require('uuid');
-const { addressAPI } = require('../services/addressService');
+const { processAddress } = require('../services/addressService');
 const math = require('mathjs');
 const { OperationLog, SheetDataSnapshot } = require('../models');
 const { convertScore } = require('../services/conversion');
 const { getCipTitle } = require('../services/cipService');
 const { desiredOrder, requiredHeadersName, awardTypePatterns } = require('../utils/headerOrderList');
 const { buildZipCountyMap } = require('../services/countyService');
+const { calculateNACUBODiscountRate, calculateNetCharges, calculateGap, calculateNeedMet, calculateTotalDiscountRate, calculateNetTuition, calculateNeed, matchCriteria } = require('../utils/calculationHelper');
 
 async function deleteSheetData(req, res) {
   try {
@@ -1886,9 +1887,9 @@ const processBatch = async (batch, maxRetries = 3) => {
     while (retries < maxRetries && !success) {
       try {
         // Call addressAPI with individual parameters
-        result = await addressAPI(row.streetAddress, row.city, row.state);
+        result = await processAddress(row.streetAddress, row.city, row.state);
         // Validate response: expect { ZipCode: string }
-        if (result && result.ZipCode && typeof result.ZipCode === 'string') {
+        if (result && result !== "") {
           success = true;
         } else {
           throw new Error('Invalid API response: Missing or invalid zip code');
@@ -3073,6 +3074,798 @@ async function calculateAwards(templateId, sheetId, acceptedStatuses, transactio
   await transaction.commit();
 }
 
+async function processNACUBODiscountRates(templateId) {
+  const transaction = await sequelize.transaction();
+  try {
+    // Step 1: Fetch headers
+    const headers = await Header.findAll({
+      where: {
+        templateId,
+        name: ['Tuition', 'Fees', 'Total_Institutional_Unfunded_Gift', 'NACUBO_Discount_Rate']
+      },
+      transaction
+    });
+
+    const headerMap = {};
+    headers.forEach(h => headerMap[h.name] = h.id);
+
+    if (!headerMap['NACUBO_Discount_Rate']) {
+      await transaction.rollback();
+      return { message: 'NACUBO_Discount_Rate header not found.' };
+    }
+
+    // Step 2: Fetch relevant SheetData
+    const sheetData = await SheetData.findAll({
+      where: {
+        headerId: [headerMap['Tuition'], headerMap['Fees'], headerMap['Total_Institutional_Unfunded_Gift']]
+      },
+      transaction
+    });
+
+    // Step 3: Group by rowIndex
+    const grouped = {};
+    sheetData.forEach(data => {
+      if (!grouped[data.rowIndex]) grouped[data.rowIndex] = {};
+      grouped[data.rowIndex][data.headerId] = parseFloat(data.value) || 0;
+    });
+
+    // Step 4: Create OperationLog
+    const operationLog = await OperationLog.create({
+      templateId,
+      operationType: 'CALCULATION'
+    }, { transaction });
+
+    // Step 5: Prepare payloads
+    const insertPayload = [];
+    const snapshotPayload = [];
+
+    for (const [rowIndex, values] of Object.entries(grouped)) {
+      const tuition = values[headerMap['Tuition']] || 0;
+      const fees = values[headerMap['Fees']] || 0;
+      const gift = values[headerMap['Total_Institutional_Unfunded_Gift']] || 0;
+      const discountRate = calculateNACUBODiscountRate(tuition, fees, gift);
+
+      const existing = await SheetData.findOne({
+        where: {
+          headerId: headerMap['NACUBO_Discount_Rate'],
+          rowIndex: parseInt(rowIndex)
+        },
+        transaction
+      });
+
+      if (existing) {
+        snapshotPayload.push({
+          operationLogId: operationLog.id,
+          headerId: headerMap['NACUBO_Discount_Rate'],
+          rowIndex: parseInt(rowIndex),
+          originalValue: existing.value,
+          newValue: discountRate.toString(),
+          changeType: 'UPDATE'
+        });
+
+        existing.value = discountRate.toString();
+        await existing.save({ transaction });
+      } else {
+        snapshotPayload.push({
+          operationLogId: operationLog.id,
+          headerId: headerMap['NACUBO_Discount_Rate'],
+          rowIndex: parseInt(rowIndex),
+          originalValue: null,
+          newValue: discountRate.toString(),
+          changeType: 'INSERT'
+        });
+
+        insertPayload.push({
+          headerId: headerMap['NACUBO_Discount_Rate'],
+          rowIndex: parseInt(rowIndex),
+          value: discountRate.toString()
+        });
+      }
+    }
+
+    // Step 6: Bulk insert new SheetData
+    if (insertPayload.length > 0) {
+      await SheetData.bulkCreate(insertPayload, { transaction });
+    }
+
+    // Step 7: Bulk insert SheetDataSnapshot
+    if (snapshotPayload.length > 0) {
+      await SheetDataSnapshot.bulkCreate(snapshotPayload, { transaction });
+    }
+
+    await transaction.commit();
+    return {
+      message: 'Processed NACUBO Discount Rates with logging and snapshots.',
+      rowsAffected: insertPayload.length + snapshotPayload.length
+    };
+  } catch (error) {
+    await transaction.rollback();
+    console.error('Error processing NACUBO Discount Rates:', error);
+    throw error;
+  }
+}
+
+async function processNetCharges(templateId) {
+  const transaction = await sequelize.transaction();
+  try {
+    // Step 1: Fetch headers
+    const headers = await Header.findAll({
+      where: {
+        templateId,
+        name: ['Tuition', 'Fees', 'Housing_Cost', 'Food', 'Net_Charges']
+      },
+      transaction
+    });
+
+    const headerMap = {};
+    headers.forEach(h => headerMap[h.name] = h.id);
+
+    if (!headerMap['Net_Charges']) {
+      await transaction.rollback();
+      return { message: 'Net_Charges header not found.' };
+    }
+
+    // Step 2: Fetch relevant SheetData
+    const sheetData = await SheetData.findAll({
+      where: {
+        headerId: [
+          headerMap['Tuition'],
+          headerMap['Fees'],
+          headerMap['Housing Cost'],
+          headerMap['Food']
+        ]
+      },
+      transaction
+    });
+
+    // Step 3: Group by rowIndex
+    const grouped = {};
+    sheetData.forEach(data => {
+      if (!grouped[data.rowIndex]) grouped[data.rowIndex] = {};
+      grouped[data.rowIndex][data.headerId] = parseFloat(data.value) || 0;
+    });
+
+    // Step 4: Create OperationLog
+    const operationLog = await OperationLog.create({
+      templateId,
+      operationType: 'CALCULATION'
+    }, { transaction });
+
+    // Step 5: Prepare payloads
+    const insertPayload = [];
+    const snapshotPayload = [];
+
+    for (const [rowIndex, values] of Object.entries(grouped)) {
+      const tuition = values[headerMap['Tuition']] || 0;
+      const fees = values[headerMap['Fees']] || 0;
+      const housing = values[headerMap['Housing Cost']] || 0;
+      const food = values[headerMap['Food']] || 0;
+
+      const netCharges = calculateNetCharges(tuition, fees, housing, food);
+
+      const existing = await SheetData.findOne({
+        where: {
+          headerId: headerMap['Net_Charges'],
+          rowIndex: parseInt(rowIndex)
+        },
+        transaction
+      });
+
+      if (existing) {
+        snapshotPayload.push({
+          operationLogId: operationLog.id,
+          headerId: headerMap['Net_Charges'],
+          rowIndex: parseInt(rowIndex),
+          originalValue: existing.value,
+          newValue: netCharges.toString(),
+          changeType: 'UPDATE'
+        });
+
+        existing.value = netCharges.toString();
+        await existing.save({ transaction });
+      } else {
+        snapshotPayload.push({
+          operationLogId: operationLog.id,
+          headerId: headerMap['Net_Charges'],
+          rowIndex: parseInt(rowIndex),
+          originalValue: null,
+          newValue: netCharges.toString(),
+          changeType: 'INSERT'
+        });
+
+        insertPayload.push({
+          headerId: headerMap['Net_Charges'],
+          rowIndex: parseInt(rowIndex),
+          value: netCharges.toString()
+        });
+      }
+    }
+
+    // Step 6: Bulk insert new SheetData
+    if (insertPayload.length > 0) {
+      await SheetData.bulkCreate(insertPayload, { transaction });
+    }
+
+    // Step 7: Bulk insert SheetDataSnapshot
+    if (snapshotPayload.length > 0) {
+      await SheetDataSnapshot.bulkCreate(snapshotPayload, { transaction });
+    }
+
+    await transaction.commit();
+    return {
+      message: 'Processed Net_Charges with logging and snapshots.',
+      rowsAffected: insertPayload.length + snapshotPayload.length
+    };
+  } catch (error) {
+    await transaction.rollback();
+    console.error('Error processing Net_Charges:', error);
+    throw error;
+  }
+}
+
+async function processNetTuition(templateId) {
+  const transaction = await sequelize.transaction();
+  try {
+    // Step 1: Fetch headers
+    const headers = await Header.findAll({
+      where: {
+        templateId,
+        name: ['Tuition', 'Total_Institutional_Gift', 'Net_Tuition']
+      },
+      transaction
+    });
+
+    const headerMap = {};
+    headers.forEach(h => headerMap[h.name] = h.id);
+
+    if (!headerMap['Net_Tuition']) {
+      await transaction.rollback();
+      return { message: 'Net_Tuition header not found.' };
+    }
+
+    // Step 2: Fetch relevant SheetData
+    const sheetData = await SheetData.findAll({
+      where: {
+        headerId: [headerMap['Tuition'], headerMap['Total_Institutional_Gift']]
+      },
+      transaction
+    });
+
+    // Step 3: Group by rowIndex
+    const grouped = {};
+    sheetData.forEach(data => {
+      if (!grouped[data.rowIndex]) grouped[data.rowIndex] = {};
+      grouped[data.rowIndex][data.headerId] = parseFloat(data.value) || 0;
+    });
+
+    // Step 4: Create OperationLog
+    const operationLog = await OperationLog.create({
+      templateId,
+      operationType: 'CALCULATION'
+    }, { transaction });
+
+    // Step 5: Prepare payloads
+    const insertPayload = [];
+    const snapshotPayload = [];
+
+    for (const [rowIndex, values] of Object.entries(grouped)) {
+      const tuition = values[headerMap['Tuition']] || 0;
+      const gift = values[headerMap['Total_Institutional_Gift']] || 0;
+
+      const netTuition = calculateNetTuition(tuition, gift);
+
+      const existing = await SheetData.findOne({
+        where: {
+          headerId: headerMap['Net_Tuition'],
+          rowIndex: parseInt(rowIndex)
+        },
+        transaction
+      });
+
+      if (existing) {
+        snapshotPayload.push({
+          operationLogId: operationLog.id,
+          headerId: headerMap['Net_Tuition'],
+          rowIndex: parseInt(rowIndex),
+          originalValue: existing.value,
+          newValue: netTuition.toString(),
+          changeType: 'UPDATE'
+        });
+
+        existing.value = netTuition.toString();
+        await existing.save({ transaction });
+      } else {
+        snapshotPayload.push({
+          operationLogId: operationLog.id,
+          headerId: headerMap['Net_Tuition'],
+          rowIndex: parseInt(rowIndex),
+          originalValue: null,
+          newValue: netTuition.toString(),
+          changeType: 'INSERT'
+        });
+
+        insertPayload.push({
+          headerId: headerMap['Net_Tuition'],
+          rowIndex: parseInt(rowIndex),
+          value: netTuition.toString()
+        });
+      }
+    }
+
+    // Step 6: Bulk insert new SheetData
+    if (insertPayload.length > 0) {
+      await SheetData.bulkCreate(insertPayload, { transaction });
+    }
+
+    // Step 7: Bulk insert SheetDataSnapshot
+    if (snapshotPayload.length > 0) {
+      await SheetDataSnapshot.bulkCreate(snapshotPayload, { transaction });
+    }
+
+    await transaction.commit();
+    return {
+      message: 'Processed Net_Tuition with logging and snapshots.',
+      rowsAffected: insertPayload.length + snapshotPayload.length
+    };
+  } catch (error) {
+    await transaction.rollback();
+    console.error('Error processing Net_Tuition:', error);
+    throw error;
+  }
+}
+
+async function processTotalDiscountRate(templateId) {
+  const transaction = await sequelize.transaction();
+  try {
+    // Step 1: Fetch headers
+    const headers = await Header.findAll({
+      where: {
+        templateId,
+        name: ['Net_Charges', 'Total_Institutional_Gift', 'Total_Discount_Rate']
+      },
+      transaction
+    });
+
+    const headerMap = {};
+    headers.forEach(h => headerMap[h.name] = h.id);
+
+    if (!headerMap['Total_Discount_Rate']) {
+      await transaction.rollback();
+      return { message: 'Total_Discount_Rate header not found.' };
+    }
+
+    // Step 2: Fetch relevant SheetData
+    const sheetData = await SheetData.findAll({
+      where: {
+        headerId: [headerMap['Net_Charges'], headerMap['Total_Institutional_Gift']]
+      },
+      transaction
+    });
+
+    // Step 3: Group by rowIndex
+    const grouped = {};
+    sheetData.forEach(data => {
+      if (!grouped[data.rowIndex]) grouped[data.rowIndex] = {};
+      grouped[data.rowIndex][data.headerId] = parseFloat(data.value) || 0;
+    });
+
+    // Step 4: Create OperationLog
+    const operationLog = await OperationLog.create({
+      templateId,
+      operationType: 'CALCULATION'
+    }, { transaction });
+
+    // Step 5: Prepare payloads
+    const insertPayload = [];
+    const snapshotPayload = [];
+
+    for (const [rowIndex, values] of Object.entries(grouped)) {
+      const netCharges = values[headerMap['Net_Charges']] || 0;
+      const gift = values[headerMap['Total_Institutional_Gift']] || 0;
+
+      const discountRate = calculateTotalDiscountRate(netCharges, gift);
+
+      const existing = await SheetData.findOne({
+        where: {
+          headerId: headerMap['Total_Discount_Rate'],
+          rowIndex: parseInt(rowIndex)
+        },
+        transaction
+      });
+
+      if (existing) {
+        snapshotPayload.push({
+          operationLogId: operationLog.id,
+          headerId: headerMap['Total_Discount_Rate'],
+          rowIndex: parseInt(rowIndex),
+          originalValue: existing.value,
+          newValue: discountRate.toString(),
+          changeType: 'UPDATE'
+        });
+
+        existing.value = discountRate.toString();
+        await existing.save({ transaction });
+      } else {
+        snapshotPayload.push({
+          operationLogId: operationLog.id,
+          headerId: headerMap['Total_Discount_Rate'],
+          rowIndex: parseInt(rowIndex),
+          originalValue: null,
+          newValue: discountRate.toString(),
+          changeType: 'INSERT'
+        });
+
+        insertPayload.push({
+          headerId: headerMap['Total_Discount_Rate'],
+          rowIndex: parseInt(rowIndex),
+          value: discountRate.toString()
+        });
+      }
+    }
+
+    // Step 6: Bulk insert new SheetData
+    if (insertPayload.length > 0) {
+      await SheetData.bulkCreate(insertPayload, { transaction });
+    }
+
+    // Step 7: Bulk insert SheetDataSnapshot
+    if (snapshotPayload.length > 0) {
+      await SheetDataSnapshot.bulkCreate(snapshotPayload, { transaction });
+    }
+
+    await transaction.commit();
+    return {
+      message: 'Processed Total_Discount_Rate with logging and snapshots.',
+      rowsAffected: insertPayload.length + snapshotPayload.length
+    };
+  } catch (error) {
+    await transaction.rollback();
+    console.error('Error processing Total_Discount_Rate:', error);
+    throw error;
+  }
+}
+
+async function processNeed(templateId) {
+  const transaction = await sequelize.transaction();
+  try {
+    // Step 1: Fetch headers
+    const headers = await Header.findAll({
+      where: {
+        templateId,
+        name: ['COA', 'SAI', 'Need']
+      },
+      transaction
+    });
+
+    const headerMap = {};
+    headers.forEach(h => headerMap[h.name] = h.id);
+
+    if (!headerMap['Need']) {
+      await transaction.rollback();
+      return { message: 'Need header not found.' };
+    }
+
+    // Step 2: Fetch relevant SheetData
+    const sheetData = await SheetData.findAll({
+      where: {
+        headerId: [headerMap['COA'], headerMap['SAI']]
+      },
+      transaction
+    });
+
+    // Step 3: Group by rowIndex
+    const grouped = {};
+    sheetData.forEach(data => {
+      if (!grouped[data.rowIndex]) grouped[data.rowIndex] = {};
+      grouped[data.rowIndex][data.headerId] = parseFloat(data.value) || 0;
+    });
+
+    // Step 4: Create OperationLog
+    const operationLog = await OperationLog.create({
+      templateId,
+      operationType: 'CALCULATION'
+    }, { transaction });
+
+    // Step 5: Prepare payloads
+    const insertPayload = [];
+    const snapshotPayload = [];
+
+    for (const [rowIndex, values] of Object.entries(grouped)) {
+      const COA = values[headerMap['COA']] || 0;
+      const SAI = values[headerMap['SAI']] || 0;
+
+      const need = calculateNeed(COA, SAI);
+
+      const existing = await SheetData.findOne({
+        where: {
+          headerId: headerMap['Need'],
+          rowIndex: parseInt(rowIndex)
+        },
+        transaction
+      });
+
+      if (existing) {
+        snapshotPayload.push({
+          operationLogId: operationLog.id,
+          headerId: headerMap['Need'],
+          rowIndex: parseInt(rowIndex),
+          originalValue: existing.value,
+          newValue: need.toString(),
+          changeType: 'UPDATE'
+        });
+
+        existing.value = need.toString();
+        await existing.save({ transaction });
+      } else {
+        snapshotPayload.push({
+          operationLogId: operationLog.id,
+          headerId: headerMap['Need'],
+          rowIndex: parseInt(rowIndex),
+          originalValue: null,
+          newValue: need.toString(),
+          changeType: 'INSERT'
+        });
+
+        insertPayload.push({
+          headerId: headerMap['Need'],
+          rowIndex: parseInt(rowIndex),
+          value: need.toString()
+        });
+      }
+    }
+
+    // Step 6: Bulk insert new SheetData
+    if (insertPayload.length > 0) {
+      await SheetData.bulkCreate(insertPayload, { transaction });
+    }
+
+    // Step 7: Bulk insert SheetDataSnapshot
+    if (snapshotPayload.length > 0) {
+      await SheetDataSnapshot.bulkCreate(snapshotPayload, { transaction });
+    }
+
+    await transaction.commit();
+    return {
+      message: 'Processed Need with logging and snapshots.',
+      rowsAffected: insertPayload.length + snapshotPayload.length
+    };
+  } catch (error) {
+    await transaction.rollback();
+    console.error('Error processing Need:', error);
+    throw error;
+  }
+}
+
+async function processNeedMet(templateId) {
+  const transaction = await sequelize.transaction();
+  try {
+    // Step 1: Fetch headers
+    const headers = await Header.findAll({
+      where: {
+        templateId,
+        name: ['Need', 'Total_Institutional_Gift', 'Need_Met']
+      },
+      transaction
+    });
+
+    const headerMap = {};
+    headers.forEach(h => headerMap[h.name] = h.id);
+
+    if (!headerMap['Need_Met']) {
+      await transaction.rollback();
+      return { message: 'Need_Met header not found.' };
+    }
+
+    // Step 2: Fetch relevant SheetData
+    const sheetData = await SheetData.findAll({
+      where: {
+        headerId: [headerMap['Need'], headerMap['Total_Institutional_Gift']]
+      },
+      transaction
+    });
+
+    // Step 3: Group by rowIndex
+    const grouped = {};
+    sheetData.forEach(data => {
+      if (!grouped[data.rowIndex]) grouped[data.rowIndex] = {};
+      grouped[data.rowIndex][data.headerId] = parseFloat(data.value) || 0;
+    });
+
+    // Step 4: Create OperationLog
+    const operationLog = await OperationLog.create({
+      templateId,
+      operationType: 'CALCULATION'
+    }, { transaction });
+
+    // Step 5: Prepare payloads
+    const insertPayload = [];
+    const snapshotPayload = [];
+
+    for (const [rowIndex, values] of Object.entries(grouped)) {
+      const need = values[headerMap['Need']] || 0;
+      const gift = values[headerMap['Total_Institutional_Gift']] || 0;
+
+      const needMet = calculateNeedMet(need, gift);
+
+      const existing = await SheetData.findOne({
+        where: {
+          headerId: headerMap['Need_Met'],
+          rowIndex: parseInt(rowIndex)
+        },
+        transaction
+      });
+
+      if (existing) {
+        snapshotPayload.push({
+          operationLogId: operationLog.id,
+          headerId: headerMap['Need_Met'],
+          rowIndex: parseInt(rowIndex),
+          originalValue: existing.value,
+          newValue: needMet.toString(),
+          changeType: 'UPDATE'
+        });
+
+        existing.value = needMet.toString();
+        await existing.save({ transaction });
+      } else {
+        snapshotPayload.push({
+          operationLogId: operationLog.id,
+          headerId: headerMap['Need_Met'],
+          rowIndex: parseInt(rowIndex),
+          originalValue: null,
+          newValue: needMet.toString(),
+          changeType: 'INSERT'
+        });
+
+        insertPayload.push({
+          headerId: headerMap['Need_Met'],
+          rowIndex: parseInt(rowIndex),
+          value: needMet.toString()
+        });
+      }
+    }
+
+    // Step 6: Bulk insert new SheetData
+    if (insertPayload.length > 0) {
+      await SheetData.bulkCreate(insertPayload, { transaction });
+    }
+
+    // Step 7: Bulk insert SheetDataSnapshot
+    if (snapshotPayload.length > 0) {
+      await SheetDataSnapshot.bulkCreate(snapshotPayload, { transaction });
+    }
+
+    await transaction.commit();
+    return {
+      message: 'Processed Need_Met with logging and snapshots.',
+      rowsAffected: insertPayload.length + snapshotPayload.length
+    };
+  } catch (error) {
+    await transaction.rollback();
+    console.error('Error processing Need_Met:', error);
+    throw error;
+  }
+}
+
+async function processGap(templateId) {
+  const transaction = await sequelize.transaction();
+  try {
+    // Step 1: Fetch headers
+    const headers = await Header.findAll({
+      where: {
+        templateId,
+        name: ['Need_Met', 'Gap']
+      },
+      transaction
+    });
+
+    const headerMap = {};
+    headers.forEach(h => headerMap[h.name] = h.id);
+
+    if (!headerMap['Gap']) {
+      await transaction.rollback();
+      return { message: 'Gap header not found.' };
+    }
+
+    // Step 2: Fetch relevant SheetData
+    const sheetData = await SheetData.findAll({
+      where: {
+        headerId: [headerMap['Need_Met']]
+      },
+      transaction
+    });
+
+    // Step 3: Group by rowIndex
+    const grouped = {};
+    sheetData.forEach(data => {
+      if (!grouped[data.rowIndex]) grouped[data.rowIndex] = {};
+      grouped[data.rowIndex][data.headerId] = parseFloat(data.value) || 0;
+    });
+
+    // Step 4: Create OperationLog
+    const operationLog = await OperationLog.create({
+      templateId,
+      operationType: 'CALCULATION'
+    }, { transaction });
+
+    // Step 5: Prepare payloads
+    const insertPayload = [];
+    const snapshotPayload = [];
+
+    for (const [rowIndex, values] of Object.entries(grouped)) {
+      const needMet = values[headerMap['Need_Met']] || 0;
+      const gap = calculateGap(needMet);
+
+      const existing = await SheetData.findOne({
+        where: {
+          headerId: headerMap['Gap'],
+          rowIndex: parseInt(rowIndex)
+        },
+        transaction
+      });
+
+      if (existing) {
+        snapshotPayload.push({
+          operationLogId: operationLog.id,
+          headerId: headerMap['Gap'],
+          rowIndex: parseInt(rowIndex),
+          originalValue: existing.value,
+          newValue: gap === 0 ? "" : gap.toString(),
+          changeType: 'UPDATE'
+        });
+
+        existing.value = gap === 0 ? "" : gap.toString();
+        await existing.save({ transaction });
+      } else {
+        snapshotPayload.push({
+          operationLogId: operationLog.id,
+          headerId: headerMap['Gap'],
+          rowIndex: parseInt(rowIndex),
+          originalValue: null,
+          newValue: gap === 0 ? "" : gap.toString(),
+          changeType: 'INSERT'
+        });
+
+        insertPayload.push({
+          headerId: headerMap['Gap'],
+          rowIndex: parseInt(rowIndex),
+          value: gap === 0 ? "" : gap.toString()
+        });
+      }
+    }
+
+    // Step 6: Bulk insert new SheetData
+    if (insertPayload.length > 0) {
+      await SheetData.bulkCreate(insertPayload, { transaction });
+    }
+
+    // Step 7: Bulk insert SheetDataSnapshot
+    if (snapshotPayload.length > 0) {
+      await SheetDataSnapshot.bulkCreate(snapshotPayload, { transaction });
+    }
+
+    await transaction.commit();
+    return {
+      message: 'Processed Gap with logging and snapshots.',
+      rowsAffected: insertPayload.length + snapshotPayload.length
+    };
+  } catch (error) {
+    await transaction.rollback();
+    console.error('Error processing Gap:', error);
+    throw error;
+  }
+}
+
+
+async function calculateFurtherMetrics(templateId) {
+  await processNACUBODiscountRates(templateId);
+  await processNetCharges(templateId);
+  await processNetTuition(templateId);
+  await processTotalDiscountRate(templateId);
+  await processNeed(templateId);
+  await processNeedMet(templateId);
+  await processGap(templateId);
+}
 
 async function calculateAwardInfo(req, res) {
   const transaction = await sequelize.transaction();
@@ -3083,6 +3876,7 @@ async function calculateAwardInfo(req, res) {
       return res.status(400).json({ message: 'Invalid input. templateId, sheetId, and acceptedStatuses are required.' });
     }
     await calculateAwards(templateId, sheetId, acceptedStatuses, transaction);
+    await calculateFurtherMetrics(templateId);
     res.status(200).json({ message: 'Award information calculated successfully.' });
   } catch(error){
     await transaction.rollback();
@@ -3091,6 +3885,207 @@ async function calculateAwardInfo(req, res) {
   }
 }
 
+async function evaluatePellRowsSmart({ templateId, pellSource, criteria, targetHeader }) {
+  const transaction = await sequelize.transaction();
+  try {
+    const operationLog = await OperationLog.create({
+      templateId,
+      operationType: 'CALCULATION',
+    }, { transaction });
+
+    const headers = await Header.findAll({ where: { templateId }, raw: true });
+
+    // Step 2: Identify targetHeader
+    const target = headers.find(h => h.name === targetHeader);
+    if (!target) throw new Error(`Target header "${targetHeader}" not found`);
+
+    // Step 3: Identify Awd_* headers based on pellSource
+    const pellHeaders = [];
+    const statusHeaders = [];
+
+    for (let i = 1; i <= 20; i++) { // assuming max 20 pairs
+      const pellName = `Awd_${pellSource}${i}`;
+      const statusName = `Awd_Status${i}`;
+
+      const pell = headers.find(h => h.name === pellName);
+      const status = headers.find(h => h.name === statusName);
+
+      if (pell && status) {
+        pellHeaders.push(pell);
+        statusHeaders.push(status);
+      }
+    }
+
+    if (!pellHeaders.length) throw new Error(`No headers found for source "${pellSource}"`);
+
+    // Step 4: Fetch all relevant SheetData
+    const allHeaderIds = [...pellHeaders.map(h => h.id), ...statusHeaders.map(h => h.id), target.id];
+    const sheetData = await SheetData.findAll({
+      where: { headerId: { [Op.in]: allHeaderIds } },
+      raw: true,
+    });
+
+    // Step 5: Group data by rowIndex
+    const rowMap = {};
+    sheetData.forEach(({ rowIndex, headerId, value }) => {
+      if (!rowMap[rowIndex]) rowMap[rowIndex] = {};
+      rowMap[rowIndex][headerId] = value;
+    });
+
+    const updates = [];
+    const snapshots = [];
+
+    // Step 6: Evaluate each row
+    for (const [rowIndex, row] of Object.entries(rowMap)) {
+      let isEligible = false;
+
+      for (let i = 0; i < pellHeaders.length; i++) {
+        const pellValue = row[pellHeaders[i].id];
+        const statusValue = row[statusHeaders[i].id];
+
+        if (matchCriteria(pellValue, criteria) && ['accepted', 'pending'].includes(statusValue.toLowerCase())) {
+          isEligible = true;
+          break;
+        }
+      }
+
+      const newValue = isEligible ? 'Y' : 'N';
+      const oldValue = row[target.id];
+
+      if (oldValue !== newValue) {
+        updates.push({
+          rowIndex: parseInt(rowIndex),
+          headerId: target.id,
+          value: newValue,
+        });
+
+        snapshots.push({
+          operationLogId: operationLog.id,
+          headerId: target.id,
+          rowIndex: parseInt(rowIndex),
+          originalValue: oldValue || null,
+          newValue,
+          changeType: 'UPDATE',
+        });
+      }
+
+    }
+
+    // Step 7: Bulk upsert targetHeader values
+    for (const update of updates) {
+      await SheetData.upsert(update, { transaction });
+    }
+
+    if (snapshots.length) {
+      await SheetDataSnapshot.bulkCreate(snapshots, { transaction });
+    }
+
+    await transaction.commit();
+    return { updatedRows: updates.length, status: 'success' };
+
+  } catch (err) {
+    console.error('evaluatePellRowsSmart error:', err.message);
+    throw err;
+  }
+}
+
+async function calculatePellFlag(req, res) {
+  try{
+    const { templateId, pellSource, criteria, targetHeader } = req.body;
+    if (!templateId || !pellSource || !criteria || !targetHeader) {
+      return res.status(400).json({ message: 'Invalid input. templateId, pellSource, criteria, and targetHeader are required.' });
+    }
+    const result = await evaluatePellRowsSmart({ templateId, pellSource, criteria, targetHeader });
+    return res.status(200).json({ message: 'Pell flag calculation completed.', details: result });
+  } catch(error){
+    console.error('Error in calculatePellFlag:', error);
+    return res.status(500).json({ message: 'Internal server error.', details: error.message });
+  }
+}
+
+async function replaceSheetValues(templateId, originalValue, replaceValue) {
+  const transaction = await sequelize.transaction();
+  try {
+    const matchValue = originalValue === null ? null : originalValue.trim();
+
+    const operationLog = await OperationLog.create({
+      templateId,
+      operationType: 'BULK_UPDATE',
+    }, { transaction });
+
+    const headers = await Header.findAll({
+      where: { templateId },
+      attributes: ['id'],
+      raw: true,
+    });
+
+    const headerIds = headers.map(h => h.id);
+    if (!headerIds.length) throw new Error('No headers found for given templateId');
+
+    const batchSize = 10000;
+    let offset = 0;
+    let totalUpdated = 0;
+
+    while (true) {
+      const rows = await SheetData.findAll({
+        where: {
+          headerId: { [Op.in]: headerIds },
+          value: matchValue,
+        },
+        attributes: ['id', 'headerId', 'rowIndex', 'value'],
+        offset,
+        limit: batchSize,
+        raw: true,
+      });
+
+      if (!rows.length) break;
+
+      const idsToUpdate = rows.map(r => r.id);
+
+      await SheetData.update(
+        { value: replaceValue },
+        { where: { id: { [Op.in]: idsToUpdate } }, transaction }
+      );
+
+      const snapshots = rows.map(r => ({
+        operationLogId: operationLog.id,
+        headerId: r.headerId,
+        rowIndex: r.rowIndex,
+        originalValue: r.value,
+        newValue: replaceValue,
+        changeType: 'UPDATE',
+      }));
+
+      await SheetDataSnapshot.bulkCreate(snapshots, { transaction });
+
+      totalUpdated += rows.length;
+      offset += batchSize;
+    }
+
+    await transaction.commit();
+    return { updated: totalUpdated, status: 'success' };
+
+  } catch (err) {
+    await transaction.rollback();
+    console.error('replaceSheetValuesWithAudit error:', err.message);
+    throw err;
+  }
+}
+
+async function bulkReplaceValues(req, res) {
+  try {
+    const { templateId, originalValue, replaceValue } = req.body;
+    if (templateId === undefined || originalValue === undefined || replaceValue === undefined) {
+      return res.status(400).json({ message: 'templateId, originalValue, and replaceValue are required.' });
+    }
+
+    const result = await replaceSheetValues(templateId, originalValue, replaceValue);
+    return res.status(200).json({ message: 'Bulk replace completed.', details: result });
+  } catch (error) {
+    console.error('Error in bulkReplaceValues:', error);
+    return res.status(500).json({ message: 'Internal server error.', details: error.message });
+  }
+}
 
 module.exports = {
   deleteSheetData, 
@@ -3115,5 +4110,7 @@ module.exports = {
   deleteRow,
   getFilteredHeaderData,
   calculateAwardInfo,
-  zipCountyConversion
+  zipCountyConversion,
+  calculatePellFlag,
+  bulkReplaceValues
 };
