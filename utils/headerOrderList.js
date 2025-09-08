@@ -495,7 +495,8 @@ const requiredHeadersName = [
   "Total_Loans",
   "Total_Employee_Benefit", 
   "Total_Tuition_Exchange", 
-  "Total_Outside_Gift+Work+Loan"
+  "Total_Outside_Gift+Work+Loan",
+  "Total_Merit_Need_Gift",
 ];
 
 
@@ -513,6 +514,7 @@ const awardTypePatterns = {
   "Total_Employee_Benefit": /^E...$/,
   "Total_Tuition_Exchange": /^T...$/,
   "Total_Outside_Gift+Work+Loan": /^O...$/,
+  "Total_Merit_Need_Gift": /^.[MN]..$/,
 };
 
 
