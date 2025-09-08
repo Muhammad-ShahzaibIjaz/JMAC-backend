@@ -289,7 +289,6 @@ async function getHeadersWithValidatedData(req, res) {
     const sortedHeaders = sortHeadersFlexibleMatch(headers);
     const headerMap = new Map(sortedHeaders.map(h => [h.id, h]));
 
-    console.time('Distinct RowIndex Fetch');
     const distinctRowIndices = await SheetData.findAll({
       where: { sheetId },
       include: [{ model: Header, where: { templateId }, attributes: [] }],
@@ -300,11 +299,9 @@ async function getHeadersWithValidatedData(req, res) {
       limit: size,
       raw: true,
     });
-    console.timeEnd('Distinct RowIndex Fetch');
 
     const rowIndexList = distinctRowIndices.map(r => r.rowIndex);
 
-    console.time('Paginated Data Fetch');
     const paginatedData = await SheetData.findAll({
       include: [{ model: Header, where: { templateId }, attributes: [] }],
       attributes: ['id', 'rowIndex', 'value', 'headerId'],
@@ -314,17 +311,14 @@ async function getHeadersWithValidatedData(req, res) {
       },
       order: [['rowIndex', 'ASC']],
     });
-    console.timeEnd('Paginated Data Fetch');
 
     // Count total rows efficiently
-    console.time('Total Rows Count');
     const totalRows = await SheetData.count({
       where: { sheetId },
       include: [{ model: Header, where: { templateId }, attributes: [] }],
       distinct: true,
       col: 'rowIndex',
     });
-    console.timeEnd('Total Rows Count');
     const totalPages = Math.ceil(totalRows / size);
 
     const paginatedDataByHeader = {};
@@ -788,22 +782,18 @@ async function validateTemplate(templateId) {
 async function getTemplateDataWithExcel(req, res) {
   try {
     const { templateId, sheetId, templateName } = req.query;
-
-    console.time('header Fetch');
     // Fetch all headers for the template
     const headers = await Header.findAll({
       where: { templateId },
       attributes: ['id', 'name', 'criticalityLevel', 'columnType'],
       order: [['id', 'ASC']],
     });
-    console.timeEnd('header Fetch');
 
     if (!headers || headers.length === 0) {
       console.log(`No headers found for templateId: ${templateId}`);
       return res.status(404).json({ error: `No headers found for templateId ${templateId}` });
     }
 
-    console.time('SheetData Fetch');
     // Fetch all SheetData for the template
     const sheetData = await sequelize.query(`
         SELECT sd.id, sd."rowIndex", sd.value, sd."headerId"
@@ -815,11 +805,8 @@ async function getTemplateDataWithExcel(req, res) {
         replacements: { templateId, sheetId },
         type: sequelize.QueryTypes.SELECT,
       });
-    console.timeEnd('SheetData Fetch');
 
-    console.time('header Ordering');
     const sortedHeaders = sortHeadersFlexibleMatch(headers);
-    console.timeEnd('header Ordering');
     const headerMap = new Map(sortedHeaders.map(h => [h.id, h]));
     const validatedDataByHeader = new Map();
     const errorRows = new Map();
@@ -830,7 +817,6 @@ async function getTemplateDataWithExcel(req, res) {
     });
 
     const rowBuckets = new Map();
-    console.time('Data Validation and Grouping');
     for (const data of sheetData) {
       const header = headerMap.get(data.headerId);
       if (!header) continue;
@@ -864,7 +850,6 @@ async function getTemplateDataWithExcel(req, res) {
         maxRowIndex = data.rowIndex;
       }
     }
-    console.timeEnd('Data Validation and Grouping');
     const responseHeaders = sortedHeaders.map(header => ({
       id: header.id,
       name: header.name,
@@ -874,7 +859,6 @@ async function getTemplateDataWithExcel(req, res) {
     }));
 
     const totalErrorRows = errorRows.size;
-    console.time('Excel Generation');
     const buffer = await generateExcelFile({
       headers: responseHeaders,
       maxRowIndex,
@@ -882,7 +866,6 @@ async function getTemplateDataWithExcel(req, res) {
       errorRows,
       rowBuckets,
     });
-    console.timeEnd('Excel Generation');
     const currentDate = new Date().toISOString().split('T')[0];
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename=${templateName}_${currentDate}.xlsx`);
