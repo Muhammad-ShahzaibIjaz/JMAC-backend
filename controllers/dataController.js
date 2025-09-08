@@ -3074,7 +3074,7 @@ async function calculateAwards(templateId, sheetId, acceptedStatuses, transactio
   await transaction.commit();
 }
 
-async function processNACUBODiscountRates(templateId) {
+async function processNACUBODiscountRates(templateId, sheetId) {
   const transaction = await sequelize.transaction();
   try {
     // Step 1: Fetch headers
@@ -3097,7 +3097,8 @@ async function processNACUBODiscountRates(templateId) {
     // Step 2: Fetch relevant SheetData
     const sheetData = await SheetData.findAll({
       where: {
-        headerId: [headerMap['Tuition'], headerMap['Fees'], headerMap['Total_Institutional_Unfunded_Gift']]
+        headerId: [headerMap['Tuition'], headerMap['Fees'], headerMap['Total_Institutional_Unfunded_Gift']],
+        sheetId: sheetId
       },
       transaction
     });
@@ -3112,6 +3113,7 @@ async function processNACUBODiscountRates(templateId) {
     // Step 4: Create OperationLog
     const operationLog = await OperationLog.create({
       templateId,
+      sheetId,
       operationType: 'CALCULATION'
     }, { transaction });
 
@@ -3128,7 +3130,8 @@ async function processNACUBODiscountRates(templateId) {
       const existing = await SheetData.findOne({
         where: {
           headerId: headerMap['NACUBO_Discount_Rate'],
-          rowIndex: parseInt(rowIndex)
+          rowIndex: parseInt(rowIndex),
+          sheetId: sheetId
         },
         transaction
       });
@@ -3137,6 +3140,7 @@ async function processNACUBODiscountRates(templateId) {
         snapshotPayload.push({
           operationLogId: operationLog.id,
           headerId: headerMap['NACUBO_Discount_Rate'],
+          sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
           originalValue: existing.value,
           newValue: discountRate.toString(),
@@ -3149,6 +3153,7 @@ async function processNACUBODiscountRates(templateId) {
         snapshotPayload.push({
           operationLogId: operationLog.id,
           headerId: headerMap['NACUBO_Discount_Rate'],
+          sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
           originalValue: null,
           newValue: discountRate.toString(),
@@ -3157,6 +3162,7 @@ async function processNACUBODiscountRates(templateId) {
 
         insertPayload.push({
           headerId: headerMap['NACUBO_Discount_Rate'],
+          sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
           value: discountRate.toString()
         });
@@ -3185,7 +3191,7 @@ async function processNACUBODiscountRates(templateId) {
   }
 }
 
-async function processNetCharges(templateId) {
+async function processNetCharges(templateId, sheetId) {
   const transaction = await sequelize.transaction();
   try {
     // Step 1: Fetch headers
@@ -3213,7 +3219,8 @@ async function processNetCharges(templateId) {
           headerMap['Fees'],
           headerMap['Housing Cost'],
           headerMap['Food']
-        ]
+        ],
+        sheetId: sheetId
       },
       transaction
     });
@@ -3228,6 +3235,7 @@ async function processNetCharges(templateId) {
     // Step 4: Create OperationLog
     const operationLog = await OperationLog.create({
       templateId,
+      sheetId,
       operationType: 'CALCULATION'
     }, { transaction });
 
@@ -3246,6 +3254,7 @@ async function processNetCharges(templateId) {
       const existing = await SheetData.findOne({
         where: {
           headerId: headerMap['Net_Charges'],
+          sheetId: sheetId,
           rowIndex: parseInt(rowIndex)
         },
         transaction
@@ -3255,6 +3264,7 @@ async function processNetCharges(templateId) {
         snapshotPayload.push({
           operationLogId: operationLog.id,
           headerId: headerMap['Net_Charges'],
+          sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
           originalValue: existing.value,
           newValue: netCharges.toString(),
@@ -3267,6 +3277,7 @@ async function processNetCharges(templateId) {
         snapshotPayload.push({
           operationLogId: operationLog.id,
           headerId: headerMap['Net_Charges'],
+          sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
           originalValue: null,
           newValue: netCharges.toString(),
@@ -3275,6 +3286,7 @@ async function processNetCharges(templateId) {
 
         insertPayload.push({
           headerId: headerMap['Net_Charges'],
+          sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
           value: netCharges.toString()
         });
@@ -3303,7 +3315,7 @@ async function processNetCharges(templateId) {
   }
 }
 
-async function processNetTuition(templateId) {
+async function processNetTuition(templateId, sheetId) {
   const transaction = await sequelize.transaction();
   try {
     // Step 1: Fetch headers
@@ -3326,7 +3338,8 @@ async function processNetTuition(templateId) {
     // Step 2: Fetch relevant SheetData
     const sheetData = await SheetData.findAll({
       where: {
-        headerId: [headerMap['Tuition'], headerMap['Total_Institutional_Gift']]
+        headerId: [headerMap['Tuition'], headerMap['Total_Institutional_Gift']],
+        sheetId: sheetId
       },
       transaction
     });
@@ -3341,6 +3354,7 @@ async function processNetTuition(templateId) {
     // Step 4: Create OperationLog
     const operationLog = await OperationLog.create({
       templateId,
+      sheetId,
       operationType: 'CALCULATION'
     }, { transaction });
 
@@ -3357,6 +3371,7 @@ async function processNetTuition(templateId) {
       const existing = await SheetData.findOne({
         where: {
           headerId: headerMap['Net_Tuition'],
+          sheetId: sheetId,
           rowIndex: parseInt(rowIndex)
         },
         transaction
@@ -3366,6 +3381,7 @@ async function processNetTuition(templateId) {
         snapshotPayload.push({
           operationLogId: operationLog.id,
           headerId: headerMap['Net_Tuition'],
+          sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
           originalValue: existing.value,
           newValue: netTuition.toString(),
@@ -3378,6 +3394,7 @@ async function processNetTuition(templateId) {
         snapshotPayload.push({
           operationLogId: operationLog.id,
           headerId: headerMap['Net_Tuition'],
+          sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
           originalValue: null,
           newValue: netTuition.toString(),
@@ -3386,6 +3403,7 @@ async function processNetTuition(templateId) {
 
         insertPayload.push({
           headerId: headerMap['Net_Tuition'],
+          sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
           value: netTuition.toString()
         });
@@ -3414,7 +3432,7 @@ async function processNetTuition(templateId) {
   }
 }
 
-async function processTotalDiscountRate(templateId) {
+async function processTotalDiscountRate(templateId, sheetId) {
   const transaction = await sequelize.transaction();
   try {
     // Step 1: Fetch headers
@@ -3437,7 +3455,8 @@ async function processTotalDiscountRate(templateId) {
     // Step 2: Fetch relevant SheetData
     const sheetData = await SheetData.findAll({
       where: {
-        headerId: [headerMap['Net_Charges'], headerMap['Total_Institutional_Gift']]
+        headerId: [headerMap['Net_Charges'], headerMap['Total_Institutional_Gift']],
+        sheetId: sheetId
       },
       transaction
     });
@@ -3452,6 +3471,7 @@ async function processTotalDiscountRate(templateId) {
     // Step 4: Create OperationLog
     const operationLog = await OperationLog.create({
       templateId,
+      sheetId,
       operationType: 'CALCULATION'
     }, { transaction });
 
@@ -3468,6 +3488,7 @@ async function processTotalDiscountRate(templateId) {
       const existing = await SheetData.findOne({
         where: {
           headerId: headerMap['Total_Discount_Rate'],
+          sheetId: sheetId,
           rowIndex: parseInt(rowIndex)
         },
         transaction
@@ -3477,6 +3498,7 @@ async function processTotalDiscountRate(templateId) {
         snapshotPayload.push({
           operationLogId: operationLog.id,
           headerId: headerMap['Total_Discount_Rate'],
+          sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
           originalValue: existing.value,
           newValue: discountRate.toString(),
@@ -3489,6 +3511,7 @@ async function processTotalDiscountRate(templateId) {
         snapshotPayload.push({
           operationLogId: operationLog.id,
           headerId: headerMap['Total_Discount_Rate'],
+          sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
           originalValue: null,
           newValue: discountRate.toString(),
@@ -3497,6 +3520,7 @@ async function processTotalDiscountRate(templateId) {
 
         insertPayload.push({
           headerId: headerMap['Total_Discount_Rate'],
+          sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
           value: discountRate.toString()
         });
@@ -3525,7 +3549,7 @@ async function processTotalDiscountRate(templateId) {
   }
 }
 
-async function processNeed(templateId) {
+async function processNeed(templateId, sheetId) {
   const transaction = await sequelize.transaction();
   try {
     // Step 1: Fetch headers
@@ -3548,7 +3572,8 @@ async function processNeed(templateId) {
     // Step 2: Fetch relevant SheetData
     const sheetData = await SheetData.findAll({
       where: {
-        headerId: [headerMap['COA'], headerMap['SAI']]
+        headerId: [headerMap['COA'], headerMap['SAI']],
+        sheetId: sheetId
       },
       transaction
     });
@@ -3563,6 +3588,7 @@ async function processNeed(templateId) {
     // Step 4: Create OperationLog
     const operationLog = await OperationLog.create({
       templateId,
+      sheetId,
       operationType: 'CALCULATION'
     }, { transaction });
 
@@ -3579,6 +3605,7 @@ async function processNeed(templateId) {
       const existing = await SheetData.findOne({
         where: {
           headerId: headerMap['Need'],
+          sheetId: sheetId,
           rowIndex: parseInt(rowIndex)
         },
         transaction
@@ -3588,6 +3615,7 @@ async function processNeed(templateId) {
         snapshotPayload.push({
           operationLogId: operationLog.id,
           headerId: headerMap['Need'],
+          sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
           originalValue: existing.value,
           newValue: need.toString(),
@@ -3600,6 +3628,7 @@ async function processNeed(templateId) {
         snapshotPayload.push({
           operationLogId: operationLog.id,
           headerId: headerMap['Need'],
+          sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
           originalValue: null,
           newValue: need.toString(),
@@ -3608,6 +3637,7 @@ async function processNeed(templateId) {
 
         insertPayload.push({
           headerId: headerMap['Need'],
+          sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
           value: need.toString()
         });
@@ -3636,7 +3666,7 @@ async function processNeed(templateId) {
   }
 }
 
-async function processNeedMet(templateId) {
+async function processNeedMet(templateId, sheetId) {
   const transaction = await sequelize.transaction();
   try {
     // Step 1: Fetch headers
@@ -3659,7 +3689,8 @@ async function processNeedMet(templateId) {
     // Step 2: Fetch relevant SheetData
     const sheetData = await SheetData.findAll({
       where: {
-        headerId: [headerMap['Need'], headerMap['Total_Institutional_Gift']]
+        headerId: [headerMap['Need'], headerMap['Total_Institutional_Gift']],
+        sheetId: sheetId
       },
       transaction
     });
@@ -3674,6 +3705,7 @@ async function processNeedMet(templateId) {
     // Step 4: Create OperationLog
     const operationLog = await OperationLog.create({
       templateId,
+      sheetId,
       operationType: 'CALCULATION'
     }, { transaction });
 
@@ -3690,6 +3722,7 @@ async function processNeedMet(templateId) {
       const existing = await SheetData.findOne({
         where: {
           headerId: headerMap['Need_Met'],
+          sheetId: sheetId,
           rowIndex: parseInt(rowIndex)
         },
         transaction
@@ -3699,6 +3732,7 @@ async function processNeedMet(templateId) {
         snapshotPayload.push({
           operationLogId: operationLog.id,
           headerId: headerMap['Need_Met'],
+          sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
           originalValue: existing.value,
           newValue: needMet.toString(),
@@ -3711,6 +3745,7 @@ async function processNeedMet(templateId) {
         snapshotPayload.push({
           operationLogId: operationLog.id,
           headerId: headerMap['Need_Met'],
+          sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
           originalValue: null,
           newValue: needMet.toString(),
@@ -3719,6 +3754,7 @@ async function processNeedMet(templateId) {
 
         insertPayload.push({
           headerId: headerMap['Need_Met'],
+          sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
           value: needMet.toString()
         });
@@ -3747,7 +3783,7 @@ async function processNeedMet(templateId) {
   }
 }
 
-async function processGap(templateId) {
+async function processGap(templateId, sheetId) {
   const transaction = await sequelize.transaction();
   try {
     // Step 1: Fetch headers
@@ -3770,7 +3806,8 @@ async function processGap(templateId) {
     // Step 2: Fetch relevant SheetData
     const sheetData = await SheetData.findAll({
       where: {
-        headerId: [headerMap['Need_Met']]
+        headerId: [headerMap['Need_Met']],
+        sheetId: sheetId
       },
       transaction
     });
@@ -3785,6 +3822,7 @@ async function processGap(templateId) {
     // Step 4: Create OperationLog
     const operationLog = await OperationLog.create({
       templateId,
+      sheetId,
       operationType: 'CALCULATION'
     }, { transaction });
 
@@ -3799,6 +3837,7 @@ async function processGap(templateId) {
       const existing = await SheetData.findOne({
         where: {
           headerId: headerMap['Gap'],
+          sheetId: sheetId,
           rowIndex: parseInt(rowIndex)
         },
         transaction
@@ -3808,6 +3847,7 @@ async function processGap(templateId) {
         snapshotPayload.push({
           operationLogId: operationLog.id,
           headerId: headerMap['Gap'],
+          sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
           originalValue: existing.value,
           newValue: gap === 0 ? "" : gap.toString(),
@@ -3820,6 +3860,7 @@ async function processGap(templateId) {
         snapshotPayload.push({
           operationLogId: operationLog.id,
           headerId: headerMap['Gap'],
+          sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
           originalValue: null,
           newValue: gap === 0 ? "" : gap.toString(),
@@ -3828,6 +3869,7 @@ async function processGap(templateId) {
 
         insertPayload.push({
           headerId: headerMap['Gap'],
+          sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
           value: gap === 0 ? "" : gap.toString()
         });
@@ -3857,14 +3899,14 @@ async function processGap(templateId) {
 }
 
 
-async function calculateFurtherMetrics(templateId) {
-  await processNACUBODiscountRates(templateId);
-  await processNetCharges(templateId);
-  await processNetTuition(templateId);
-  await processTotalDiscountRate(templateId);
-  await processNeed(templateId);
-  await processNeedMet(templateId);
-  await processGap(templateId);
+async function calculateFurtherMetrics(templateId, sheetId) {
+  await processNACUBODiscountRates(templateId, sheetId);
+  await processNetCharges(templateId, sheetId);
+  await processNetTuition(templateId, sheetId);
+  await processTotalDiscountRate(templateId, sheetId);
+  await processNeed(templateId, sheetId);
+  await processNeedMet(templateId, sheetId);
+  await processGap(templateId, sheetId);
 }
 
 async function calculateAwardInfo(req, res) {
@@ -3876,7 +3918,7 @@ async function calculateAwardInfo(req, res) {
       return res.status(400).json({ message: 'Invalid input. templateId, sheetId, and acceptedStatuses are required.' });
     }
     await calculateAwards(templateId, sheetId, acceptedStatuses, transaction);
-    await calculateFurtherMetrics(templateId);
+    await calculateFurtherMetrics(templateId, sheetId);
     res.status(200).json({ message: 'Award information calculated successfully.' });
   } catch(error){
     await transaction.rollback();
@@ -3885,11 +3927,12 @@ async function calculateAwardInfo(req, res) {
   }
 }
 
-async function evaluatePellRowsSmart({ templateId, pellSource, criteria, targetHeader }) {
+async function evaluatePellRowsSmart({ templateId, sheetId, pellSource, criteria, targetHeader }) {
   const transaction = await sequelize.transaction();
   try {
     const operationLog = await OperationLog.create({
       templateId,
+      sheetId,
       operationType: 'CALCULATION',
     }, { transaction });
 
@@ -3921,7 +3964,7 @@ async function evaluatePellRowsSmart({ templateId, pellSource, criteria, targetH
     // Step 4: Fetch all relevant SheetData
     const allHeaderIds = [...pellHeaders.map(h => h.id), ...statusHeaders.map(h => h.id), target.id];
     const sheetData = await SheetData.findAll({
-      where: { headerId: { [Op.in]: allHeaderIds } },
+      where: { headerId: { [Op.in]: allHeaderIds }, sheetId: sheetId },
       raw: true,
     });
 
@@ -3956,12 +3999,14 @@ async function evaluatePellRowsSmart({ templateId, pellSource, criteria, targetH
         updates.push({
           rowIndex: parseInt(rowIndex),
           headerId: target.id,
+          sheetId: sheetId,
           value: newValue,
         });
 
         snapshots.push({
           operationLogId: operationLog.id,
           headerId: target.id,
+          sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
           originalValue: oldValue || null,
           newValue,
@@ -3991,11 +4036,11 @@ async function evaluatePellRowsSmart({ templateId, pellSource, criteria, targetH
 
 async function calculatePellFlag(req, res) {
   try{
-    const { templateId, pellSource, criteria, targetHeader } = req.body;
-    if (!templateId || !pellSource || !criteria || !targetHeader) {
-      return res.status(400).json({ message: 'Invalid input. templateId, pellSource, criteria, and targetHeader are required.' });
+    const { templateId, sheetId, pellSource, criteria, targetHeader } = req.body;
+    if (!templateId || !sheetId || !pellSource || !criteria || !targetHeader) {
+      return res.status(400).json({ message: 'Invalid input. templateId, sheetId, pellSource, criteria, and targetHeader are required.' });
     }
-    const result = await evaluatePellRowsSmart({ templateId, pellSource, criteria, targetHeader });
+    const result = await evaluatePellRowsSmart({ templateId, sheetId, pellSource, criteria, targetHeader });
     return res.status(200).json({ message: 'Pell flag calculation completed.', details: result });
   } catch(error){
     console.error('Error in calculatePellFlag:', error);
@@ -4003,13 +4048,14 @@ async function calculatePellFlag(req, res) {
   }
 }
 
-async function replaceSheetValues(templateId, originalValue, replaceValue) {
+async function replaceSheetValues(templateId, sheetId, originalValue, replaceValue) {
   const transaction = await sequelize.transaction();
   try {
     const matchValue = originalValue === null ? null : originalValue.trim();
 
     const operationLog = await OperationLog.create({
       templateId,
+      sheetId,
       operationType: 'BULK_UPDATE',
     }, { transaction });
 
@@ -4030,6 +4076,7 @@ async function replaceSheetValues(templateId, originalValue, replaceValue) {
       const rows = await SheetData.findAll({
         where: {
           headerId: { [Op.in]: headerIds },
+          sheetId: sheetId,
           value: matchValue,
         },
         attributes: ['id', 'headerId', 'rowIndex', 'value'],
@@ -4044,12 +4091,13 @@ async function replaceSheetValues(templateId, originalValue, replaceValue) {
 
       await SheetData.update(
         { value: replaceValue },
-        { where: { id: { [Op.in]: idsToUpdate } }, transaction }
+        { where: { id: { [Op.in]: idsToUpdate }, sheetId: sheetId }, transaction }
       );
 
       const snapshots = rows.map(r => ({
         operationLogId: operationLog.id,
         headerId: r.headerId,
+        sheetId: sheetId,
         rowIndex: r.rowIndex,
         originalValue: r.value,
         newValue: replaceValue,
@@ -4074,12 +4122,12 @@ async function replaceSheetValues(templateId, originalValue, replaceValue) {
 
 async function bulkReplaceValues(req, res) {
   try {
-    const { templateId, originalValue, replaceValue } = req.body;
-    if (templateId === undefined || originalValue === undefined || replaceValue === undefined) {
-      return res.status(400).json({ message: 'templateId, originalValue, and replaceValue are required.' });
+    const { templateId, sheetId, originalValue, replaceValue } = req.body;
+    if (templateId === undefined || originalValue === undefined || replaceValue === undefined || sheetId === undefined) {
+      return res.status(400).json({ message: 'templateId, sheetId, originalValue, and replaceValue are required.' });
     }
 
-    const result = await replaceSheetValues(templateId, originalValue, replaceValue);
+    const result = await replaceSheetValues(templateId, sheetId, originalValue, replaceValue);
     return res.status(200).json({ message: 'Bulk replace completed.', details: result });
   } catch (error) {
     console.error('Error in bulkReplaceValues:', error);
