@@ -484,18 +484,18 @@ const requiredHeadersName = [
   "Awd_Amt20",
   "Awd_Status20",
   "Total_Performance_Gift", 
-  "Total_Merit_Gift", 
-  "Total_Need_Gift",
-  "Total_Other_Gift", 
-  "Total_Honors_Gift", 
-  "Total_Inst_Unfunded_Gift",
-  "Total_Inst_Gift", 
-  "Inst_Work", 
-  "Fed_Work", 
+  "Total_Institutional_Merit_Gift", 
+  "Total_Institutional_Need_Gift",
+  "Total_Institutional_Other_Gift", 
+  "Total_Institutional_Honors_Gift", 
+  "Total_Institutional_Unfunded_Gift",
+  "Total_Institutional_Gift", 
+  "Institutional_Work", 
+  "Federal_Work", 
   "Total_Loans",
-  "Total_Emp_Ben", 
-  "Total_Tuit_Exch", 
-  "Total Outside"
+  "Total_Employee_Benefit", 
+  "Total_Tuition_Exchange", 
+  "Total_Outside_Gift+Work+Loan"
 ];
 
 
