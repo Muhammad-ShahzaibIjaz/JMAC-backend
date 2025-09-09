@@ -506,7 +506,7 @@ const awardTypePatterns = {
   "Total_Institutional_Need_Gift": /^IN.G$/,
   "Total_Institutional_Other_Gift": /^IO.G$/,
   "Total_Institutional_Honors_Gift": /^IH.G$/,
-  "Total_Institutional_Unfunded_Gift": /^I..UG$/,
+  "Total_Institutional_Unfunded_Gift": /^I.UG$/,
   "Total_Institutional_Gift": /^I..G$/,
   "Institutional_Work": /^I..W$/,
   "Federal_Work": /^F..W$/,
