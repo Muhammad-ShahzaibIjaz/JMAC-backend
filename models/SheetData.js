@@ -32,7 +32,7 @@ const SheetData = sequelize.define(
     indexes: [
       {
         unique: true,
-        fields: ['headerId', 'rowIndex'],
+        fields: ['headerId', 'rowIndex', 'sheetId'],
       },
     ],
   }

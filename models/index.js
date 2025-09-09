@@ -12,6 +12,7 @@ const CrossReference = require('./CrossReference');
 const CrossReferenceMapping = require('./CrossReferenceMappingAttributes');
 const CalculationRule = require('./CalculationRule');
 const Sheet = require('./Sheet');
+const PellRule = require('./PellRule');
 const sequelize = require('../config/database');
 
 // Define associations
@@ -32,6 +33,9 @@ CalculationRule.belongsTo(Template, { foreignKey: 'templateId' });
 
 Template.hasMany(OperationLog, { foreignKey: 'templateId', onDelete: 'CASCADE' });
 OperationLog.belongsTo(Template, { foreignKey: 'templateId' });
+
+Template.hasMany(PellRule, { foreignKey: 'templateId', onDelete: 'CASCADE' });
+PellRule.belongsTo(Template, { foreignKey: 'templateId' });
 
 Template.hasMany(MappingTemplate, { foreignKey: 'templateId', onDelete: 'CASCADE' });
 MappingTemplate.belongsTo(Template, { foreignKey: 'templateId' });
@@ -73,5 +77,6 @@ module.exports = {
   SheetDataSnapshot,
   Sheet,
   CrossReference,
-  CrossReferenceMapping
+  CrossReferenceMapping,
+  PellRule
 };

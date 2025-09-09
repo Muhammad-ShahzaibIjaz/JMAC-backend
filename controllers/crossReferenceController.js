@@ -181,6 +181,9 @@ const applyReference = async (req, res) => {
     if (!id) {
       return res.status(400).json({ error: 'Reference ID is required' });
     }
+    if (!sheetId) {
+      return res.status(400).json({ error: 'Sheet ID is required' });
+    }
     const crossReferences = await CrossReference.findOne({
       where: { id },
       include: [
