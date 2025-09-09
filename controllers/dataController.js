@@ -2861,8 +2861,8 @@ async function applyReferenceOnData(inputHeaderId, outputHeaderId, mappings, she
       await SheetData.bulkCreate(inserts);
     }
 
-    if (snapshotsWithLogId.length > 0) {
-      await SheetDataSnapshot.bulkCreate(snapshotsWithLogId);
+    if (snapshots.length > 0) {
+      await SheetDataSnapshot.bulkCreate(snapshots);
     }
     await transaction.commit();
     return unmappedValues;
