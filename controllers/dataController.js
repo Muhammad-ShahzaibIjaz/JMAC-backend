@@ -2853,16 +2853,16 @@ async function applyReferenceOnData(inputHeaderId, outputHeaderId, mappings, she
 
     if (updates.length > 0) {
       await Promise.all(updates.map(({ id, value }) =>
-        SheetData.update({ value }, { where: { id, sheetId } })
+        SheetData.update({ value }, { where: { id, sheetId } }, { transaction })
       ));
     }
 
     if (inserts.length > 0) {
-      await SheetData.bulkCreate(inserts);
+      await SheetData.bulkCreate(inserts, { transaction });
     }
 
     if (snapshots.length > 0) {
-      await SheetDataSnapshot.bulkCreate(snapshots);
+      await SheetDataSnapshot.bulkCreate(snapshots, { transaction });
     }
     await transaction.commit();
     return unmappedValues;
