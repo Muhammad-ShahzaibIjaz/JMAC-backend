@@ -5,5 +5,6 @@ const pellController = require('../controllers/pellRuleController');
 router.post('/pell-rule', pellController.createPellRule);
 router.get('/pell-rules', pellController.getPellRules);
 router.get('/pell-rule/:id', pellController.getPellRuleById);
+router.delete('/pell-rule', pellController.deletePellRule);
 
 module.exports = router;

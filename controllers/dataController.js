@@ -1177,34 +1177,55 @@ async function updateData(updates, templateId, sheetId) {
         });
 
         if (!currentRecord) {
-          throw new Error(`Record not found for headerId ${datum.headerId} and rowIndex ${update.rowIndex}`);
+          await SheetData.create({
+            id: uuidv4(),
+            headerId: datum.headerId,
+            sheetId,
+            rowIndex: update.rowIndex,
+            value: datum.value,
+          }, { transaction });
+
+          // Snapshot for insert
+          snapshots.push({
+            id: uuidv4(),
+            operationLogId: operationLog.id,
+            headerId: datum.headerId,
+            sheetId,
+            rowIndex: update.rowIndex,
+            originalValue: '',
+            newValue: datum.value,
+            changeType: 'INSERT',
+          });
+
+          updatedCount += 1;
+        } else {
+          //Create snapshot of original value
+          snapshots.push({
+            id: uuidv4(),
+            operationLogId: operationLog.id,
+            headerId: datum.headerId,
+            sheetId: currentRecord.sheetId,
+            rowIndex: update.rowIndex,
+            originalValue: currentRecord.value,
+            newValue: datum.value,
+          });
+  
+          // Update the record matching headerId and rowIndex
+          const [affectedRows] = await SheetData.update(
+            { value: datum.value },
+            {
+              where: {
+                headerId: datum.headerId,
+                sheetId: sheetId,
+                rowIndex: update.rowIndex,
+              },
+              transaction,
+            }
+          );
+  
+          updatedCount += affectedRows;
         }
 
-        //Create snapshot of original value
-        snapshots.push({
-          id: uuidv4(),
-          operationLogId: operationLog.id,
-          headerId: datum.headerId,
-          sheetId: currentRecord.sheetId,
-          rowIndex: update.rowIndex,
-          originalValue: currentRecord.value,
-          newValue: datum.value,
-        });
-
-        // Update the record matching headerId and rowIndex
-        const [affectedRows] = await SheetData.update(
-          { value: datum.value },
-          {
-            where: {
-              headerId: datum.headerId,
-              sheetId: sheetId,
-              rowIndex: update.rowIndex,
-            },
-            transaction,
-          }
-        );
-
-        updatedCount += affectedRows;
       }
     }
 
@@ -1564,26 +1585,291 @@ function createStringComparisonEvaluator(math) {
           return `${fn}(${left}, ${right})`;
         });
       // Replace == with strEq and != with strNeq for text comparisons
-      expr = expr.replace(/(lower\(@?\w+\))\s*(==|!=)\s*('[^']*')/g, 
+      // expr = expr.replace(/(lower\(@?\w+\))\s*(==|!=)\s*('[^']*')/g, 
+      //   (match, left, op, right) => {
+      //     return op === '==' 
+      //       ? `strEq(${left}, ${right})` 
+      //       : `strNeq(${left}, ${right})`;
+      //   });
+
+      expr = expr.replace(/(lower\(data\[['"][^'"]+['"]\]\))\s*(==|!=)\s*('[^']*')/g, 
         (match, left, op, right) => {
           return op === '==' 
             ? `strEq(${left}, ${right})` 
             : `strNeq(${left}, ${right})`;
         });
       
+      // expr = expr
+      //   .replace(/contains\((\w+)\s*,\s*('[^']*')\)/g, 'contains($1, $2)')
+      //   .replace(/not\(contains\((\w+)\s*,\s*('[^']*')\)\)/g, 'notContains($1, $2)')
+      //   .replace(/isEmpty\((\w+)\)/g, 'isEmpty($1)')
+      //   .replace(/not\(isEmpty\((\w+)\)\)/g, 'isNotEmpty($1)')
+      //   .replace(/startsWith\((\w+)\s*,\s*('[^']*')\)/g, 'startsWith($1, $2)')
+      //   .replace(/endsWith\((\w+)\s*,\s*('[^']*')\)/g, 'endsWith($1, $2)');
+
       expr = expr
-        .replace(/contains\((\w+)\s*,\s*('[^']*')\)/g, 'contains($1, $2)')
-        .replace(/not\(contains\((\w+)\s*,\s*('[^']*')\)\)/g, 'notContains($1, $2)')
-        .replace(/isEmpty\((\w+)\)/g, 'isEmpty($1)')
-        .replace(/not\(isEmpty\((\w+)\)\)/g, 'isNotEmpty($1)')
-        .replace(/startsWith\((\w+)\s*,\s*('[^']*')\)/g, 'startsWith($1, $2)')
-        .replace(/endsWith\((\w+)\s*,\s*('[^']*')\)/g, 'endsWith($1, $2)');
+        .replace(/contains\((data\[['"][^'"]+['"]\])\s*,\s*('[^']*')\)/g, 'contains($1, $2)')
+        .replace(/not\(contains\((data\[['"][^'"]+['"]\])\s*,\s*('[^']*')\)\)/g, 'notContains($1, $2)')
+        .replace(/isEmpty\((data\[['"][^'"]+['"]\])\)/g, 'isEmpty($1)')
+        .replace(/not\(isEmpty\((data\[['"][^'"]+['"]\])\)\)/g, 'isNotEmpty($1)')
+        .replace(/startsWith\((data\[['"][^'"]+['"]\])\s*,\s*('[^']*')\)/g, 'startsWith($1, $2)')
+        .replace(/endsWith\((data\[['"][^'"]+['"]\])\s*,\s*('[^']*')\)/g, 'endsWith($1, $2)');
     }
     return originalEvaluate.call(math, expr, scope);
   };
 }
 
 mathInstance.evaluate = createStringComparisonEvaluator(mathInstance);
+
+// async function applyCalculations(req, res) {
+//   const { templateId, sheetId, conditions, assignments, headers } = req.body;
+//   const transaction = await sequelize.transaction();
+//   let snapshots = [];
+//   try {
+
+//     const operationLog = await OperationLog.create({
+//       id: uuidv4(),
+//       templateId,
+//       sheetId,
+//       operationType: 'CALCULATION',
+//     }, { transaction });
+
+//     // Fetch headers
+//     const dbHeaders = await Header.findAll({
+//       where: { templateId, name: { [Op.in]: headers } },
+//       attributes: ['id', 'name', 'columnType'],
+//       transaction
+//     });
+//     const headerMap = {};
+//     dbHeaders.forEach(h => {
+//       headerMap[h.name] = { id: h.id, columnType: h.columnType || 'text' };
+//     });
+//     const processedConditions = conditions.map(cond => {
+
+//       // Step 1: Clean up outer quotes and escaped quotes
+//       let normalizedCond = cond
+//         .replace(/^"|"$/g, '')
+//         .replace(/\\"/g, '"')
+//         .replace(/"/g, "'");
+
+//       // First pass: Add @ prefix to all header references
+//       normalizedCond = cond.replace(/\b([a-zA-Z_]\w*)\b/g, (match, header) => {
+//         if (headerMap[header] && !match.startsWith('@')) {
+//           return `@${header}`;
+//         }
+//         return match;
+//       });
+
+//       // Second pass: Handle case-insensitive comparison for text columns
+//       normalizedCond = normalizedCond.replace(/@(\w+)\s*(==|!=)\s*('[^']*')/g, 
+//         (match, header, op, value) => {
+//           if (!headerMap[header]) {
+//             throw new Error(`Header ${header} not found in condition: ${cond}`);
+//           }
+//           const columnType = headerMap[header].columnType;
+//           if (['text', 'character', 'Y/N'].includes(columnType)) {
+//             const cleanValue = value.slice(1, -1);
+//             return `lower(@${header}) ${op} '${cleanValue.toLowerCase()}'`;
+//           }
+//           return match;
+//         });
+      
+//       return normalizedCond;
+//     });
+
+//     // Fetch SheetData
+//     const sheetData = await SheetData.findAll({
+//       where: { 
+//         headerId: { [Op.in]: dbHeaders.map(h => h.id) },
+//         sheetId, 
+//       },
+//       attributes: ['headerId', 'rowIndex', 'value'],
+//       transaction
+//     });
+//     const maxRowIndex = await SheetData.findOne({
+//       where: { sheetId },
+//       include: [{
+//         model: Header,
+//         where: { templateId },
+//         attributes: [],
+//       }],
+//       order: [['rowIndex', 'DESC']],
+//       attributes: ['rowIndex'],
+//       transaction,
+//     });
+//     const maxRow = maxRowIndex?.rowIndex ?? 0;
+
+//     const headerRowMap = new Map();
+
+//     for (const entry of sheetData) {
+//       if (!headerRowMap.has(entry.headerId)) {
+//         headerRowMap.set(entry.headerId, new Set());
+//       }
+//       headerRowMap.get(entry.headerId).add(entry.rowIndex);
+//     }
+
+//     for (const header of dbHeaders) {
+//       const existingRows = headerRowMap.get(header.id) || new Set();
+//       for (let i = 0; i <= maxRow; i++) {
+//         if (!existingRows.has(i)) {
+//           sheetData.push({
+//             headerId: header.id,
+//             rowIndex: i,
+//             value: ''
+//           });
+//         }
+//       }
+//     }
+
+
+//     const rows = {};
+//     sheetData.forEach(entry => {
+//       if (!rows[entry.rowIndex]) rows[entry.rowIndex] = {};
+//       const headerName = dbHeaders.find(h => h.id === entry.headerId)?.name;
+//       rows[entry.rowIndex][headerName] = entry.value;
+//     });
+
+//     // Store original values for comparison
+//     const originalValues = {};
+//     sheetData.forEach(entry => {
+//       const headerName = dbHeaders.find(h => h.id === entry.headerId)?.name;
+//       originalValues[`${headerName}-${entry.rowIndex}`] = entry.value;
+//     })
+
+//     // Apply rules
+//     let updatedRows = 0;
+//     const upserts = [];
+//     for (const [rowIndex, rowData] of Object.entries(rows)) {
+//       const scope = {};
+//       dbHeaders.forEach(h => {
+//         const value = rowData[h.name]?.trim();
+//         if (value === '' || value === 'null' || value === undefined) {
+//           scope[h.name] = null;
+//         } else if (h.columnType === 'integer') {
+//           const parsed = parseInt(value, 10);
+//           scope[h.name] = isNaN(parsed) ? null : parsed;
+//         } else if (h.columnType === 'decimal') {
+//           const parsed = parseFloat(value);
+//           scope[h.name] = isNaN(parsed) ? null : parsed;
+//         } else if (h.columnType === 'Date') {
+//           const parsed = new Date(value);
+//           scope[h.name] = isNaN(parsed.getTime()) ? null : parsed;
+//         } else if (h.columnType === 'Y/N') {
+//           const upperValue = value.toUpperCase();
+//           scope[h.name] = ['Y', 'N'].includes(upperValue) ? upperValue : null;
+//         } else {
+//           scope[h.name] = String(value); // text, character
+//         }
+//       });
+
+//       for (let i = 0; i < processedConditions.length; i++) {
+//         let condition = processedConditions[i].replace(/@(\w+)/g, '$1');
+//         const assignment = assignments[i];
+
+//         // Skip evaluation if critical scope values are null
+//         let skipCondition = false;
+//         const headersInCondition = condition.match(/\b(\w+)\b/g) || [];
+//         for (const header of headersInCondition) {
+//           if (scope[header] === null && headerMap[header]?.columnType === 'integer') {
+//             console.log(`Skipping condition ${i} for row ${rowIndex} due to null value in ${header}`);
+//             skipCondition = true;
+//             break;
+//           }
+//         }
+//         if (skipCondition) continue;
+
+//         try {
+//           const conditionResult = mathInstance.evaluate(condition, scope);
+//           if (conditionResult) {
+//             let targetValue;
+//             if (assignment.value.match(/^'[^']*'$/)) {
+//               targetValue = assignment.value.slice(1, -1);
+//             } else if (assignment.value === 'true' || assignment.value === 'false') {
+//               targetValue = assignment.value === 'true';
+//             } else if (!isNaN(assignment.value)) {
+//               targetValue = parseFloat(assignment.value);
+//             } else {
+//               targetValue = mathInstance.evaluate(
+//                 assignment.value.replace(/(?:@)?(\w+)/g, (match, header) => {
+//                   if (headerMap[header]) {
+//                     const value = scope[header];
+//                     if (value === null) return 'null';
+//                     return ['integer', 'decimal'].includes(headerMap[header].columnType)
+//                       ? value
+//                       : `'${String(value)}'`;
+//                   }
+//                   return match;
+//                 }),
+//                 scope
+//               );
+//             }
+//             const targetType = headerMap[assignment.header].columnType;
+//             if (targetValue !== null && targetValue !== undefined) {
+//               if (targetType === 'integer') {
+//                 targetValue = Math.round(Number(targetValue));
+//               } else if (targetType === 'decimal') {
+//                 targetValue = Number(targetValue);
+//               } else if (targetType === 'Y/N') {
+//                 targetValue = String(targetValue).toUpperCase() === 'Y' || targetValue === true ? 'Y' : 'N';
+//               } else if (targetType === 'Date') {
+//                 targetValue = new Date(targetValue).toISOString();
+//               } else {
+//                 targetValue = String(targetValue);
+//               }
+
+
+//               // Only create snapshot if value is changing
+//               const originalValue = originalValues[`${assignment.header}-${rowIndex}`];
+//               if(String(originalValue) !== String(targetValue)) {
+//                 snapshots.push({
+//                   id: uuidv4(),
+//                   operationLogId: operationLog.id,
+//                   headerId: headerMap[assignment.header].id,
+//                   sheetId,
+//                   rowIndex: parseInt(rowIndex),
+//                   originalValue: String(originalValue),
+//                   newValue: String(targetValue)
+//                 });
+//               }
+
+//               upserts.push({
+//                 headerId: headerMap[assignment.header].id,
+//                 sheetId,
+//                 rowIndex: parseInt(rowIndex),
+//                 value: String(targetValue),
+//               });
+//               updatedRows++;
+//               break;
+//             }
+//           }
+//         } catch (condError) {
+//           console.error(`Error evaluating condition ${i} for row ${rowIndex}:`, condError);
+//         }
+//       }
+//     }
+
+//     // Perform batch upsert
+//     if (upserts.length > 0) {
+      
+//       await SheetDataSnapshot.bulkCreate(snapshots, { transaction });
+
+//       for (const upsert of upserts) {
+//         await SheetData.upsert(upsert, { transaction });
+//       }
+//     }
+
+//     await transaction.commit();
+
+//     return res.status(200).json({
+//       message: 'Rules applied successfully',
+//       updatedRows,
+//     });
+//   } catch (error) {
+//     await transaction.rollback();
+//     console.error('Error in applyCalculations:', error);
+//     return res.status(500).json({ error: `Server error: ${error.message}` });
+//   }
+// }
 
 async function applyCalculations(req, res) {
   const { templateId, sheetId, conditions, assignments, headers } = req.body;
@@ -1604,6 +1890,7 @@ async function applyCalculations(req, res) {
       attributes: ['id', 'name', 'columnType'],
       transaction
     });
+    const sortedHeaders = dbHeaders.map(h => h.name).sort((a, b) => b.length - a.length);
     const headerMap = {};
     dbHeaders.forEach(h => {
       headerMap[h.name] = { id: h.id, columnType: h.columnType || 'text' };
@@ -1616,24 +1903,27 @@ async function applyCalculations(req, res) {
         .replace(/\\"/g, '"')
         .replace(/"/g, "'");
 
-      // First pass: Add @ prefix to all header references
-      normalizedCond = cond.replace(/\b([a-zA-Z_]\w*)\b/g, (match, header) => {
-        if (headerMap[header] && !match.startsWith('@')) {
-          return `@${header}`;
-        }
-        return match;
-      });
+      // New: Replace header references with data[JSON.stringify(header)]
+      for (const header of sortedHeaders) {
+        const escaped = header.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        // Match headers bounded by start/end of string, spaces, parens, or operators (==, !=, etc.)
+        const regex = new RegExp(`(^|[\\s(])` + escaped + `([\\s=<>!&|)+-/*%]|$)`, 'g');
+        normalizedCond = normalizedCond.replace(regex, (match, before, after) => {
+          const jsonHeader = JSON.stringify(header);  // e.g., '"Enrolled?"'
+          return `${before}data[${jsonHeader}]${after}`;
+        });
+      }
 
-      // Second pass: Handle case-insensitive comparison for text columns
-      normalizedCond = normalizedCond.replace(/@(\w+)\s*(==|!=)\s*('[^']*')/g, 
-        (match, header, op, value) => {
+      // Updated second pass: Handle case-insensitive for text (now matches data[...])
+      normalizedCond = normalizedCond.replace(/data\[(['"])(.*?)\1\]\s*(==|!=)\s*('[^']*')/g, 
+        (match, quote, header, op, value) => {
           if (!headerMap[header]) {
             throw new Error(`Header ${header} not found in condition: ${cond}`);
           }
           const columnType = headerMap[header].columnType;
           if (['text', 'character', 'Y/N'].includes(columnType)) {
             const cleanValue = value.slice(1, -1);
-            return `lower(@${header}) ${op} '${cleanValue.toLowerCase()}'`;
+            return `lower(data[${JSON.stringify(header)}]) ${op} '${cleanValue.toLowerCase()}'`;
           }
           return match;
         });
@@ -1650,6 +1940,42 @@ async function applyCalculations(req, res) {
       attributes: ['headerId', 'rowIndex', 'value'],
       transaction
     });
+    const maxRowIndex = await SheetData.findOne({
+      where: { sheetId },
+      include: [{
+        model: Header,
+        where: { templateId },
+        attributes: [],
+      }],
+      order: [['rowIndex', 'DESC']],
+      attributes: ['rowIndex'],
+      transaction,
+    });
+    const maxRow = maxRowIndex?.rowIndex ?? 0;
+
+    const headerRowMap = new Map();
+
+    for (const entry of sheetData) {
+      if (!headerRowMap.has(entry.headerId)) {
+        headerRowMap.set(entry.headerId, new Set());
+      }
+      headerRowMap.get(entry.headerId).add(entry.rowIndex);
+    }
+
+    for (const header of dbHeaders) {
+      const existingRows = headerRowMap.get(header.id) || new Set();
+      for (let i = 0; i <= maxRow - 1; i++) {
+        if (!existingRows.has(i)) {
+          sheetData.push({
+            headerId: header.id,
+            rowIndex: i,
+            value: ''
+          });
+        }
+      }
+    }
+
+
     const rows = {};
     sheetData.forEach(entry => {
       if (!rows[entry.rowIndex]) rows[entry.rowIndex] = {};
@@ -1668,35 +1994,45 @@ async function applyCalculations(req, res) {
     let updatedRows = 0;
     const upserts = [];
     for (const [rowIndex, rowData] of Object.entries(rows)) {
-      const scope = {};
+      const scope = { data: {} };
       dbHeaders.forEach(h => {
         const value = rowData[h.name]?.trim();
+        let parsedValue;
         if (value === '' || value === 'null' || value === undefined) {
-          scope[h.name] = null;
+          parsedValue = null;
         } else if (h.columnType === 'integer') {
           const parsed = parseInt(value, 10);
-          scope[h.name] = isNaN(parsed) ? null : parsed;
+          parsedValue = isNaN(parsed) ? null : parsed;
         } else if (h.columnType === 'decimal') {
           const parsed = parseFloat(value);
-          scope[h.name] = isNaN(parsed) ? null : parsed;
+          parsedValue = isNaN(parsed) ? null : parsed;
         } else if (h.columnType === 'Date') {
           const parsed = new Date(value);
-          scope[h.name] = isNaN(parsed.getTime()) ? null : parsed;
+          parsedValue = isNaN(parsed.getTime()) ? null : parsed;
         } else if (h.columnType === 'Y/N') {
           const upperValue = value.toUpperCase();
-          scope[h.name] = ['Y', 'N'].includes(upperValue) ? upperValue : null;
+          parsedValue = ['Y', 'N'].includes(upperValue) ? upperValue : null;
         } else {
-          scope[h.name] = String(value); // text, character
+          parsedValue = String(value); // text, character
         }
+        scope.data[h.name] = parsedValue;
       });
 
       for (let i = 0; i < processedConditions.length; i++) {
-        let condition = processedConditions[i].replace(/@(\w+)/g, '$1');
+        let condition = processedConditions[i];
         const assignment = assignments[i];
 
         // Skip evaluation if critical scope values are null
         let skipCondition = false;
-        const headersInCondition = condition.match(/\b(\w+)\b/g) || [];
+        const headersInCondition = [];
+
+        const originalCond = conditions[i];
+        for (const header of Object.keys(headerMap)) {
+          if (originalCond.includes(header)) {  // Simple check; refine with regex if needed
+            headersInCondition.push(header);
+          }
+        }
+
         for (const header of headersInCondition) {
           if (scope[header] === null && headerMap[header]?.columnType === 'integer') {
             console.log(`Skipping condition ${i} for row ${rowIndex} due to null value in ${header}`);
@@ -1717,19 +2053,23 @@ async function applyCalculations(req, res) {
             } else if (!isNaN(assignment.value)) {
               targetValue = parseFloat(assignment.value);
             } else {
-              targetValue = mathInstance.evaluate(
-                assignment.value.replace(/(?:@)?(\w+)/g, (match, header) => {
-                  if (headerMap[header]) {
-                    const value = scope[header];
-                    if (value === null) return 'null';
-                    return ['integer', 'decimal'].includes(headerMap[header].columnType)
-                      ? value
-                      : `'${String(value)}'`;
+              // New: Replace headers in assignment.value with literal values
+              let expr = assignment.value;
+              for (const header of sortedHeaders) {
+                const escaped = header.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const regex = new RegExp(`(?:@)?` + escaped, 'g');  // Handle optional @ if legacy
+                expr = expr.replace(regex, () => {
+                  const value = scope.data[header];
+                  if (value === null) return 'null';
+                  if (['integer', 'decimal'].includes(headerMap[header].columnType)) {
+                    return value;
+                  } else {
+                    // Escape single quotes for string literals
+                    return `'${String(value).replace(/'/g, "\\'")}'`;
                   }
-                  return match;
-                }),
-                scope
-              );
+                });
+              }
+              targetValue = mathInstance.evaluate(expr, scope);
             }
             const targetType = headerMap[assignment.header].columnType;
             if (targetValue !== null && targetValue !== undefined) {
@@ -1798,6 +2138,8 @@ async function applyCalculations(req, res) {
     return res.status(500).json({ error: `Server error: ${error.message}` });
   }
 }
+
+
 
 
 const addRow = async (req, res) => {
@@ -3539,7 +3881,7 @@ async function processNeed(templateId, sheetId) {
     const headers = await Header.findAll({
       where: {
         templateId,
-        name: ['COA', 'SAI', 'Need']
+        name: ['COA', 'SAI', 'Need', 'Institutional_Merit_As_%_Of_Need_Met']
       },
       transaction
     });
@@ -3624,6 +3966,51 @@ async function processNeed(templateId, sheetId) {
           rowIndex: parseInt(rowIndex),
           value: need.toString()
         });
+      }
+
+      if (headerMap['Institutional_Merit_As_%_Of_Need_Met']) {
+        const existingMeritPercent = await SheetData.findOne({
+          where: {
+            headerId: headerMap['Institutional_Merit_As_%_Of_Need_Met'],
+            sheetId: sheetId,
+            rowIndex: parseInt(rowIndex)
+          },
+          transaction
+        });
+
+        if (existingMeritPercent) {
+          const meritPercent = need === 0 ? 0 : (parseFloat(existingMeritPercent?.value) / need);
+          if (meritPercent !== 0) {
+            existingMeritPercent.value = meritPercent.toString();
+            await existingMeritPercent.save({ transaction });
+            snapshotPayload.push({
+              operationLogId: operationLog.id,
+              headerId: headerMap['Institutional_Merit_As_%_Of_Need_Met'],
+              sheetId: sheetId,
+              rowIndex: parseInt(rowIndex),
+              originalValue: existingMeritPercent.value,
+              newValue: meritPercent.toString(),
+              changeType: 'UPDATE'
+            });
+          }
+        } else {
+          insertPayload.push({
+            headerId: headerMap['Institutional_Merit_As_%_Of_Need_Met'],
+            sheetId: sheetId,
+            rowIndex: parseInt(rowIndex),
+            value: '0'
+          });
+          snapshotPayload.push({
+            operationLogId: operationLog.id,
+            headerId: headerMap['Institutional_Merit_As_%_Of_Need_Met'],
+            sheetId: sheetId,
+            rowIndex: parseInt(rowIndex),
+            originalValue: '',
+            newValue: '0',
+            changeType: 'INSERT'
+          });
+        }
+
       }
     }
 

@@ -28,6 +28,8 @@ const revertRoutes = require("./routes/revertRoutes");
 const visualDataRoutes = require("./routes/populationRoutes");
 const referencesRoutes = require("./routes/crossReferenceRoutes");
 const sheetRoutes = require("./routes/sheetRoute");
+const pellRoutes = require("./routes/pellRoutes");
+
 
 
 app.use("/api", excelRoutes);
@@ -42,5 +44,6 @@ app.use("/api", revertRoutes);
 app.use("/api", visualDataRoutes);
 app.use("/api", referencesRoutes);
 app.use("/api", sheetRoutes);
+app.use("/api", pellRoutes);
 
 module.exports = app;

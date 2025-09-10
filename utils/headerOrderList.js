@@ -497,6 +497,19 @@ const requiredHeadersName = [
   "Total_Tuition_Exchange", 
   "Total_Outside_Gift+Work+Loan",
   "Total_Merit_Need_Gift",
+  "Institutional_Merit_As_%_Of_Need_Met",
+  "Total_Ouside_Gift_Aid",
+  "Total_Outside_Loan_Aid",
+  "Total_Outside_Work_Aid",
+  "Total_Private_Aid_G+W+L",
+  "Total_Private_Gift_Aid",
+  "Total_Private_Loan_Aid",
+  "Total_Private_Work_Aid",
+  "Total_Federal_Aid_G+W+L",
+  "Total_Federal_Gift_Aid",
+  "Total_Federal_Loan_Aid",
+  "Total_State_Aid_G+W+L",
+  "Total_State_Gift_Aid",
 ];
 
 
@@ -515,6 +528,19 @@ const awardTypePatterns = {
   "Total_Tuition_Exchange": /^T...$/,
   "Total_Outside_Gift+Work+Loan": /^O...$/,
   "Total_Merit_Need_Gift": /^.[MN]..$/,
+  "Institutional_Merit_As_%_Of_Need_Met": /^IM.G$/,
+  "Total_Ouside_Gift_Aid": /^O..G$/,
+  "Total_Outside_Loan_Aid": /^O..L$/,
+  "Total_Outside_Work_Aid": /^O..W$/,
+  "Total_Private_Aid_G+W+L": /^P...$/,
+  "Total_Private_Gift_Aid": /^P..G$/,
+  "Total_Private_Loan_Aid": /^P..L$/,
+  "Total_Private_Work_Aid": /^P..W$/,
+  "Total_Federal_Aid_G+W+L": /^F...$/,
+  "Total_Federal_Gift_Aid": /^F..G$/,
+  "Total_Federal_Loan_Aid": /^F..L$/,
+  "Total_State_Aid_G+W+L": /^S...$/,
+  "Total_State_Gift_Aid": /^S..G$/,
 };
 
 
