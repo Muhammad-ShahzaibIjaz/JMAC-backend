@@ -510,6 +510,9 @@ const requiredHeadersName = [
   "Total_Federal_Loan_Aid",
   "Total_State_Aid_G+W+L",
   "Total_State_Gift_Aid",
+  "Total_Need_Based_Aid",
+  "Total_Gift_Aid",
+  "Total_Work_Aid",
 ];
 
 
@@ -527,7 +530,7 @@ const awardTypePatterns = {
   "Total_Employee_Benefit": /^E...$/,
   "Total_Tuition_Exchange": /^T...$/,
   "Total_Outside_Gift+Work+Loan": /^O...$/,
-  "Total_Merit_Need_Gift": /^.[MN]..$/,
+  "Total_Merit_Need_Gift": /^.[MN].G$/,
   "Institutional_Merit_As_%_Of_Need_Met": /^IM.G$/,
   "Total_Ouside_Gift_Aid": /^O..G$/,
   "Total_Outside_Loan_Aid": /^O..L$/,
@@ -541,6 +544,10 @@ const awardTypePatterns = {
   "Total_Federal_Loan_Aid": /^F..L$/,
   "Total_State_Aid_G+W+L": /^S...$/,
   "Total_State_Gift_Aid": /^S..G$/,
+  "Total_Need_Based_Aid": /^.N..$/,
+  "Total_Gift_Aid": /^...G$/,
+  "Total_Work_Aid": /^...W$/,
+
 };
 
 
