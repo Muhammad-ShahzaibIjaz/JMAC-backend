@@ -25,8 +25,11 @@ async function generateExcelFile({ headers, maxRowIndex, totalErrorRows, errorRo
     const rowData = headers.map(header => {
       const cellData = rowBuckets.get(rowIndex)?.get(header.id);
       let value = cellData ? cellData.value || '' : '';
+      value = typeof value === 'string' ? value.replace(/[\u0000-\u001F\u007F-\u009F]/g, '') : value;
       if (header.columnType === 'Date' && value) {
-        return new Date(value);
+        // return new Date(value);
+        const parsedDate = new Date(value);
+        return isNaN(parsedDate.getTime()) ? '' : parsedDate;
       }
       return value;
     });
@@ -36,8 +39,15 @@ async function generateExcelFile({ headers, maxRowIndex, totalErrorRows, errorRo
       if (cellData && cellData.valid === false) {
         const cell = row.getCell(colIndex + 1);
         if (header.columnType === 'Date') {
-          cell.value = new Date(cellData.value);
-          cell.numFmt = 'mm-dd-yyyy';
+          // cell.value = new Date(cellData.value);
+          // cell.numFmt = 'mm-dd-yyyy';
+          const parsedDate = new Date(cellData.value);
+          if (!isNaN(parsedDate.getTime())) {
+            cell.value = parsedDate;
+            cell.numFmt = 'mm-dd-yyyy';
+          } else {
+            cell.value = '';
+          }
         }
         cell.fill = {
           type: 'pattern',

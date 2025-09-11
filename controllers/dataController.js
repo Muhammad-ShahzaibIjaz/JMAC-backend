@@ -14,7 +14,7 @@ const { convertScore } = require('../services/conversion');
 const { getCipTitle } = require('../services/cipService');
 const { desiredOrder, requiredHeadersName, awardTypePatterns } = require('../utils/headerOrderList');
 const { buildZipCountyMap } = require('../services/countyService');
-const { calculateNACUBODiscountRate, calculateNetCharges, calculateGap, calculateNeedMet, calculateTotalDiscountRate, calculateNetTuition, calculateNeed, matchCriteria, calculateTotalNeedMet } = require('../utils/calculationHelper');
+const { calculateNACUBODiscountRate, calculateNetCharges, calculateGap, calculateNeedMet, calculateTotalDiscountRate, calculateNetTuition, calculateNeed, matchCriteria, calculateTotalNeedMet, calculateTotalDirectCost } = require('../utils/calculationHelper');
 
 async function deleteSheetData(req, res) {
   try {
@@ -4680,7 +4680,6 @@ async function calculateAwardInfo(req, res) {
       }],
       order: [['rowIndex', 'DESC']],
       attributes: ['rowIndex'],
-      transaction,
     });
     const maxRow = maxRowIndex?.rowIndex ?? 0;
 
