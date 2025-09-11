@@ -3400,7 +3400,7 @@ async function calculateAwards(templateId, sheetId, acceptedStatuses, transactio
 }
 
 async function processNACUBODiscountRates(templateId, sheetId, maxRowIndex) {
-  console.log('Processing NACUBO Discount Rates...');
+  console.log('Processing NACUBO Discount Rates... and maxRowIndex is ', maxRowIndex);
   const transaction = await sequelize.transaction();
   try {
     // Step 1: Fetch headers
@@ -3412,6 +3412,8 @@ async function processNACUBODiscountRates(templateId, sheetId, maxRowIndex) {
       transaction
     });
 
+    console.log('Fetched headers:', headers.length);
+
     const headerMap = {};
     headers.forEach(h => headerMap[h.name] = h.id);
 
@@ -3419,7 +3421,7 @@ async function processNACUBODiscountRates(templateId, sheetId, maxRowIndex) {
       await transaction.rollback();
       return { message: 'NACUBO_Discount_Rate header not found.' };
     }
-
+    console.log('Coming After Check');
     // Step 2: Fetch relevant SheetData
     const sheetData = await SheetData.findAll({
       where: {
@@ -3446,7 +3448,6 @@ async function processNACUBODiscountRates(templateId, sheetId, maxRowIndex) {
     // Step 5: Prepare payloads
     const insertPayload = [];
     const snapshotPayload = [];
-
     for (let rowIndex = 0; rowIndex <= maxRowIndex; rowIndex++) {
       const values = grouped[rowIndex] || {};
       const tuition = values[headerMap['Tuition']] || 0;
@@ -4711,7 +4712,7 @@ async function evaluatePellRowsSmart({ templateId, sheetId, pellSource, criteria
     const pellHeaders = [];
     const statusHeaders = [];
 
-    for (let i = 1; i <= 20; i++) { // assuming max 20 pairs
+    for (let i = 1; i <= 20; i++) {
       const pellName = `Awd_${pellSource}${i}`;
       const statusName = `Awd_Status${i}`;
 
