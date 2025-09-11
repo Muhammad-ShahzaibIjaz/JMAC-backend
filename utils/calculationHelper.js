@@ -18,6 +18,10 @@ function calculateNetCharges(tuition, fees, housingCost, food, gift) {
   return (tuition + fees + housingCost + food) - gift;
 }
 
+function calculateTotalDirectCost(tuition, fees, housingCost, food) {
+  return tuition + fees + housingCost + food;
+}
+
 function calculateNeed(COA, SAI) {
   return COA - SAI;
 }
@@ -61,5 +65,6 @@ module.exports = {
   calculateNeedMet,
   calculateGap,
   matchCriteria,
-  calculateTotalNeedMet
+  calculateTotalNeedMet,
+  calculateTotalDirectCost
 };

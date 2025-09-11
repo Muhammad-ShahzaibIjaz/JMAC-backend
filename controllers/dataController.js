@@ -3546,7 +3546,8 @@ async function processNetCharges(templateId, sheetId, maxRowIndex) {
           headerMap['Tuition'],
           headerMap['Fees'],
           headerMap['Housing Cost'],
-          headerMap['Food']
+          headerMap['Food'],
+          headerMap['Total_Institutional_Gift']
         ],
         sheetId: sheetId
       },
@@ -3641,6 +3642,132 @@ async function processNetCharges(templateId, sheetId, maxRowIndex) {
   } catch (error) {
     await transaction.rollback();
     console.error('Error processing Net_Charges:', error);
+    throw error;
+  }
+}
+
+async function processTotalDirectCost(templateId, sheetId, maxRowIndex) {
+  console.log('Processing Total_Direct_Cost...');
+  const transaction = await sequelize.transaction();
+  try {
+    // Step 1: Fetch headers
+    const headers = await Header.findAll({
+      where: {
+        templateId,
+        name: ['Tuition', 'Fees', 'Housing_Cost', 'Food', 'Total_Direct_Cost']
+      },
+      transaction
+    });
+
+    const headerMap = {};
+    headers.forEach(h => headerMap[h.name] = h.id);
+
+    if (!headerMap['Total_Direct_Cost']) {
+      await transaction.rollback();
+      return { message: 'Total_Direct_Cost header not found.' };
+    }
+
+    // Step 2: Fetch relevant SheetData
+    const sheetData = await SheetData.findAll({
+      where: {
+        headerId: [
+          headerMap['Tuition'],
+          headerMap['Fees'],
+          headerMap['Housing Cost'],
+          headerMap['Food']
+        ],
+        sheetId: sheetId
+      },
+      transaction
+    });
+
+    // Step 3: Group by rowIndex
+    const grouped = {};
+    sheetData.forEach(data => {
+      if (!grouped[data.rowIndex]) grouped[data.rowIndex] = {};
+      grouped[data.rowIndex][data.headerId] = parseFloat(data.value) || 0;
+    });
+
+    // Step 4: Create OperationLog
+    const operationLog = await OperationLog.create({
+      templateId,
+      sheetId,
+      operationType: 'CALCULATION'
+    }, { transaction });
+
+    // Step 5: Prepare payloads
+    const insertPayload = [];
+    const snapshotPayload = [];
+
+    for (let rowIndex = 0; rowIndex <= maxRowIndex; rowIndex++) {
+      const values = grouped[rowIndex] || {};
+      const tuition = values[headerMap['Tuition']] || 0;
+      const fees = values[headerMap['Fees']] || 0;
+      const housing = values[headerMap['Housing Cost']] || 0;
+      const food = values[headerMap['Food']] || 0;
+
+      const netCharges = calculateTotalDirectCost(tuition, fees, housing, food);
+
+      const existing = await SheetData.findOne({
+        where: {
+          headerId: headerMap['Total_Direct_Cost'],
+          sheetId: sheetId,
+          rowIndex: parseInt(rowIndex)
+        },
+        transaction
+      });
+
+      if (existing) {
+        snapshotPayload.push({
+          operationLogId: operationLog.id,
+          headerId: headerMap['Total_Direct_Cost'],
+          sheetId: sheetId,
+          rowIndex: parseInt(rowIndex),
+          originalValue: existing.value,
+          newValue: netCharges.toString(),
+          changeType: 'UPDATE'
+        });
+
+        existing.value = netCharges.toString();
+        await existing.save({ transaction });
+      } else {
+        snapshotPayload.push({
+          operationLogId: operationLog.id,
+          headerId: headerMap['Total_Direct_Cost'],
+          sheetId: sheetId,
+          rowIndex: parseInt(rowIndex),
+          originalValue: null,
+          newValue: netCharges.toString(),
+          changeType: 'INSERT'
+        });
+
+        insertPayload.push({
+          headerId: headerMap['Total_Direct_Cost'],
+          sheetId: sheetId,
+          rowIndex: parseInt(rowIndex),
+          value: netCharges.toString()
+        });
+      }
+    }
+
+    // Step 6: Bulk insert new SheetData
+    if (insertPayload.length > 0) {
+      await SheetData.bulkCreate(insertPayload, { transaction });
+    }
+
+    // Step 7: Bulk insert SheetDataSnapshot
+    if (snapshotPayload.length > 0) {
+      await SheetDataSnapshot.bulkCreate(snapshotPayload, { transaction });
+    }
+
+    await transaction.commit();
+    return {
+      message: 'Processed Total_Direct_Cost with logging and snapshots.',
+      rowsAffected: insertPayload.length + snapshotPayload.length
+    };
+  } catch (error) {
+    await transaction.rollback();
+    console.error('Error processing Total_Direct_Cost:', error);
     throw error;
   }
 }
@@ -4525,6 +4652,7 @@ async function processTotalNeedMet_W(templateId, sheetId, maxRowIndex) {
 async function calculateFurtherMetrics(templateId, sheetId, maxRowIndex) {
   await processNACUBODiscountRates(templateId, sheetId, maxRowIndex);
   await processNetCharges(templateId, sheetId, maxRowIndex);
+  await processTotalDirectCost(templateId, sheetId, maxRowIndex);
   await processNetTuition(templateId, sheetId, maxRowIndex);
   await processTotalDiscountRate(templateId, sheetId, maxRowIndex);
   await processNeed(templateId, sheetId, maxRowIndex);
