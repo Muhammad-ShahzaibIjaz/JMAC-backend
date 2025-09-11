@@ -3447,13 +3447,12 @@ async function processNACUBODiscountRates(templateId, sheetId, maxRowIndex) {
     const insertPayload = [];
     const snapshotPayload = [];
 
-    for (let rowIndex = 0; math.rowIndex <= maxRowIndex; rowIndex++) {
+    for (let rowIndex = 0; rowIndex <= maxRowIndex; rowIndex++) {
       const values = grouped[rowIndex] || {};
       const tuition = values[headerMap['Tuition']] || 0;
       const fees = values[headerMap['Fees']] || 0;
       const gift = values[headerMap['Total_Institutional_Unfunded_Gift']] || 0;
       const discountRate = calculateNACUBODiscountRate(tuition, fees, gift);
-
       const existing = await SheetData.findOne({
         where: {
           headerId: headerMap['NACUBO_Discount_Rate'],
@@ -3707,6 +3706,7 @@ async function processTotalDirectCost(templateId, sheetId, maxRowIndex) {
       const food = values[headerMap['Food']] || 0;
 
       const netCharges = calculateTotalDirectCost(tuition, fees, housing, food);
+      console.log(`Row ${rowIndex}: Calculated Total_Direct_Cost = ${netCharges}`);
 
       const existing = await SheetData.findOne({
         where: {
@@ -3899,7 +3899,7 @@ async function processTotalDiscountRate(templateId, sheetId, maxRowIndex) {
     const headers = await Header.findAll({
       where: {
         templateId,
-        name: ['Net_Charges', 'Total_Institutional_Gift', 'Total_Discount_Rate']
+        name: ['Net_Charges', 'Total_Direct_Cost', 'Total_Discount_Rate']
       },
       transaction
     });
@@ -3915,7 +3915,7 @@ async function processTotalDiscountRate(templateId, sheetId, maxRowIndex) {
     // Step 2: Fetch relevant SheetData
     const sheetData = await SheetData.findAll({
       where: {
-        headerId: [headerMap['Net_Charges'], headerMap['Total_Institutional_Gift']],
+        headerId: [headerMap['Net_Charges'], headerMap['Total_Direct_Cost']],
         sheetId: sheetId
       },
       transaction
@@ -3939,13 +3939,12 @@ async function processTotalDiscountRate(templateId, sheetId, maxRowIndex) {
     const insertPayload = [];
     const snapshotPayload = [];
 
-    for (let rowIndex = 0; math.rowIndex <= maxRowIndex; rowIndex++) {
+    for (let rowIndex = 0; rowIndex <= maxRowIndex; rowIndex++) {
       const values = grouped[rowIndex] || {};
       const netCharges = values[headerMap['Net_Charges']] || 0;
-      const gift = values[headerMap['Total_Institutional_Gift']] || 0;
+      const gift = values[headerMap['Total_Direct_Cost']] || 0;
 
       const discountRate = calculateTotalDiscountRate(netCharges, gift);
-
       const existing = await SheetData.findOne({
         where: {
           headerId: headerMap['Total_Discount_Rate'],
@@ -4117,7 +4116,8 @@ async function processNeed(templateId, sheetId, maxRowIndex) {
         });
 
         if (existingMeritPercent) {
-          const meritPercent = need === 0 ? 0 : (parseFloat(existingMeritPercent?.value) / need);
+          let meritPercent = need === 0 ? 0 : (parseFloat(existingMeritPercent?.value) / need);
+          meritPercent = meritPercent.toFixed(2);
           if (meritPercent !== 0) {
             existingMeritPercent.value = meritPercent.toString();
             await existingMeritPercent.save({ transaction });

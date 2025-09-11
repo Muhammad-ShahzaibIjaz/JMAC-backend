@@ -4,9 +4,9 @@ function calculateNACUBODiscountRate(tuition, fees, totalUnfundedGift) {
   return (rate * 100).toFixed(2) + '%';
 }
 
-function calculateTotalDiscountRate(netCharges, totalInstitutionalGift) {
-  if (netCharges === 0) return 0;
-  const rate = ((netCharges - totalInstitutionalGift) / netCharges);
+function calculateTotalDiscountRate(netCharges, totalDirectCost) {
+  if (totalDirectCost === 0 || netCharges === 0) return 0;
+  const rate = (netCharges / totalDirectCost);
   return (rate * 100).toFixed(2) + '%';
 }
 
