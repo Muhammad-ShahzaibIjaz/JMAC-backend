@@ -117,7 +117,7 @@ const categorizer = async (req, res) => {
       result = { type: "date", ranges };
 
     } else if (["Y/N", "character", "string"].includes(type)) {
-      cleaned.push(...[" ", "NULL"]);
+      cleaned.push(...["NULL"]);
       const allUniqueValues = Array.from(new Set(cleaned));
       result = { type: "category", values: [{ labels: allUniqueValues }] };
 
