@@ -15,6 +15,7 @@ const { getCipTitle } = require('../services/cipService');
 const { desiredOrder, requiredHeadersName, awardTypePatterns } = require('../utils/headerOrderList');
 const { buildZipCountyMap } = require('../services/countyService');
 const { calculateNACUBODiscountRate, calculateNetCharges, calculateGap, calculateNeedMet, calculateTotalDiscountRate, calculateNetTuition, calculateNeed, matchCriteria, calculateTotalNeedMet, calculateTotalDirectCost } = require('../utils/calculationHelper');
+const { evaluateConditions } = require('../services/evaluation');
 
 async function deleteSheetData(req, res) {
   try {
@@ -3109,6 +3110,273 @@ async function evaluateRulesAndReturnFilteredData(req, res) {
   }
 }
 
+const normalizeKey = key => key.replace(/[^a-zA-Z0-9_]/g, '_');
+
+async function evaluateSheetDataWithConditions(req, res) {
+  const { templateId, sheetId, headers = [], conditions = [], currentPage = 1, pageSize = 30 } = req.body;
+  try {
+    if (!templateId || !sheetId) {
+      return res.status(400).json({ error: 'templateId and sheetId are required' });
+    }
+    // 🔹 Step 1: Fetch headers from DB
+    const allHeaders = await Header.findAll({
+      where: {
+        templateId
+      },
+      raw: true,
+    });
+    const evaluationHeaders = allHeaders.filter(h => headers.includes(h.name));
+
+    if (allHeaders.length === 0) {
+      return res.status(404).json({ error: 'No headers found for the template' });
+    }
+
+    const sortedHeaders = sortHeadersFlexibleMatch(allHeaders);
+
+    // 🔹 Step 2: Build header lookup
+    const evaluationHeaderIds = evaluationHeaders.map(h => h.id);
+    const allHeaderIds = sortedHeaders.map(h => h.id);
+
+
+    // 🔹 Step 3: Fetch SheetData for all relevant headers
+    const sheetDataForEvaluation = await SheetData.findAll({
+      where: {
+        sheetId,
+        headerId: { [Op.in]: evaluationHeaderIds }
+      },
+      raw: true,
+    });
+
+    // 🔹 Step 4: Organize data row-wise
+    const evalRows = new Map(); // rowIndex → { headerName → { value, id } }
+    sheetDataForEvaluation.forEach(entry => {
+      const header = evaluationHeaders.find(h => h.id === entry.headerId);
+      const normalizedName = normalizeKey(header.name);
+      const row = evalRows.get(entry.rowIndex) || {};
+      row[normalizedName] = { value: entry.value, id: entry.id };
+      evalRows.set(entry.rowIndex, row);
+    });
+
+    // 🔹 Step 5: Evaluate conditions
+    const matchingRowIndices = [];
+    const errorRowIndices = [];
+
+    for (const [rowIndex, rowData] of evalRows.entries()) {
+      const filteredRowData = {};
+      for (const name of headers) {
+        const normalized = normalizeKey(name);
+        filteredRowData[normalized] = rowData[normalized];
+      }
+      const isValid = evaluateConditions(rowData, conditions);
+      if (isValid) matchingRowIndices.push(rowIndex);
+    }
+
+    // 🔹 Step 6: Apply pagination
+    const start = (currentPage - 1) * pageSize;
+    const end = start + pageSize;
+    const paginatedRowIndices = matchingRowIndices.slice(start, end);
+
+    const sequentialRowIndices = paginatedRowIndices.map((originalRowIndex, i) => ({
+      originalRowIndex,
+      sequentialRowIndex: start + i + 1
+    }));
+
+
+    const sheetDataForDisplay = await SheetData.findAll({
+      where: {
+        sheetId,
+        headerId: { [Op.in]: allHeaderIds },
+        rowIndex: { [Op.in]: paginatedRowIndices },
+      },
+      raw: true,
+    });
+
+    const finalRows = new Map();
+
+    sheetDataForDisplay.forEach(entry => {
+      const header = sortedHeaders.find(h => h.id === entry.headerId);
+      const normalizedName = normalizeKey(header.name);
+      const row = finalRows.get(entry.rowIndex) || {};
+      row[normalizedName] = { value: entry.value, id: entry.id };
+      finalRows.set(entry.rowIndex, row);
+    });
+
+    // 🔹 Step 7: Build response
+    const responseHeaders = sortedHeaders.map(header => {
+      const headerData = sequentialRowIndices.map(({ originalRowIndex, sequentialRowIndex }) => {
+        const normalizedName = normalizeKey(header.name);
+        const entry = finalRows.get(originalRowIndex)?.[normalizedName] ?? { value: null };
+        const { value, valid } = validateAndConvertValue(
+          entry.value ?? null,
+          header.columnType,
+          header.criticalityLevel
+        );
+
+        return {
+          id: entry.id || `${header.id}-${sequentialRowIndex}`,
+          rowIndex: sequentialRowIndex,
+          originalRowIndex,
+          value,
+          valid
+        };
+      });
+
+      return {
+        id: header.id,
+        name: header.name,
+        criticalityLevel: header.criticalityLevel,
+        columnType: header.columnType,
+        data: headerData
+      };
+    });
+
+    return res.status(200).json({
+      headers: responseHeaders,
+      totalErrorRows: errorRowIndices.length,
+      errorPages: [], // optional
+      pagination: {
+        currentPage,
+        pageSize,
+        totalRows: matchingRowIndices.length,
+        totalPages: Math.ceil(matchingRowIndices.length / pageSize)
+      }
+    });
+  } catch (error) {
+    console.error('Error in evaluateSheetDataWithConditions:', error);
+    res.status(500).json({
+      error: 'Internal server error',
+      details: error.message,
+    });
+  }
+}
+
+
+async function evaluateSheetDataAndAssign(req, res) {
+  const { templateId, sheetId, headers = [], conditions = [], targetHeaderName, targetValue } = req.body;
+  try {
+    if (!templateId || !sheetId) {
+      return res.status(400).json({ error: 'templateId and sheetId are required' });
+    }
+    // 🔹 Step 1: Fetch headers from DB
+    const allHeaders = await Header.findAll({
+      where: {
+        templateId,
+        name: { [Op.in]: [...headers, targetHeaderName] }
+      },
+      raw: true,
+    });
+
+    const evaluationHeaders = allHeaders.filter(h => headers.includes(h.name));
+    const targetHeader = allHeaders.find(h => h.name === targetHeaderName);
+    if (allHeaders.length === 0) {
+      return res.status(404).json({ error: 'No headers found for the template' });
+    }
+
+    // Get Max Row Index
+    const [result] = await sequelize.query(`
+      SELECT MAX("rowIndex") AS "maxRow"
+      FROM "SheetData"
+      WHERE "sheetId" = :sheetId
+        AND "headerId" IN (
+          SELECT "id" FROM "Header" WHERE "templateId" = :templateId
+        )
+    `, {
+      replacements: { sheetId, templateId },
+      type: QueryTypes.SELECT
+    });
+    
+    const maxRowIndex = result.maxRow ?? 0;
+
+    // 🔹 Step 2: Build header lookup
+    const evaluationHeaderIds = evaluationHeaders.map(h => h.id);
+    const targetHeaderId = targetHeader?.id;
+
+    // 🔹 Step 3: Fetch SheetData for all relevant headers
+    const sheetDataForEvaluation = await SheetData.findAll({
+      where: {
+        sheetId,
+        headerId: { [Op.in]: evaluationHeaderIds }
+      },
+      raw: true,
+    });
+    // 🔹 Step 4: Organize data row-wise
+    const evalRows = new Map(); // rowIndex → { headerName → { value, id } }
+    sheetDataForEvaluation.forEach(entry => {
+      const header = evaluationHeaders.find(h => h.id === entry.headerId);
+      const normalizedName = normalizeKey(header.name);
+      const row = evalRows.get(entry.rowIndex) || {};
+      row[normalizedName] = { value: entry.value, id: entry.id };
+      evalRows.set(entry.rowIndex, row);
+    });
+    // 🔹 Step 5: Evaluate conditions
+    const matchingRowIndices = [];
+
+    for (let rowIndex = 0; rowIndex <= maxRowIndex; rowIndex++) {
+      const rowData = evalRows.get(rowIndex) || {};
+
+      const filteredRowData = {};
+      for (const name of headers) {
+        const normalized = normalizeKey(name);
+        filteredRowData[normalized] = rowData[normalized] ?? { value: null };
+      }
+
+      const isValid = evaluateConditions(filteredRowData, conditions);
+      if (isValid) matchingRowIndices.push(rowIndex);
+    }
+    // 🔹 Step 6: Do Assignments
+    if (targetHeaderId) {
+      const existingData = await SheetData.findAll({
+        where: {
+          sheetId,
+          headerId: targetHeaderId,
+          rowIndex: { [Op.in]: matchingRowIndices }
+        },
+        raw: true,
+      });
+
+      const existingMap = new Map();
+      existingData.forEach(entry => {
+        existingMap.set(entry.rowIndex, entry);
+      });
+
+      const upserts = [];
+
+      for (const rowIndex of matchingRowIndices) {
+        const existingEntry = existingMap.get(rowIndex);
+
+        if (existingEntry) {
+          upserts.push({
+            id: existingEntry.id,
+            sheetId,
+            headerId: targetHeaderId,
+            rowIndex,
+            value: targetValue
+          });
+        } else {
+          upserts.push({
+            sheetId,
+            headerId: targetHeader.id,
+            rowIndex,
+            value: targetValue
+          });
+
+        }
+      }
+      await SheetData.bulkCreate(upserts, { updateOnDuplicate: ['value'] });
+    }
+    return res.status(200).json({
+      message: 'Assignment completed',
+      assignedRows: matchingRowIndices.length
+    });
+  } catch (error) {
+    console.error('Error in evaluateSheetDataAndAssign:', error);
+    res.status(500).json({
+      error: 'Internal server error',
+      details: error.message,
+    });
+  }
+}
+
 
 async function applyReferenceOnData(inputHeaderId, outputHeaderId, mappings, sheetId, templateId) {
   const transaction = await sequelize.transaction();
@@ -4926,5 +5194,7 @@ module.exports = {
   calculateAwardInfo,
   zipCountyConversion,
   calculatePellFlag,
-  bulkReplaceValues
+  bulkReplaceValues,
+  evaluateSheetDataWithConditions,
+  evaluateSheetDataAndAssign
 };

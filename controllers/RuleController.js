@@ -1,7 +1,7 @@
 const Rule = require("../models/Rule");
 const CalculationRule = require("../models/CalculationRule");
 const { v4: uuidv4 } = require("uuid");
-const { Header } = require("../models");
+const { Header, ConditionalRule } = require("../models");
 const { bulkUpdates } = require("./dataController");
 
 const createRule = async (req, res) => {
@@ -25,6 +25,39 @@ const createRule = async (req, res) => {
     });
 
     return res.status(201).json({ message: "Rule created successfully", rule });
+  } catch (error) {
+    console.error("Error creating rule:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+
+const createConditionalRule = async (req, res) => {
+  try {
+    const { ruleName, conditions, headers, targetHeaderName, targetValue, templateId } = req.body;
+
+    // Validate input
+    if (!ruleName || !conditions || !headers || !targetHeaderName || !targetValue || !templateId) {
+      return res.status(400).json({ error: "All fields (ruleName, conditions, headers, targetHeaderName, targetValue, templateId) are required" });
+    }
+
+    const uniqueHeaders = [...new Set(headers)];
+
+    const rule = await ConditionalRule.create({
+      id: uuidv4(),
+      ruleName,
+      conditions,
+      targetHeaderName,
+      targetValue,
+      headers: uniqueHeaders,
+      templateId
+    });
+
+    return res.status(201).json({ id: rule.id, ruleName: rule.ruleName, conditions: Array.isArray(conditions.all)
+  ? conditions.all.length
+  : Array.isArray(conditions.any)
+    ? conditions.any.length
+    : 0, targetHeaderName: rule.targetHeaderName, targetValue: rule.targetValue });
   } catch (error) {
     console.error("Error creating rule:", error);
     return res.status(500).json({ error: "Internal server error" });
@@ -101,12 +134,64 @@ const getAllRules = async (req, res) => {
   }
 };
 
+const getAllConditionalRules = async (req, res) => {
+  try {
+    const { templateId } = req.params;
+    const rules = await ConditionalRule.findAll({
+      where: { templateId },
+      attributes: ['id', 'ruleName', 'conditions', 'headers', 'targetHeaderName', 'targetValue'],
+      order: [['createdAt', 'DESC']]
+    });
+
+    const transformedRules = rules.map((rule) => {
+      const conditionBlock = rule.conditions;
+      const combinatorKey = Object.keys(conditionBlock)[0];
+      const conditionList = conditionBlock[combinatorKey];
+
+      const conditionCount = Array.isArray(conditionList) ? conditionList.length : 0;
+
+      return {
+        id: rule.id,
+        ruleName: rule.ruleName,
+        conditions: conditionCount,
+        headers: rule.headers,
+        targetHeaderName: rule.targetHeaderName,
+        targetValue: rule.targetValue
+      };
+    });
+    return res.status(200).json(transformedRules);
+  } catch (error) {
+    console.error("Error fetching rules:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+
 const getRuleById = async (req, res) => {
   try {
     const { id } = req.query;
 
     const rule = await Rule.findByPk(id, {
       attributes: ['id', 'name', 'conditions', 'assignments', 'headers', 'templateId'],
+      raw: true
+    });
+    if (!rule) {
+      return res.status(404).json({ error: "Rule not found" });
+    }
+
+    return res.status(200).json(rule);
+  } catch (error) {
+    console.error("Error fetching rule:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+const getConditionalRuleById = async (req, res) => {
+  try {
+    const { id } = req.query;
+
+    const rule = await ConditionalRule.findByPk(id, {
+      attributes: ['id', 'ruleName', 'conditions', 'headers', 'targetHeaderName', 'targetValue'],
       raw: true
     });
     if (!rule) {
@@ -208,6 +293,23 @@ const deleteBulkRule = async (req, res) => {
   }
 }
 
+const deleteConditionalRule = async (req, res) => {
+  try {
+    const { id } = req.query;
+
+    const rule = await ConditionalRule.findByPk(id);
+    if (!rule) {
+      return res.status(404).json({ error: "Rule not found" });
+    }
+
+    await rule.destroy();
+    return res.status(200).json({ message: "Rule deleted successfully" });
+  } catch (error) {
+    console.error("Error deleting rule:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+
 module.exports = {
   createRule,
   updateRule,
@@ -217,5 +319,9 @@ module.exports = {
   getBulkRulesByTemplateId,
   createBulkRule,
   applyBulkRule,
-  deleteBulkRule
+  deleteBulkRule,
+  createConditionalRule,
+  getAllConditionalRules,
+  getConditionalRuleById,
+  deleteConditionalRule
 };

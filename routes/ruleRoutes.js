@@ -11,5 +11,9 @@ router.get('/bulk-rules', ruleController.getBulkRulesByTemplateId);
 router.post('/bulk-rule', ruleController.createBulkRule);
 router.put('/apply-bulk-rule', ruleController.applyBulkRule);
 router.delete('/bulk-rule', ruleController.deleteBulkRule);
+router.post('/conditional-rule', ruleController.createConditionalRule);
+router.get('/conditional-rules/:templateId', ruleController.getAllConditionalRules);
+router.get('/conditional-rule', ruleController.getConditionalRuleById);
+router.delete('/conditional-rule', ruleController.deleteConditionalRule);
 
 module.exports = router;

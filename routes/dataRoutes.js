@@ -22,5 +22,7 @@ router.delete('/delete-row/:templateId/:sheetId/:rowIndex', dataController.delet
 router.put('/award-calculation', dataController.calculateAwardInfo);
 router.put('/find-pell', dataController.calculatePellFlag);
 router.put('/replace-value', dataController.bulkReplaceValues);
+router.post('/evaluate-conditions', dataController.evaluateSheetDataWithConditions);
+router.post('/apply-conditional-rule', dataController.evaluateSheetDataAndAssign);
 
 module.exports = router;
