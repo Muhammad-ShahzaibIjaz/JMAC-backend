@@ -3339,7 +3339,14 @@ async function evaluateSheetDataAndAssign(req, res) {
         existingMap.set(entry.rowIndex, entry);
       });
 
+      const operationLog = await OperationLog.create({
+        templateId,
+        sheetId,
+        operationType: 'CALCULATION'
+      });
+
       const upserts = [];
+      const snapshots = [];
 
       for (const rowIndex of matchingRowIndices) {
         const existingEntry = existingMap.get(rowIndex);
@@ -3352,6 +3359,15 @@ async function evaluateSheetDataAndAssign(req, res) {
             rowIndex,
             value: targetValue
           });
+          snapshots.push({
+            operationLogId: operationLog.id,
+            headerId: targetHeaderId,
+            sheetId,
+            rowIndex,
+            originalValue: existingEntry.value,
+            newValue: targetValue,
+            changeType: 'UPDATE'
+          });
         } else {
           upserts.push({
             sheetId,
@@ -3359,10 +3375,22 @@ async function evaluateSheetDataAndAssign(req, res) {
             rowIndex,
             value: targetValue
           });
-
+          snapshots.push({
+            operationLogId: operationLog.id,
+            headerId: targetHeaderId,
+            sheetId,
+            rowIndex,
+            originalValue: null,
+            newValue: targetValue,
+            changeType: 'INSERT'
+          });
         }
       }
       await SheetData.bulkCreate(upserts, { updateOnDuplicate: ['value'] });
+
+      if (snapshots.length > 0) {
+        await SheetDataSnapshot.bulkCreate(snapshots);
+      }
     }
     return res.status(200).json({
       message: 'Assignment completed',
