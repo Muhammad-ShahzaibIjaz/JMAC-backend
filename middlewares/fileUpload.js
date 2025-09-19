@@ -52,7 +52,7 @@ const upload = multer({
   limits: {
     fileSize: 100 * 1024 * 1024,
     files: 10,
-    fields: 6,
+    fields: 7,
   },
   fileFilter: (req, file, cb) => {
     const allowedTypes = [
@@ -75,6 +75,7 @@ const upload = multer({
   { name: "headerPosition", maxCount: 1 },
   { name: "isRowSkipped", maxCount: 1 },
   { name: "sheetId", maxCount: 1 },
+  { name: "isOriginal", maxCount: 1 },
 ]);
 
 module.exports = upload;

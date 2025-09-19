@@ -2,7 +2,7 @@ const SheetData = require('../models/SheetData');
 const Header = require('../models/Header');
 const Template = require('../models/Template');
 const sequelize = require('../config/database');
-const { DataTypes, Op, where, cast, col, fn} = require('sequelize');
+const { DataTypes, Op, where, cast, col, fn, literal} = require('sequelize');
 const { v4: uuidv4 } = require('uuid');
 const math = require('mathjs');
 const { OperationLog, SheetDataSnapshot } = require('../models');
@@ -13,12 +13,12 @@ const categorizer = async (req, res) => {
   const transaction = await sequelize.transaction();
 
   try {
-    const { templateId, sheetId, targetHeader, categoryCount } = req.query;
+    const { templateId, sheetId, targetHeader } = req.query;
 
-    if (!templateId || !sheetId || !targetHeader || !categoryCount) {
+    if (!templateId || !sheetId || !targetHeader) {
       await transaction.rollback();
       return res.status(400).json({
-        error: "Missing required fields: templateId, sheetId, targetHeader and categoryCount are required",
+        error: "Missing required fields: templateId, sheetId, targetHeader are required",
       });
     }
 
@@ -77,44 +77,20 @@ const categorizer = async (req, res) => {
       const [minMax] = await SheetData.findAll({
         where: { headerId: header.id, sheetId },
         attributes: [
-          [fn("MIN", col("value")), "min"],
-          [fn("MAX", col("value")), "max"]
+          [literal('MIN(CAST("value" AS DOUBLE PRECISION))'), 'min'],
+          [literal('MAX(CAST("value" AS DOUBLE PRECISION))'), 'max']
         ],
         raw: true,
         transaction
       });
-
-      const min = Number(minMax.min);
-      const max = Number(minMax.max);
-      const step = (max - min) / categoryCount;
-      const epsilon = 0.000001;
-
-      const ranges = [];
-      for (let i = 0; i < categoryCount; i++) {
-        const start = parseFloat((min + i * step + (i > 0 ? epsilon : 0)).toFixed(6));
-        const end = parseFloat((i === categoryCount - 1 ? max : min + (i + 1) * step).toFixed(6));
-        ranges.push({ start, end });
-      }
-
-      result = { type: "numeric", ranges };
+      result = { type: "numeric", ranges : [{ start: Number(minMax.min), end: Number(minMax.max) }]  };
 
     } else if (type === "Date") {
       const dateValues = cleaned.map(val => new Date(val)).filter(d => !isNaN(d));
       if (dateValues.length === 0) throw new Error("No valid date entries found");
 
       dateValues.sort((a, b) => a - b);
-      const total = dateValues.length;
-      const bucketSize = Math.floor(total / categoryCount);
-      if (bucketSize === 0) throw new Error("Too many categories for available date data");
-
-      const ranges = [];
-      for (let i = 0; i < categoryCount; i++) {
-        const start = dateValues[i * bucketSize].toISOString();
-        const end = dateValues[i === categoryCount - 1 ? total - 1 : (i + 1) * bucketSize - 1].toISOString();
-        ranges.push({ start, end });
-      }
-
-      result = { type: "date", ranges };
+      result = { type: "date", ranges: [{ start : dateValues[0].toISOString(), end: dateValues[dateValues.length - 1].toISOString() }] };
 
     } else if (["Y/N", "character", "string"].includes(type)) {
       cleaned.push(...["NULL"]);
@@ -129,6 +105,7 @@ const categorizer = async (req, res) => {
     return res.status(200).json(result);
 
   } catch (error) {
+    console.error("Error in categorizer:", error.message, error.stack);
     await transaction.rollback();
     return res.status(500).json({ error: error.message || "Failed to categorize data" });
   }

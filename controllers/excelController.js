@@ -491,7 +491,7 @@ async function ensureHeadersExist(templateHeaders, templateId, transaction, rowM
   return saved;
 }
 
-function prepareInsertPayload(sheet, templateHeadersFromDB, dbMappings) {
+function prepareInsertPayload(sheet, templateHeadersFromDB, dbMappings, isOriginal) {
   const resolvedMap = new Map();
 
   for (const templateHeader of templateHeadersFromDB) {
@@ -501,7 +501,7 @@ function prepareInsertPayload(sheet, templateHeadersFromDB, dbMappings) {
 
     let matchIndex = -1;
 
-    if (mappedName) {
+    if (mappedName && !isOriginal) {
       matchIndex = sheet.headers.findIndex(h => h.toLowerCase() === mappedName);
     }
 
@@ -535,11 +535,11 @@ function prepareInsertPayload(sheet, templateHeadersFromDB, dbMappings) {
 }
 
 
-async function saveFileAndSingleSheetData(processedFiles, templateId, mappingTemplateId, sheetId, transaction) {
+async function saveFileAndSingleSheetData(processedFiles, templateId, mappingTemplateId, sheetId, isOriginal, transaction) {
   const sheet = getValidSheet(processedFiles);
   const templateHeaders = await fetchTemplateHeaders(templateId, transaction);
   const mapHeaders = await fetchMapHeaders(mappingTemplateId, transaction);
-  const resolvedPayload = prepareInsertPayload(sheet, templateHeaders, mapHeaders);
+  const resolvedPayload = prepareInsertPayload(sheet, templateHeaders, mapHeaders, isOriginal);
   
   const headerMapping = resolveHeaderMapping(sheet.headers, templateHeaders, mapHeaders);
   const rowMap = deduplicateRows(sheet.data);
@@ -566,7 +566,6 @@ async function saveFileAndSingleSheetData(processedFiles, templateId, mappingTem
 
 
   console.log(`⏳ Inserting ${sheetDataPayload.length} cells from ${rowMap.size} unique rows`);
-  // await SheetData.bulkCreate(sheetDataPayload, { transaction });
   await copySheetData(sheetDataPayload);
   return { savedHeaders: savedHeaders.map(h => h.header) };
 }
@@ -645,8 +644,8 @@ async function uploadAndGetHeaders(req, res) {
 
 async function uploadAndProcessData(req, res) {
   try {
-    const { templateId, mappingtemplateId, fileNames, sheetId } = req.body;
-    if (!templateId || !mappingtemplateId || !sheetId) {
+    const { templateId, mappingtemplateId, fileNames, sheetId, isOriginal=false } = req.body;
+    if (!templateId || !mappingtemplateId || !sheetId ) {
       return res.status(400).json({ error: 'templateId, Mapping TemplateId, and sheetId are required' });
     }
 
@@ -659,7 +658,7 @@ async function uploadAndProcessData(req, res) {
     const processedFiles = await headerProcessor(files);
     
     await sequelize.transaction(async (t) => {
-      await saveFileAndSingleSheetData(processedFiles, templateId, mappingtemplateId, sheetId, t);
+      await saveFileAndSingleSheetData(processedFiles, templateId, mappingtemplateId, sheetId, isOriginal ,t);
     });
 
     res.status(201).json({
@@ -911,17 +910,21 @@ async function processAndGetSheetMapHeaders(req, res) {
   }
 }
 
-async function getTemplateAndMappings(templateId, mappingTemplateId, transaction) {
+async function getTemplateAndMappings(templateId, mappingTemplateId, isOriginal, transaction) {
   const templateHeaders = await Header.findAll({ where: { templateId }, transaction });
 
   const headerMap = new Map(); // templateHeader.name → [mappedNames]
-  if (mappingTemplateId) {
+  if (mappingTemplateId && !isOriginal) {
     const mapHeaders = await MapHeader.findAll({ where: { mappingTemplateId }, transaction });
     for (const th of templateHeaders) {
       const mapped = mapHeaders
         .filter(mh => mh.headerId === th.id)
         .map(mh => mh.name.toLowerCase());
       headerMap.set(th.name.toLowerCase(), mapped);
+    }
+  } else {
+    for (const th of templateHeaders) {
+      headerMap.set(th.name.toLowerCase(), [th.name.toLowerCase()]);
     }
   }
 
@@ -1003,7 +1006,7 @@ function processSheetsAndMergeData(allSheets, commonHeader, templateHeaders, hea
 }
 
 
-async function saveFileAndDataOptimized(processedFiles, templateId, mappingTemplateId, sheetId, transaction) {
+async function saveFileAndDataOptimized(processedFiles, templateId, mappingTemplateId, sheetId, isOriginal, transaction) {
   const allSheets = processedFiles.flatMap(file =>
     file.sheets.map(sheet => ({
       fileName: file.fileName,
@@ -1012,7 +1015,7 @@ async function saveFileAndDataOptimized(processedFiles, templateId, mappingTempl
       data: sheet.data
     }))
   );
-  const { templateHeaders, headerMap } = await getTemplateAndMappings(templateId, mappingTemplateId, transaction);
+  const { templateHeaders, headerMap } = await getTemplateAndMappings(templateId, mappingTemplateId, isOriginal, transaction);
 
   const commonHeader = detectCommonHeaderAcrossSheets(allSheets, templateHeaders, headerMap);
   if (!commonHeader) throw new Error("❌ No valid common header found across all sheets");
@@ -1041,7 +1044,7 @@ async function saveFileAndDataOptimized(processedFiles, templateId, mappingTempl
 async function processAndSaveSelectedSheets(req, res) {
   try{
 
-    const { templateId, sheetSelectionData, mappingtemplateId, sheetId} = req.body;
+    const { templateId, sheetSelectionData, mappingtemplateId, sheetId, isOriginal=false} = req.body;
 
     if (!templateId) {
       throw new Error("templateId is required");
@@ -1135,7 +1138,7 @@ async function processAndSaveSelectedSheets(req, res) {
     }
 
     await sequelize.transaction(async (t) => {
-      await saveFileAndDataOptimized(filteredProcessedFiles, templateId, mappingtemplateId, sheetId, t);
+      await saveFileAndDataOptimized(filteredProcessedFiles, templateId, mappingtemplateId, sheetId, isOriginal, t);
     });
 
     res.status(201).json({

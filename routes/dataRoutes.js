@@ -24,5 +24,7 @@ router.put('/find-pell', dataController.calculatePellFlag);
 router.put('/replace-value', dataController.bulkReplaceValues);
 router.post('/evaluate-conditions', dataController.evaluateSheetDataWithConditions);
 router.post('/apply-conditional-rule', dataController.evaluateSheetDataAndAssign);
+router.post('/status-values', dataController.getStatusValues);
+
 
 module.exports = router;

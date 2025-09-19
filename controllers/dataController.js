@@ -5197,6 +5197,40 @@ async function bulkReplaceValues(req, res) {
   }
 }
 
+async function getStatusValues(req, res) {
+  const { templateId, sheetId, targetHeader } = req.body;
+
+  try {
+    if (!templateId || !sheetId || !targetHeader) {
+      return res.status(400).json({ message: 'templateId, sheetId, and targetHeader are required.' });
+    }
+
+    const header = await Header.findOne({ where: { templateId, name: targetHeader } });
+    if (!header) {
+      return res.status(404).json({ message: `Header "${targetHeader}" not found for the given templateId.` });
+    }
+
+    const statusData = await SheetData.findAll({
+      where: { headerId: header.id, sheetId },
+      attributes: ['value'],
+      raw: true,
+    });
+
+    const statusValues = [
+      ...new Set(
+        statusData
+          .map(item => item.value?.trim())
+          .filter(v => v !== undefined && v !== null && v !== '' && v !== 'NULL')
+      )
+    ];
+
+    return res.status(200).json({ statusValues });
+  } catch (error) {
+    console.error('Error in getStatusValues:', error);
+    return res.status(500).json({ message: 'Internal server error.', details: error.message });
+  }
+}
+
 module.exports = {
   deleteSheetData, 
   getMatrixPop, 
@@ -5224,5 +5258,6 @@ module.exports = {
   calculatePellFlag,
   bulkReplaceValues,
   evaluateSheetDataWithConditions,
-  evaluateSheetDataAndAssign
+  evaluateSheetDataAndAssign,
+  getStatusValues
 };

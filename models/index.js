@@ -14,6 +14,9 @@ const CalculationRule = require('./CalculationRule');
 const Sheet = require('./Sheet');
 const PellRule = require('./PellRule');
 const ConditionalRule = require('./ConditionalRule');
+const PopulationRule = require('./PopulationRule');
+const PopulationStatus = require('./PopulationStatus');
+const PopulationSubmission = require('./PopulationSubmission');
 const sequelize = require('../config/database');
 
 // Define associations
@@ -40,6 +43,15 @@ PellRule.belongsTo(Template, { foreignKey: 'templateId' });
 
 Template.hasMany(ConditionalRule, { foreignKey: 'templateId', onDelete: 'CASCADE' });
 ConditionalRule.belongsTo(Template, { foreignKey: 'templateId' });
+
+Template.hasMany(PopulationRule, { foreignKey: 'templateId', onDelete: 'CASCADE' });
+PopulationRule.belongsTo(Template, { foreignKey: 'templateId' });
+
+Template.hasMany(PopulationStatus, { foreignKey: 'templateId', onDelete: 'CASCADE' });
+PopulationStatus.belongsTo(Template, { foreignKey: 'templateId' });
+
+Template.hasMany(PopulationSubmission, { foreignKey: 'templateId', onDelete: 'CASCADE' });
+PopulationSubmission.belongsTo(Template, { foreignKey: 'templateId' });
 
 Template.hasMany(MappingTemplate, { foreignKey: 'templateId', onDelete: 'CASCADE' });
 MappingTemplate.belongsTo(Template, { foreignKey: 'templateId' });
@@ -83,5 +95,8 @@ module.exports = {
   CrossReference,
   CrossReferenceMapping,
   PellRule,
-  ConditionalRule
+  ConditionalRule,
+  PopulationRule,
+  PopulationStatus,
+  PopulationSubmission
 };

@@ -1,0 +1,14 @@
+const express = require('express');
+const router = express.Router();
+const populationStatusController = require('../controllers/PopulationStatusController');
+
+router.post('/save-status', populationStatusController.savePopulationStatus);
+router.get('/status/:templateId', populationStatusController.getPopulationStatusByTemplateId);
+router.put('/status', populationStatusController.updatePopulationStatus);
+router.delete('/status/:id', populationStatusController.deletePopulationStatus);
+router.post('/save-submission-date', populationStatusController.savePopulationSubmissionDate);
+router.get('/submissions/:templateId', populationStatusController.getPopulationSubmissionsByTemplateId);
+router.put('/submission', populationStatusController.updatePopulationSubmissionDate);
+router.delete('/submission/:id', populationStatusController.deletePopulationSubmission);
+
+module.exports = router;

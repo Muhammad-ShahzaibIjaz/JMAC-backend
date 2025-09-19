@@ -1,7 +1,7 @@
 const Rule = require("../models/Rule");
 const CalculationRule = require("../models/CalculationRule");
 const { v4: uuidv4 } = require("uuid");
-const { Header, ConditionalRule } = require("../models");
+const { Header, ConditionalRule, PopulationRule } = require("../models");
 const { bulkUpdates } = require("./dataController");
 
 const createRule = async (req, res) => {
@@ -310,6 +310,143 @@ const deleteConditionalRule = async (req, res) => {
   }
 };
 
+
+const createPopulationRule = async (req, res) => {
+  try {
+    const { ruleName, conditions, headers, templateId } = req.body;
+
+    if (!ruleName || !conditions || !headers || !templateId) {
+      return res.status(400).json({ error: "All fields (ruleName, conditions, headers, templateId) are required" });
+    }
+
+    const uniqueHeaders = [...new Set(headers)];
+
+    const existingRule = await PopulationRule.findOne({ where: { ruleName, templateId } });
+    if (existingRule) {
+      return res.status(409).json({ error: "Population rule with the same name already exists for this template" });
+    }
+
+    const rule = await PopulationRule.create({
+      ruleName,
+      conditions,
+      headers: uniqueHeaders,
+      templateId
+    });
+
+    return res.status(201).json({ id: rule.id, ruleName: rule.ruleName, conditions: Array.isArray(conditions.all)
+  ? conditions.all.length
+  : Array.isArray(conditions.any)
+    ? conditions.any.length
+    : 0 });
+  } catch (error) {
+    console.error("Error creating population rule:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+const updatePopulationRule = async (req, res) => {
+  const { id, ruleName, conditions, headers } = req.body;
+
+  try {
+    if (!id || !ruleName || !conditions || !headers) {
+      return res.status(400).json({
+        error: "All fields (id, ruleName, conditions, headers) are required"
+      });
+    }
+
+    const uniqueHeaders = [...new Set(headers)];
+
+    const rule = await PopulationRule.findByPk(id);
+    if (!rule) {
+      return res.status(404).json({ error: "Population rule not found" });
+    }
+
+    await rule.update({
+      ruleName,
+      conditions,
+      headers: uniqueHeaders
+    });
+
+    // ✅ Match createPopulationRule response format
+    return res.status(200).json({
+      id: rule.id,
+      ruleName: rule.ruleName,
+      conditions: Array.isArray(conditions.all)
+        ? conditions.all.length
+        : Array.isArray(conditions.any)
+        ? conditions.any.length
+        : 0
+    });
+  } catch (error) {
+    console.error("Error updating population rule:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+
+const getPopulationRuleByTemplateId = async (req, res) => {
+  const { templateId } = req.params;
+  try {
+    const rules = await PopulationRule.findAll({ 
+      where: { templateId },
+      attributes: ['id', 'ruleName', 'conditions'],
+      order: [['createdAt', 'DESC']]
+    });
+    const transformedRules = rules.map((rule) => {
+      const conditionBlock = rule.conditions;
+      const combinatorKey = Object.keys(conditionBlock)[0];
+      const conditionList = conditionBlock[combinatorKey];
+
+      const conditionCount = Array.isArray(conditionList) ? conditionList.length : 0;
+
+      return {
+        id: rule.id,
+        ruleName: rule.ruleName,
+        conditions: conditionCount,
+      };
+    });
+    return res.status(200).json(transformedRules);
+  } catch (error) {
+    console.error("Error fetching population rules:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+
+const getPopulationRuleById = async (req, res) => {
+  const { id } = req.query;
+  try {
+    const rule = await PopulationRule.findByPk(id, {
+      attributes: ['id', 'ruleName', 'conditions', 'headers'],
+      raw: true
+    });
+    if (!rule) {
+      return res.status(404).json({ error: "Rule not found" });
+    }
+    return res.status(200).json(rule);
+  } catch (error) {
+    console.error("Error fetching rule:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+const deletePopulationRule = async (req, res) => {
+  try {
+    const { id } = req.query;
+
+    const rule = await PopulationRule.findByPk(id);
+    if (!rule) {
+      return res.status(404).json({ error: "Rule not found" });
+    }
+
+    await rule.destroy();
+    return res.status(200).json({ message: "Rule deleted successfully" });
+  } catch (error) {
+    console.error("Error deleting rule:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+
 module.exports = {
   createRule,
   updateRule,
@@ -323,5 +460,10 @@ module.exports = {
   createConditionalRule,
   getAllConditionalRules,
   getConditionalRuleById,
-  deleteConditionalRule
+  deleteConditionalRule,
+  createPopulationRule,
+  getPopulationRuleByTemplateId,
+  getPopulationRuleById,
+  deletePopulationRule,
+  updatePopulationRule
 };
