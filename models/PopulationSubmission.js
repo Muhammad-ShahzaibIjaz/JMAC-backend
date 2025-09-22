@@ -21,8 +21,8 @@ const PopulationSubmission = sequelize.define(
         type: DataTypes.STRING,
         allowNull: true,
     },
-    selectedSheets: {
-        type: DataTypes.ARRAY(DataTypes.UUID),
+    selectedSheet: {
+        type: DataTypes.UUID,
         allowNull: false,
     }
 },
