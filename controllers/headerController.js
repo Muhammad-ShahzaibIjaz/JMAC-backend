@@ -6,6 +6,7 @@ const sequelize = require('../config/database');
 const { v4: uuidv4 } = require('uuid');
 const { exportHeader } = require('../services/excelService');
 const { DataTypes } = require('sequelize');
+const { desiredOrderType } = require('../utils/headerOrderList');
 const desiredOrder = require('../utils/headerOrderList').desiredOrder;
 
 async function createHeader(req, res) {
@@ -60,11 +61,11 @@ async function createBaseHeader(req, res) {
       return res.status(400).json({ error: 'Template ID is required and must be non-empty' });
     }
 
-    const headersToCreate = desiredOrder.map((headerName) => ({
+    const headersToCreate = desiredOrder.map((headerName, index) => ({
       id: uuidv4(),
       name: headerName.trim(),
       criticalityLevel: '3',
-      columnType: 'text',
+      columnType: desiredOrderType[index].trim(),
       templateId,
     }));
 
