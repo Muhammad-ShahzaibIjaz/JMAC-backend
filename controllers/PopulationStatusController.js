@@ -393,11 +393,11 @@ async function getAveragesFromMatchedRows(sheetId, matchedRowIndexes, templateId
   }
 
   console.log(`Calculating averages for ${matchedRowIndexes.length} matched rows`);
-  // Step 1: Get headerIds for Net_Tuition and NACUBO_Discount_Rate
+  // Step 1: Get headerIds for Net_Tuition_Revenue and NACUBO_Discount_Rate
   const headers = await Header.findAll({
     where: {
       templateId,
-      name: { [Op.in]: ['Net_Tuition', 'NACUBO_Discount_Rate'] },
+      name: { [Op.in]: ['Net_Tuition_Revenue', 'NACUBO_Discount_Rate'] },
     },
     raw: true,
   });
@@ -407,7 +407,7 @@ async function getAveragesFromMatchedRows(sheetId, matchedRowIndexes, templateId
     return acc;
   }, {});
 
-  const netTuitionHeaderId = headerMap['Net_Tuition'];
+  const netTuitionHeaderId = headerMap['Net_Tuition_Revenue'];
   const discountRateHeaderId = headerMap['NACUBO_Discount_Rate'];
 
   if (!netTuitionHeaderId && !discountRateHeaderId) {
@@ -463,11 +463,11 @@ async function getAveragesMetricsFromMatchedRows(sheetId, matchedRowIndexes, tem
   }
 
   console.log(`Calculating averages for ${matchedRowIndexes.length} matched rows`);
-  // Step 1: Get headerIds for Net_Tuition and NACUBO_Discount_Rate
+  // Step 1: Get headerIds for Net_Tuition_Revenue and NACUBO_Discount_Rate
   const headers = await Header.findAll({
     where: {
       templateId,
-      name: { [Op.in]: ['Net_Tuition', 'Net_Charges', 'NACUBO_Discount_Rate', 'Total_Discount_Rate'] },
+      name: { [Op.in]: ['Net_Tuition_Revenue', 'Net_Charges_To_Student', 'NACUBO_Discount_Rate', 'Total_Discount_Rate'] },
     },
     raw: true,
   });
@@ -477,9 +477,9 @@ async function getAveragesMetricsFromMatchedRows(sheetId, matchedRowIndexes, tem
     return acc;
   }, {});
 
-  const netTuitionHeaderId = headerMap['Net_Tuition'];
+  const netTuitionHeaderId = headerMap['Net_Tuition_Revenue'];
   const discountRateHeaderId = headerMap['NACUBO_Discount_Rate'];
-  const netChargesHeaderId = headerMap['Net_Charges'];
+  const netChargesHeaderId = headerMap['Net_Charges_To_Student'];
   const totalDiscountHeaderId = headerMap['Total_Discount_Rate'];
 
   if (!netTuitionHeaderId && !discountRateHeaderId && !netChargesHeaderId && !totalDiscountHeaderId) {

@@ -3703,7 +3703,7 @@ async function processNACUBODiscountRates(templateId, sheetId, maxRowIndex) {
     const headers = await Header.findAll({
       where: {
         templateId,
-        name: ['Tuition', 'Fees', 'Total_Institutional_Unfunded_Gift', 'NACUBO_Discount_Rate']
+        name: ['2_Semester_Tuition', '2_Semester_Fees', 'Total_Institutional_Unfunded_Gift', 'NACUBO_Discount_Rate']
       },
       transaction
     });
@@ -3721,7 +3721,7 @@ async function processNACUBODiscountRates(templateId, sheetId, maxRowIndex) {
     // Step 2: Fetch relevant SheetData
     const sheetData = await SheetData.findAll({
       where: {
-        headerId: [headerMap['Tuition'], headerMap['Fees'], headerMap['Total_Institutional_Unfunded_Gift']],
+        headerId: [headerMap['2_Semester_Tuition'], headerMap['2_Semester_Fees'], headerMap['Total_Institutional_Unfunded_Gift']],
         sheetId: sheetId
       },
       transaction
@@ -3746,8 +3746,8 @@ async function processNACUBODiscountRates(templateId, sheetId, maxRowIndex) {
     const snapshotPayload = [];
     for (let rowIndex = 0; rowIndex <= maxRowIndex; rowIndex++) {
       const values = grouped[rowIndex] || {};
-      const tuition = values[headerMap['Tuition']] || 0;
-      const fees = values[headerMap['Fees']] || 0;
+      const tuition = values[headerMap['2_Semester_Tuition']] || 0;
+      const fees = values[headerMap['2_Semester_Fees']] || 0;
       const gift = values[headerMap['Total_Institutional_Unfunded_Gift']] || 0;
       const discountRate = calculateNACUBODiscountRate(tuition, fees, gift);
       const existing = await SheetData.findOne({
@@ -3822,7 +3822,7 @@ async function processNetCharges(templateId, sheetId, maxRowIndex) {
     const headers = await Header.findAll({
       where: {
         templateId,
-        name: ['Tuition', 'Fees', 'Housing_Cost', 'Food', 'Net_Charges', 'Total_Institutional_Gift']
+        name: ['2_Semester_Tuition', '2_Semester_Fees', '2_Semester_Room', '2_Semester_Meals', 'Net_Charges_To_Student', 'Total_Institutional_Gift']
       },
       transaction
     });
@@ -3830,19 +3830,19 @@ async function processNetCharges(templateId, sheetId, maxRowIndex) {
     const headerMap = {};
     headers.forEach(h => headerMap[h.name] = h.id);
 
-    if (!headerMap['Net_Charges']) {
+    if (!headerMap['Net_Charges_To_Student']) {
       await transaction.rollback();
-      return { message: 'Net_Charges header not found.' };
+      return { message: 'Net_Charges_To_Student header not found.' };
     }
 
     // Step 2: Fetch relevant SheetData
     const sheetData = await SheetData.findAll({
       where: {
         headerId: [
-          headerMap['Tuition'],
-          headerMap['Fees'],
-          headerMap['Housing Cost'],
-          headerMap['Food'],
+          headerMap['2_Semester_Tuition'],
+          headerMap['2_Semester_Fees'],
+          headerMap['2_Semester_Room'],
+          headerMap['2_Semester_Meals'],
           headerMap['Total_Institutional_Gift']
         ],
         sheetId: sheetId
@@ -3870,17 +3870,17 @@ async function processNetCharges(templateId, sheetId, maxRowIndex) {
 
     for (let rowIndex = 0; rowIndex <= maxRowIndex; rowIndex++) {
       const values = grouped[rowIndex] || {};
-      const tuition = values[headerMap['Tuition']] || 0;
-      const fees = values[headerMap['Fees']] || 0;
-      const housing = values[headerMap['Housing Cost']] || 0;
-      const food = values[headerMap['Food']] || 0;
+      const tuition = values[headerMap['2_Semester_Tuition']] || 0;
+      const fees = values[headerMap['2_Semester_Fees']] || 0;
+      const housing = values[headerMap['2_Semester_Room']] || 0;
+      const food = values[headerMap['2_Semester_Meals']] || 0;
       const gift = values[headerMap['Total_Institutional_Gift']] || 0;
 
       const netCharges = calculateNetCharges(tuition, fees, housing, food, gift);
 
       const existing = await SheetData.findOne({
         where: {
-          headerId: headerMap['Net_Charges'],
+          headerId: headerMap['Net_Charges_To_Student'],
           sheetId: sheetId,
           rowIndex: parseInt(rowIndex)
         },
@@ -3890,7 +3890,7 @@ async function processNetCharges(templateId, sheetId, maxRowIndex) {
       if (existing) {
         snapshotPayload.push({
           operationLogId: operationLog.id,
-          headerId: headerMap['Net_Charges'],
+          headerId: headerMap['Net_Charges_To_Student'],
           sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
           originalValue: existing.value,
@@ -3903,7 +3903,7 @@ async function processNetCharges(templateId, sheetId, maxRowIndex) {
       } else {
         snapshotPayload.push({
           operationLogId: operationLog.id,
-          headerId: headerMap['Net_Charges'],
+          headerId: headerMap['Net_Charges_To_Student'],
           sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
           originalValue: null,
@@ -3912,7 +3912,7 @@ async function processNetCharges(templateId, sheetId, maxRowIndex) {
         });
 
         insertPayload.push({
-          headerId: headerMap['Net_Charges'],
+          headerId: headerMap['Net_Charges_To_Student'],
           sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
           value: netCharges.toString()
@@ -3950,7 +3950,7 @@ async function processTotalDirectCost(templateId, sheetId, maxRowIndex) {
     const headers = await Header.findAll({
       where: {
         templateId,
-        name: ['Tuition', 'Fees', 'Housing_Cost', 'Food', 'Total_Direct_Cost']
+        name: ['2_Semester_Tuition', '2_Semester_Fees', '2_Semester_Room', '2_Semester_Meals', 'Total_Direct_Costs']
       },
       transaction
     });
@@ -3958,19 +3958,19 @@ async function processTotalDirectCost(templateId, sheetId, maxRowIndex) {
     const headerMap = {};
     headers.forEach(h => headerMap[h.name] = h.id);
 
-    if (!headerMap['Total_Direct_Cost']) {
+    if (!headerMap['Total_Direct_Costs']) {
       await transaction.rollback();
-      return { message: 'Total_Direct_Cost header not found.' };
+      return { message: 'Total_Direct_Costs header not found.' };
     }
 
     // Step 2: Fetch relevant SheetData
     const sheetData = await SheetData.findAll({
       where: {
         headerId: [
-          headerMap['Tuition'],
-          headerMap['Fees'],
-          headerMap['Housing Cost'],
-          headerMap['Food']
+          headerMap['2_Semester_Tuition'],
+          headerMap['2_Semester_Fees'],
+          headerMap['2_Semester_Room'],
+          headerMap['2_Semester_Meals']
         ],
         sheetId: sheetId
       },
@@ -3997,17 +3997,17 @@ async function processTotalDirectCost(templateId, sheetId, maxRowIndex) {
 
     for (let rowIndex = 0; rowIndex <= maxRowIndex; rowIndex++) {
       const values = grouped[rowIndex] || {};
-      const tuition = values[headerMap['Tuition']] || 0;
-      const fees = values[headerMap['Fees']] || 0;
-      const housing = values[headerMap['Housing Cost']] || 0;
-      const food = values[headerMap['Food']] || 0;
+      const tuition = values[headerMap['2_Semester_Tuition']] || 0;
+      const fees = values[headerMap['2_Semester_Fees']] || 0;
+      const housing = values[headerMap['2_Semester_Room']] || 0;
+      const food = values[headerMap['2_Semester_Meals']] || 0;
 
       const netCharges = calculateTotalDirectCost(tuition, fees, housing, food);
       console.log(`Row ${rowIndex}: Calculated Total_Direct_Cost = ${netCharges}`);
 
       const existing = await SheetData.findOne({
         where: {
-          headerId: headerMap['Total_Direct_Cost'],
+          headerId: headerMap['Total_Direct_Costs'],
           sheetId: sheetId,
           rowIndex: parseInt(rowIndex)
         },
@@ -4017,7 +4017,7 @@ async function processTotalDirectCost(templateId, sheetId, maxRowIndex) {
       if (existing) {
         snapshotPayload.push({
           operationLogId: operationLog.id,
-          headerId: headerMap['Total_Direct_Cost'],
+          headerId: headerMap['Total_Direct_Costs'],
           sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
           originalValue: existing.value,
@@ -4030,7 +4030,7 @@ async function processTotalDirectCost(templateId, sheetId, maxRowIndex) {
       } else {
         snapshotPayload.push({
           operationLogId: operationLog.id,
-          headerId: headerMap['Total_Direct_Cost'],
+          headerId: headerMap['Total_Direct_Costs'],
           sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
           originalValue: null,
@@ -4039,7 +4039,7 @@ async function processTotalDirectCost(templateId, sheetId, maxRowIndex) {
         });
 
         insertPayload.push({
-          headerId: headerMap['Total_Direct_Cost'],
+          headerId: headerMap['Total_Direct_Costs'],
           sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
           value: netCharges.toString()
@@ -4064,7 +4064,7 @@ async function processTotalDirectCost(templateId, sheetId, maxRowIndex) {
     };
   } catch (error) {
     await transaction.rollback();
-    console.error('Error processing Total_Direct_Cost:', error);
+    console.error('Error processing Total_Direct_Costs:', error);
     throw error;
   }
 }
@@ -4077,7 +4077,7 @@ async function processNetTuition(templateId, sheetId, maxRowIndex) {
     const headers = await Header.findAll({
       where: {
         templateId,
-        name: ['Tuition', 'Total_Institutional_Gift', 'Net_Tuition']
+        name: ['2_Semester_Tuition', 'Total_Institutional_Gift', 'Net_Tuition_Revenue']
       },
       transaction
     });
@@ -4085,15 +4085,15 @@ async function processNetTuition(templateId, sheetId, maxRowIndex) {
     const headerMap = {};
     headers.forEach(h => headerMap[h.name] = h.id);
 
-    if (!headerMap['Net_Tuition']) {
+    if (!headerMap['Net_Tuition_Revenue']) {
       await transaction.rollback();
-      return { message: 'Net_Tuition header not found.' };
+      return { message: 'Net_Tuition_Revenue header not found.' };
     }
 
     // Step 2: Fetch relevant SheetData
     const sheetData = await SheetData.findAll({
       where: {
-        headerId: [headerMap['Tuition'], headerMap['Total_Institutional_Gift']],
+        headerId: [headerMap['2_Semester_Tuition'], headerMap['Total_Institutional_Gift']],
         sheetId: sheetId
       },
       transaction
@@ -4119,14 +4119,14 @@ async function processNetTuition(templateId, sheetId, maxRowIndex) {
 
     for (let rowIndex = 0; rowIndex <= maxRowIndex; rowIndex++) {
       const values = grouped[rowIndex] || {};
-      const tuition = values[headerMap['Tuition']] || 0;
+      const tuition = values[headerMap['2_Semester_Tuition']] || 0;
       const gift = values[headerMap['Total_Institutional_Gift']] || 0;
 
       const netTuition = calculateNetTuition(tuition, gift);
 
       const existing = await SheetData.findOne({
         where: {
-          headerId: headerMap['Net_Tuition'],
+          headerId: headerMap['Net_Tuition_Revenue'],
           sheetId: sheetId,
           rowIndex: parseInt(rowIndex)
         },
@@ -4136,7 +4136,7 @@ async function processNetTuition(templateId, sheetId, maxRowIndex) {
       if (existing) {
         snapshotPayload.push({
           operationLogId: operationLog.id,
-          headerId: headerMap['Net_Tuition'],
+          headerId: headerMap['Net_Tuition_Revenue'],
           sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
           originalValue: existing.value,
@@ -4149,7 +4149,7 @@ async function processNetTuition(templateId, sheetId, maxRowIndex) {
       } else {
         snapshotPayload.push({
           operationLogId: operationLog.id,
-          headerId: headerMap['Net_Tuition'],
+          headerId: headerMap['Net_Tuition_Revenue'],
           sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
           originalValue: null,
@@ -4158,7 +4158,7 @@ async function processNetTuition(templateId, sheetId, maxRowIndex) {
         });
 
         insertPayload.push({
-          headerId: headerMap['Net_Tuition'],
+          headerId: headerMap['Net_Tuition_Revenue'],
           sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
           value: netTuition.toString()
@@ -4178,12 +4178,12 @@ async function processNetTuition(templateId, sheetId, maxRowIndex) {
 
     await transaction.commit();
     return {
-      message: 'Processed Net_Tuition with logging and snapshots.',
+      message: 'Processed Net_Tuition_Revenue with logging and snapshots.',
       rowsAffected: insertPayload.length + snapshotPayload.length
     };
   } catch (error) {
     await transaction.rollback();
-    console.error('Error processing Net_Tuition:', error);
+    console.error('Error processing Net_Tuition_Revenue:', error);
     throw error;
   }
 }
@@ -4196,7 +4196,7 @@ async function processTotalDiscountRate(templateId, sheetId, maxRowIndex) {
     const headers = await Header.findAll({
       where: {
         templateId,
-        name: ['Net_Charges', 'Total_Direct_Cost', 'Total_Discount_Rate']
+        name: ['Net_Charges_To_Student', 'Total_Direct_Costs', 'Total_Discount_Rate']
       },
       transaction
     });
@@ -4212,7 +4212,7 @@ async function processTotalDiscountRate(templateId, sheetId, maxRowIndex) {
     // Step 2: Fetch relevant SheetData
     const sheetData = await SheetData.findAll({
       where: {
-        headerId: [headerMap['Net_Charges'], headerMap['Total_Direct_Cost']],
+        headerId: [headerMap['Net_Charges_To_Student'], headerMap['Total_Direct_Costs']],
         sheetId: sheetId
       },
       transaction
@@ -4238,8 +4238,8 @@ async function processTotalDiscountRate(templateId, sheetId, maxRowIndex) {
 
     for (let rowIndex = 0; rowIndex <= maxRowIndex; rowIndex++) {
       const values = grouped[rowIndex] || {};
-      const netCharges = values[headerMap['Net_Charges']] || 0;
-      const gift = values[headerMap['Total_Direct_Cost']] || 0;
+      const netCharges = values[headerMap['Net_Charges_To_Student']] || 0;
+      const gift = values[headerMap['Total_Direct_Costs']] || 0;
 
       const discountRate = calculateTotalDiscountRate(netCharges, gift);
       const existing = await SheetData.findOne({
@@ -4314,7 +4314,7 @@ async function processNeed(templateId, sheetId, maxRowIndex) {
     const headers = await Header.findAll({
       where: {
         templateId,
-        name: ['COA', 'SAI', 'Need', 'Institutional_Merit_As_%_Of_Need_Met']
+        name: ['2_Semester_COA', 'SAI', 'Student_Financial_Need', 'Institutional_Merit_As_%_Of_Need_Met']
       },
       transaction
     });
@@ -4322,15 +4322,15 @@ async function processNeed(templateId, sheetId, maxRowIndex) {
     const headerMap = {};
     headers.forEach(h => headerMap[h.name] = h.id);
 
-    if (!headerMap['Need']) {
+    if (!headerMap['Student_Financial_Need']) {
       await transaction.rollback();
-      return { message: 'Need header not found.' };
+      return { message: 'Student_Financial_Need header not found.' };
     }
 
     // Step 2: Fetch relevant SheetData
     const sheetData = await SheetData.findAll({
       where: {
-        headerId: [headerMap['COA'], headerMap['SAI']],
+        headerId: [headerMap['2_Semester_COA'], headerMap['SAI']],
         sheetId: sheetId
       },
       transaction
@@ -4356,14 +4356,14 @@ async function processNeed(templateId, sheetId, maxRowIndex) {
 
     for (let rowIndex = 0; rowIndex <= maxRowIndex; rowIndex++) {
       const values = grouped[rowIndex] || {};
-      const COA = values[headerMap['COA']] || 0;
+      const COA = values[headerMap['2_Semester_COA']] || 0;
       const SAI = values[headerMap['SAI']] || 0;
 
       const need = calculateNeed(COA, SAI);
 
       const existing = await SheetData.findOne({
         where: {
-          headerId: headerMap['Need'],
+          headerId: headerMap['Student_Financial_Need'],
           sheetId: sheetId,
           rowIndex: parseInt(rowIndex)
         },
@@ -4373,7 +4373,7 @@ async function processNeed(templateId, sheetId, maxRowIndex) {
       if (existing) {
         snapshotPayload.push({
           operationLogId: operationLog.id,
-          headerId: headerMap['Need'],
+          headerId: headerMap['Student_Financial_Need'],
           sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
           originalValue: existing.value,
@@ -4386,7 +4386,7 @@ async function processNeed(templateId, sheetId, maxRowIndex) {
       } else {
         snapshotPayload.push({
           operationLogId: operationLog.id,
-          headerId: headerMap['Need'],
+          headerId: headerMap['Student_Financial_Need'],
           sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
           originalValue: null,
@@ -4395,7 +4395,7 @@ async function processNeed(templateId, sheetId, maxRowIndex) {
         });
 
         insertPayload.push({
-          headerId: headerMap['Need'],
+          headerId: headerMap['Student_Financial_Need'],
           sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
           value: need.toString()
@@ -4479,7 +4479,7 @@ async function processNeedMet(templateId, sheetId, maxRowIndex) {
     const headers = await Header.findAll({
       where: {
         templateId,
-        name: ['Need', 'Total_Need_Based_Aid', 'Need_Met']
+        name: ['Student_Financial_Need', 'Total_Need_Based_Aid', 'Total_Need_Met']
       },
       transaction
     });
@@ -4487,15 +4487,15 @@ async function processNeedMet(templateId, sheetId, maxRowIndex) {
     const headerMap = {};
     headers.forEach(h => headerMap[h.name] = h.id);
 
-    if (!headerMap['Need_Met']) {
+    if (!headerMap['Total_Need_Met']) {
       await transaction.rollback();
-      return { message: 'Need_Met header not found.' };
+      return { message: 'Total_Need_Met header not found.' };
     }
 
     // Step 2: Fetch relevant SheetData
     const sheetData = await SheetData.findAll({
       where: {
-        headerId: [headerMap['Need'], headerMap['Total_Need_Based_Aid']],
+        headerId: [headerMap['Student_Financial_Need'], headerMap['Total_Need_Based_Aid']],
         sheetId: sheetId
       },
       transaction
@@ -4521,14 +4521,14 @@ async function processNeedMet(templateId, sheetId, maxRowIndex) {
 
     for (let rowIndex = 0; rowIndex <= maxRowIndex; rowIndex++) {
       const values = grouped[rowIndex] || {};
-      const need = values[headerMap['Need']] || 0;
+      const need = values[headerMap['Student_Financial_Need']] || 0;
       const gift = values[headerMap['Total_Need_Based_Aid']] || 0;
 
       const needMet = calculateNeedMet(need, gift);
 
       const existing = await SheetData.findOne({
         where: {
-          headerId: headerMap['Need_Met'],
+          headerId: headerMap['Total_Need_Met'],
           sheetId: sheetId,
           rowIndex: parseInt(rowIndex)
         },
@@ -4538,7 +4538,7 @@ async function processNeedMet(templateId, sheetId, maxRowIndex) {
       if (existing) {
         snapshotPayload.push({
           operationLogId: operationLog.id,
-          headerId: headerMap['Need_Met'],
+          headerId: headerMap['Total_Need_Met'],
           sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
           originalValue: existing.value,
@@ -4551,7 +4551,7 @@ async function processNeedMet(templateId, sheetId, maxRowIndex) {
       } else {
         snapshotPayload.push({
           operationLogId: operationLog.id,
-          headerId: headerMap['Need_Met'],
+          headerId: headerMap['Total_Need_Met'],
           sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
           originalValue: null,
@@ -4560,7 +4560,7 @@ async function processNeedMet(templateId, sheetId, maxRowIndex) {
         });
 
         insertPayload.push({
-          headerId: headerMap['Need_Met'],
+          headerId: headerMap['Total_Need_Met'],
           sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
           value: needMet.toString()
@@ -4580,12 +4580,12 @@ async function processNeedMet(templateId, sheetId, maxRowIndex) {
 
     await transaction.commit();
     return {
-      message: 'Processed Need_Met with logging and snapshots.',
+      message: 'Processed Total_Need_Met with logging and snapshots.',
       rowsAffected: insertPayload.length + snapshotPayload.length
     };
   } catch (error) {
     await transaction.rollback();
-    console.error('Error processing Need_Met:', error);
+    console.error('Error processing Total_Need_Met:', error);
     throw error;
   }
 }
@@ -4598,7 +4598,7 @@ async function processGap(templateId, sheetId, maxRowIndex) {
     const headers = await Header.findAll({
       where: {
         templateId,
-        name: ['Need_Met', 'Gap']
+        name: ['Total_Need_Met', 'GAP/Unmet_Need']
       },
       transaction
     });
@@ -4606,15 +4606,15 @@ async function processGap(templateId, sheetId, maxRowIndex) {
     const headerMap = {};
     headers.forEach(h => headerMap[h.name] = h.id);
 
-    if (!headerMap['Gap']) {
+    if (!headerMap['GAP/Unmet_Need']) {
       await transaction.rollback();
-      return { message: 'Gap header not found.' };
+      return { message: 'GAP/Unmet_Need header not found.' };
     }
 
     // Step 2: Fetch relevant SheetData
     const sheetData = await SheetData.findAll({
       where: {
-        headerId: [headerMap['Need_Met']],
+        headerId: [headerMap['Total_Need_Met']],
         sheetId: sheetId
       },
       transaction
@@ -4640,12 +4640,12 @@ async function processGap(templateId, sheetId, maxRowIndex) {
 
     for (let rowIndex = 0; rowIndex <= maxRowIndex; rowIndex++) {
       const values = grouped[rowIndex] || {};
-      const needMet = values[headerMap['Need_Met']] || 0;
+      const needMet = values[headerMap['Total_Need_Met']] || 0;
       const gap = calculateGap(needMet);
 
       const existing = await SheetData.findOne({
         where: {
-          headerId: headerMap['Gap'],
+          headerId: headerMap['GAP/Unmet_Need'],
           sheetId: sheetId,
           rowIndex: parseInt(rowIndex)
         },
@@ -4655,7 +4655,7 @@ async function processGap(templateId, sheetId, maxRowIndex) {
       if (existing) {
         snapshotPayload.push({
           operationLogId: operationLog.id,
-          headerId: headerMap['Gap'],
+          headerId: headerMap['GAP/Unmet_Need'],
           sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
           originalValue: existing.value,
@@ -4668,7 +4668,7 @@ async function processGap(templateId, sheetId, maxRowIndex) {
       } else {
         snapshotPayload.push({
           operationLogId: operationLog.id,
-          headerId: headerMap['Gap'],
+          headerId: headerMap['GAP/Unmet_Need'],
           sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
           originalValue: null,
@@ -4677,7 +4677,7 @@ async function processGap(templateId, sheetId, maxRowIndex) {
         });
 
         insertPayload.push({
-          headerId: headerMap['Gap'],
+          headerId: headerMap['GAP/Unmet_Need'],
           sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
           value: gap === 0 ? "" : gap.toString()
@@ -4715,7 +4715,7 @@ async function processTotalNeedMet(templateId, sheetId, maxRowIndex) {
     const headers = await Header.findAll({
       where: {
         templateId,
-        name: ['Need', 'Total_Need_Based_Aid', '%_Of_Need_Met']
+        name: ['Student_Financial_Need', 'Total_Need_Based_Aid', '%_Of_Need_Met']
       },
       transaction
     });
@@ -4731,7 +4731,7 @@ async function processTotalNeedMet(templateId, sheetId, maxRowIndex) {
     // Step 2: Fetch relevant SheetData
     const sheetData = await SheetData.findAll({
       where: {
-        headerId: [headerMap['Need'], headerMap['Total_Need_Based_Aid']],
+        headerId: [headerMap['Student_Financial_Need'], headerMap['Total_Need_Based_Aid']],
         sheetId: sheetId
       },
       transaction
@@ -4757,7 +4757,7 @@ async function processTotalNeedMet(templateId, sheetId, maxRowIndex) {
 
     for (let rowIndex = 0; rowIndex <= maxRowIndex; rowIndex++) {
       const values = grouped[rowIndex] || {};
-      const need = values[headerMap['Need']] || 0;
+      const need = values[headerMap['Student_Financial_Need']] || 0;
       const totalNeedBasedAid = values[headerMap['Total_Need_Based_Aid']] || 0;
 
       const discountRate = calculateTotalNeedMet(need, totalNeedBasedAid);
@@ -4834,7 +4834,7 @@ async function processTotalNeedMet_W(templateId, sheetId, maxRowIndex) {
     const headers = await Header.findAll({
       where: {
         templateId,
-        name: ['Need', 'Total_Institutional_Gift', '%_Of_Need_Met_W/Gift_Aid']
+        name: ['Student_Financial_Need', 'Total_Institutional_Gift', '%_Of_Need_Met_W/Gift_Aid']
       },
       transaction
     });
@@ -4850,7 +4850,7 @@ async function processTotalNeedMet_W(templateId, sheetId, maxRowIndex) {
     // Step 2: Fetch relevant SheetData
     const sheetData = await SheetData.findAll({
       where: {
-        headerId: [headerMap['Need'], headerMap['Total_Institutional_Gift']],
+        headerId: [headerMap['Student_Financial_Need'], headerMap['Total_Institutional_Gift']],
         sheetId: sheetId
       },
       transaction
@@ -4876,7 +4876,7 @@ async function processTotalNeedMet_W(templateId, sheetId, maxRowIndex) {
 
     for (let rowIndex = 0; rowIndex <= maxRowIndex; rowIndex++) {
       const values = grouped[rowIndex] || {};
-      const need = values[headerMap['Need']] || 0;
+      const need = values[headerMap['Student_Financial_Need']] || 0;
       const totalInstitutionalGift = values[headerMap['Total_Institutional_Gift']] || 0;
 
       const discountRate = calculateTotalNeedMet(need, totalInstitutionalGift);

@@ -1,13 +1,13 @@
 function calculateNACUBODiscountRate(tuition, fees, totalUnfundedGift) {
   if (tuition + fees === 0) return 0;
   const rate = ((tuition + fees) - totalUnfundedGift) / (tuition + fees);
-  return (rate * 100).toFixed(2) + '%';
+  return (rate * 100).toFixed(2);
 }
 
 function calculateTotalDiscountRate(netCharges, totalDirectCost) {
   if (totalDirectCost === 0 || netCharges === 0) return 0;
   const rate = (netCharges / totalDirectCost);
-  return (rate * 100).toFixed(2) + '%';
+  return (rate * 100).toFixed(2);
 }
 
 function calculateNetTuition(tuition, totalInstitutionalGift) {
@@ -37,7 +37,7 @@ function calculateGap(needMet) {
 function calculateTotalNeedMet(need, totalNeedBasedAid) {
   if (need === 0) return 0;
   const rate = (need - totalNeedBasedAid) / need;
-  return (rate * 100).toFixed(2) + '%';
+  return (rate * 100).toFixed(2);
 }
 
 function matchCriteria(value, criteria) {
