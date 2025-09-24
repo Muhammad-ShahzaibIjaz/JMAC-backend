@@ -228,21 +228,13 @@ const getClosestDate = (dates, targetDay, targetMonth) => {
   );
 };
 
-
 const findClosestPreviousDate = async (req, res) => {
-  try {
-    const { templateId, selectedDate } = req.body;
-
+  const { templateId, selectedDate, isWeekly=false } = req.body;
+  try{
     if (!templateId || !selectedDate) {
       return res.status(400).json({ error: 'templateId and selectedDate are required' });
     }
-
     const selected = new Date(selectedDate);
-    const selectedDay = selected.getDate();
-    const selectedMonth = selected.getMonth();
-
-    const yearsToCheck = [selected.getFullYear() - 1, selected.getFullYear() - 2];
-
     const submissions = await PopulationSubmission.findAll({
       where: {
         templateId,
@@ -252,31 +244,69 @@ const findClosestPreviousDate = async (req, res) => {
       raw: true,
     });
 
-    const parsedDates = submissions
-      .map((s) => parseDate(s.submissionDate))
-      .filter((d) => d && d < selected);
+    const parsedDates = submissions.map((s) => parseDate(s.submissionDate)).filter((d) => d && d < selected);
+    if (!isWeekly) {
+      const selectedDay = selected.getDate();
+      const selectedMonth = selected.getMonth();
+      const yearsToCheck = [selected.getFullYear() - 1, selected.getFullYear() - 2];
 
-    const result = {};
+      const result = {};
 
-    for (const year of yearsToCheck) {
-      const yearDates = parsedDates.filter((d) => d.getFullYear() === year);
+      for (const year of yearsToCheck) {
+        const yearDates = parsedDates.filter((d) => d.getFullYear() === year);
 
-      if (yearDates.length === 0) {
-        result[year] = null;
-      } else {
-        const closest = getClosestDate(yearDates, selectedDay, selectedMonth);
-        result[year] = closest ? closest.toISOString().split('T')[0] : null;
+        if (yearDates.length === 0) {
+          result[year] = null;
+        } else {
+          const closest = getClosestDate(yearDates, selectedDay, selectedMonth);
+          result[year] = closest ? closest.toISOString().split('T')[0] : null;
+        }
+      }
+
+      return res.json({
+        selectedDate: selectedDate,
+        previousYear: result[yearsToCheck[0]],
+        twoYearsAgo: result[yearsToCheck[1]],
+      });
+    }
+
+    const result = {
+      selectedDate: selected.toISOString().split('T')[0],
+      previousYear: null,
+      twoYearsAgo: null,
+    };
+
+    let count = 1;
+    let lastDate = selected;
+
+    for (const date of parsedDates) {
+      const diff = Math.abs((lastDate - date) / (1000 * 60 * 60 * 24));
+      if (diff >= 6 && diff <= 8) {
+        // Acceptable weekly gap
+        if (count === 1) {
+          result.previousYear = date.toISOString().split('T')[0];
+          lastDate = date;
+          count++;
+        } else if (count === 2) {
+          result.twoYearsAgo = date.toISOString().split('T')[0];
+          break;
+        }
+      } else if (diff > 8) {
+        // If gap is bigger, still accept as fallback
+        if (count === 1) {
+          result.previousYear = date.toISOString().split('T')[0];
+          lastDate = date;
+          count++;
+        } else if (count === 2) {
+          result.twoYearsAgo = date.toISOString().split('T')[0];
+          break;
+        }
       }
     }
 
-    return res.json({
-      selectedDate: selectedDate,
-      previousYear: result[yearsToCheck[0]],
-      twoYearsAgo: result[yearsToCheck[1]],
-    });
-
+    return res.json(result);
   } catch (error) {
-    console.error('Error finding closest dates:', error);
+    console.error('Error finding closest previous date:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 };
@@ -618,59 +648,16 @@ const calculateStatusStudents = async (sheetId, selectedStatuses, targetHeader, 
   });
 
   const admittedRows = dataRows.filter(row => selectedStatuses.includes(row.value));
-
   const admittedCount = admittedRows.length;
+  const admittedRowIndexes = admittedRows.map(r => r.rowIndex);
 
-  return admittedCount;
+  return {count: admittedCount, rowIndexes: admittedRowIndexes};
 }
 
-const getCurrentDateMetrics = async (req, res) => {
-    const { templateId, submissionId, populationRuleId, statusId } = req.body;
 
-    try{
-        if (!templateId || !submissionId || !populationRuleId || !statusId) {
-            return res.status(400).json({ error: 'templateId, submissionId, populationRuleId, and statusId are required' });
-        }
-        const sheetId = await getSheetId(submissionId);
-
-        const { conditions, headers } = await getRuleConditionsAndHeaders(populationRuleId);
-        const matchingRows = await applyPopulationRule(templateId, sheetId, conditions, headers);
-        if (matchingRows.length === 0) {
-            return res.status(404).json({ netRevenue: 0, discountRate: 0, admittedCount: 0, otherStatusCount: 0, otherStatusName: '' });
-        }
-        let admittedCount = 0;
-        let otherStatusCount = 0;
-        let otherStatusName = '';
-
-        const admittedData = await getAdmittedStatuses(templateId);
-        
-        if (!admittedData || !Array.isArray(admittedData.selectedStatuses) || admittedData.selectedStatuses.length === 0) {
-          admittedCount = 0;
-        } else {
-          const { selectedStatuses, targetHeader } = admittedData;
-          admittedCount = await calculateStatusStudents(sheetId, selectedStatuses, targetHeader, templateId, matchingRows);
-        }
-
-
-        const statusData = await getStatuses(statusId);
-        if (statusData && Array.isArray(statusData.selectedStatuses) && statusData.selectedStatuses.length > 0) {
-          const { selectedStatuses, targetHeader, statusName } = statusData;
-          otherStatusCount = await calculateStatusStudents(sheetId, selectedStatuses, targetHeader, templateId, matchingRows);
-          otherStatusName = statusName;
-        } else {
-          otherStatusCount = 0;
-          otherStatusName = statusData ? statusData.statusName : '';
-        }
-        const { netRevenue, discountRate } = await getAveragesFromMatchedRows(sheetId, matchingRows, templateId);
-        res.status(200).json({ netRevenue, discountRate, admittedCount, otherStatusCount, otherStatusName });
-    } catch (error) {
-        console.error('Error getting current date metrics:', error);
-        res.status(500).json({ error: 'Internal server error' });
-    }
-}
 
 const getStudentHeadCountByYear = async (req, res) => {
-  const { selectedDate, previousYearDate, twoYearsAgoDate, templateId, populationRuleId, isRequireStats=false } = req.body;
+  const { selectedDate, previousYearDate, twoYearsAgoDate, templateId, populationRuleId } = req.body;
 
   try {
     if (!selectedDate || !templateId || !populationRuleId) {
@@ -696,13 +683,7 @@ const getStudentHeadCountByYear = async (req, res) => {
         return {
           yearLabel,
           result: {
-            statuses: allStatuses.map(status => ({ statusName: status.statusName, count: 0 })),
-            ...(isRequireStats && {
-              netRevenue: 0,
-              netCharges: 0,
-              nacuboDiscount: 0,
-              totalDiscount: 0,
-            }),
+            statuses: allStatuses.map(status => ({ statusName: status.statusName, count: 0, netRevenue: 0, netCharges: 0, nacuboDiscount: 0, totalDiscount: 0 })),
           }
         };
       }
@@ -714,32 +695,22 @@ const getStudentHeadCountByYear = async (req, res) => {
       if (matchingRows.length > 0) {
         for (const status of allStatuses) {
           const { selectedStatuses, targetHeader, statusName } = status;
-          const count = await calculateStatusStudents(sheetId, selectedStatuses, targetHeader, templateId, matchingRows);
-          statusCounts.push({ statusName, count });
+          const { count, rowIndexes } = await calculateStatusStudents(sheetId, selectedStatuses, targetHeader, templateId, matchingRows);
+          const revenueStats = await getAveragesMetricsFromMatchedRows(sheetId, rowIndexes, templateId);
+          statusCounts.push({ statusName, count, ...revenueStats });
         }
-
-        const revenueStats = isRequireStats
-          ? await getAveragesMetricsFromMatchedRows(sheetId, matchingRows, templateId)
-          : {};
 
         return {
           yearLabel,
           result: {
             statuses: statusCounts,
-            ...revenueStats,
           }
         };
       } else {
         return {
           yearLabel,
           result: {
-            statuses: allStatuses.map(status => ({ statusName: status.statusName, count: 0 })),
-            ...(isRequireStats && {
-              netRevenue: 0,
-              netCharges: 0,
-              nacuboDiscount: 0,
-              totalDiscount: 0,
-            }),
+            statuses: allStatuses.map(status => ({ statusName: status.statusName, count: 0, netRevenue: 0, netCharges: 0, nacuboDiscount: 0, totalDiscount: 0 })),
           }
         };
       }
@@ -773,6 +744,5 @@ module.exports = {
     updatePopulationStatus,
     deletePopulationStatus,
     findClosestPreviousDate,
-    getCurrentDateMetrics,
     getStudentHeadCountByYear
 };

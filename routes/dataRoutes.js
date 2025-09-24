@@ -16,6 +16,7 @@ router.post('/add-row/:templateId/:sheetId', dataController.addRow);
 router.put('/find-zipcode', dataController.findZipCodes);
 router.put('/score-conversion', dataController.scoreConversion);
 router.put('/cip-conversion', dataController.cipConversion);
+router.put('/facility-zip-fill', dataController.FacilityZipFiller);
 router.put('/zip-county-conversion', dataController.zipCountyConversion);
 router.post('/apply-quality-rules', dataController.evaluateRulesAndReturnFilteredData);
 router.delete('/delete-row/:templateId/:sheetId/:rowIndex', dataController.deleteRow);
@@ -25,6 +26,7 @@ router.put('/replace-value', dataController.bulkReplaceValues);
 router.post('/evaluate-conditions', dataController.evaluateSheetDataWithConditions);
 router.post('/apply-conditional-rule', dataController.evaluateSheetDataAndAssign);
 router.post('/status-values', dataController.getStatusValues);
+router.post('/header-values', dataController.getHeaderValues);
 
 
 module.exports = router;

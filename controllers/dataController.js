@@ -2,7 +2,7 @@ const SheetData = require('../models/SheetData');
 const Header = require('../models/Header');
 const Template = require('../models/Template');
 const sequelize = require('../config/database');
-const { DataTypes, Op, QueryTypes } = require('sequelize');
+const { DataTypes, Op, QueryTypes, fn, col } = require('sequelize');
 const {generateExcelFile} = require('../services/SheetService');
 const { processFiles } = require('./fileController');
 const { getMapHeaders, getHeaderID } = require('./headerController');
@@ -2787,6 +2787,111 @@ const cipConversion = async (req, res) => {
   }
 };
 
+const FacilityZipFiller = async (req, res) => {
+  const transaction = await sequelize.transaction();
+  try {
+    const { templateId, sheetId, sourceHeader, targetHeader } = req.body;
+    if (!templateId || !sheetId || !sourceHeader || !targetHeader) {
+      await transaction.rollback();
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    const operationLog = await OperationLog.create({
+      id: uuidv4(),
+      templateId,
+      sheetId,
+      operationType: 'CONVERSION'
+    }, { transaction });
+
+    const [sourceHeaderObj, targetHeaderObj] = await Promise.all([
+      Header.findOne({ where: { templateId, name: sourceHeader }, transaction }),
+      Header.findOne({ where: { templateId, name: targetHeader }, transaction })
+    ]);
+
+    if (!sourceHeaderObj || !targetHeaderObj) {
+      await transaction.rollback();
+      return res.status(404).json({ error: 'One or more headers not found' });
+    }
+
+    const sheetData = await SheetData.findAll({
+      where: {
+        headerId: { [Op.in]: [sourceHeaderObj.id, targetHeaderObj.id] },
+        sheetId,
+      },
+      transaction
+    });
+
+    const rows = {};
+    sheetData.forEach(entry => {
+      const rowIndex = entry.rowIndex;
+      if (!rows[rowIndex]) rows[rowIndex] = {};
+      if (entry.headerId === sourceHeaderObj.id) {
+        rows[rowIndex].sourceZip = entry.value?.trim() || null;
+      } else if (entry.headerId === targetHeaderObj.id) {
+        rows[rowIndex].targetZip = entry.value?.trim() || null;
+      }
+    });
+
+    const updates = [];
+    const snapshots = [];
+    const skippedRows = [];
+    const errors = [];
+
+    for (const rowIndex in rows) {
+      const { sourceZip, targetZip } = rows[rowIndex];
+      if (!sourceZip || sourceZip.length < 3) {
+        skippedRows.push(parseInt(rowIndex));
+        continue;
+      }
+
+      const zipPrefix = sourceZip.slice(0, 3);
+      if (zipPrefix !== targetZip) {
+        updates.push({
+          id: uuidv4(),
+          headerId: targetHeaderObj.id,
+          sheetId,
+          rowIndex: parseInt(rowIndex),
+          value: zipPrefix
+        });
+
+        snapshots.push({
+          id: uuidv4(),
+          operationLogId: operationLog.id,
+          headerId: targetHeaderObj.id,
+          sheetId,
+          rowIndex: parseInt(rowIndex),
+          originalValue: targetZip,
+          newValue: zipPrefix,
+          changeType: targetZip ? 'UPDATE' : 'INSERT'
+        });
+      }
+    }
+
+    if (updates.length > 0) {
+      await SheetDataSnapshot.bulkCreate(snapshots, { transaction });
+      await SheetData.bulkCreate(updates, {
+        updateOnDuplicate: ['value'],
+        transaction
+      });
+    }
+
+    await transaction.commit();
+    return res.status(200).json({
+      message: 'ZIP prefix fill complete',
+      updated: updates.length,
+      skipped: skippedRows.length,
+      errors
+    });
+  } catch (error) {
+    await transaction.rollback();
+    console.error('Facility ZIP fill error:', error);
+    return res.status(500).json({
+      error: 'Failed to fill ZIP prefixes',
+      details: error.message
+    });
+  }
+};
+
 
 const zipCountyConversion = async (req, res) => {
   const transaction = await sequelize.transaction();
@@ -5231,6 +5336,30 @@ async function getStatusValues(req, res) {
   }
 }
 
+
+async function getHeaderValues(req, res) {
+  const { templateId, sheetId, headerId } = req.body;
+
+  try {
+    if (!templateId || !sheetId || !headerId) {
+      return res.status(400).json({ message: 'templateId, sheetId, and headerId are required.' });
+    }
+
+    const data = await SheetData.findAll({
+      where: { headerId, sheetId },
+      attributes: [[fn('DISTINCT', col('value')), 'value']],
+      raw: true,
+    });
+
+    const values = data.map(d => d.value).filter(v => v !== null && v !== "");
+
+    return res.status(200).json({ values });
+  } catch (error) {
+    console.error('Error in getHeaderValues:', error);
+    return res.status(500).json({ message: 'Internal server error.', details: error.message });
+  }
+}
+
 module.exports = {
   deleteSheetData, 
   getMatrixPop, 
@@ -5259,5 +5388,7 @@ module.exports = {
   bulkReplaceValues,
   evaluateSheetDataWithConditions,
   evaluateSheetDataAndAssign,
-  getStatusValues
+  getStatusValues,
+  getHeaderValues,
+  FacilityZipFiller
 };

@@ -11,7 +11,6 @@ router.get('/submissions/:templateId', populationStatusController.getPopulationS
 router.put('/submission', populationStatusController.updatePopulationSubmissionDate);
 router.delete('/submission/:id', populationStatusController.deletePopulationSubmission);
 router.post('/closest-dates', populationStatusController.findClosestPreviousDate);
-router.post('/current-metrics', populationStatusController.getCurrentDateMetrics);
 router.post('/headcount-by-year', populationStatusController.getStudentHeadCountByYear);
 
 module.exports = router;
