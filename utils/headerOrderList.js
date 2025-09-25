@@ -63,7 +63,6 @@ const desiredOrder = [
   "Y/N Legacy_Student",
   "Y/N Early_Admit_Student",
   "Y/N Early_Enrollment_Decision",
-  "Y/N Early_Enrollment_Decision",
   "Y/N Early_Aid",
   "Y/N Funded_Athlete",
   "Y/N Roster_Athlete",
