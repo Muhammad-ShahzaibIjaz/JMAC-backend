@@ -93,7 +93,7 @@ const categorizer = async (req, res) => {
       result = { type: "date", ranges: [{ start : dateValues[0].toISOString(), end: dateValues[dateValues.length - 1].toISOString() }] };
 
     } else if (["Y/N", "character", "string"].includes(type)) {
-      cleaned.push(...["NULL"]);
+      cleaned.push(...["NULL", "Blanks"]);
       const allUniqueValues = Array.from(new Set(cleaned));
       result = { type: "category", values: [{ labels: allUniqueValues }] };
 
@@ -315,6 +315,7 @@ async function getDataWithRange(req, res) {
   }
 }
 
+
 async function getStructuredData(templateId, sheetId) {
   const headers = await Header.findAll({ where: { templateId }, raw: true });
   const headerIds = headers.map(h => h.id);
@@ -326,14 +327,53 @@ async function getStructuredData(templateId, sheetId) {
     raw: true,
   });
 
+  // Step 1: Find max rowIndex
+  const maxRowIndex = sheetRows.reduce((max, row) => Math.max(max, row.rowIndex), 0);
+
+  // Step 2: Create a map of rowIndex → { headerName: value }
   const rows = new Map();
   for (const { rowIndex, headerId, value } of sheetRows) {
     if (!rows.has(rowIndex)) rows.set(rowIndex, {});
     rows.get(rowIndex)[headerNames[headerId]] = value;
   }
 
-  return Array.from(rows.values());
+  // Step 3: Fill missing rows and missing header values with blanks
+  const structured = [];
+  for (let i = 1; i <= maxRowIndex; i++) {
+    const row = rows.get(i) || {};
+    const filledRow = {};
+
+    for (const header of headers) {
+      const headerName = header.name;
+      filledRow[headerName] = row[headerName] ?? ''; // blank if missing
+    }
+
+    structured.push(filledRow);
+  }
+
+  return structured;
 }
+
+
+// async function getStructuredData(templateId, sheetId) {
+//   const headers = await Header.findAll({ where: { templateId }, raw: true });
+//   const headerIds = headers.map(h => h.id);
+//   const headerNames = Object.fromEntries(headers.map(h => [h.id, h.name]));
+
+//   const sheetRows = await SheetData.findAll({
+//     where: { headerId: { [Op.in]: headerIds }, sheetId },
+//     attributes: ['rowIndex', 'headerId', 'value'],
+//     raw: true,
+//   });
+
+//   const rows = new Map();
+//   for (const { rowIndex, headerId, value } of sheetRows) {
+//     if (!rows.has(rowIndex)) rows.set(rowIndex, {});
+//     rows.get(rowIndex)[headerNames[headerId]] = value;
+//   }
+
+//   return Array.from(rows.values());
+// }
 
 
 
@@ -348,6 +388,10 @@ function handleNestedHeaders(nestedHeaders, data) {
 
     const detectedType = detectType(filteredData, header);
     const sorted = sortByType(filteredData, header, detectedType);
+    if (detectedType === 'number') {
+      filteredData = filteredData.filter(row => +row[header] !== 0);
+    }
+
     const buckets = splitIntoBuckets(sorted, bucketNumber || ranges.length);
 
     const labelBuckets = new Map();
@@ -365,20 +409,118 @@ function handleNestedHeaders(nestedHeaders, data) {
           bucket.every(row => labelSet.has(String(row[header]).trim().toLowerCase()))
         );
         if (match) {
-          filteredData = match;
-          break;
+          filteredData = filteredData.filter(row => match.includes(row));
         }
       } else {
         const key = `${looselyNormalize(start)}|${looselyNormalize(end)}`;
         if (labelBuckets.has(key)) {
-          filteredData = labelBuckets.get(key);
-          break;
+          const match = labelBuckets.get(key);
+          filteredData = filteredData.filter(row => match.includes(row));
         }
       }
     }
   }
 
   return filteredData;
+}
+
+function autoDistributeSecond(data, baseHeader, targetHeader, categoryCount, nestedHeaders = []) {
+  const workingData = handleNestedHeaders(nestedHeaders, data);
+  const detectedType = detectType(workingData, targetHeader);
+  const allBaseValues = getAllBaseHeaderValues(data, baseHeader);
+
+  if (detectedType === 'number') {
+    const nullBucket = [];
+    const blankBucket = [];
+    const zeroBucket = [];
+    const remaining = [];
+
+    for (const row of workingData) {
+      const val = row[targetHeader];
+      if (val === null) {
+        nullBucket.push(row);
+      } else if (val === '') {
+        blankBucket.push(row);
+      } else if (+val === 0) {
+        zeroBucket.push(row);
+      } else {
+        remaining.push(row);
+      }
+    }
+
+    const response = [];
+
+    // NULL bucket
+    if (nullBucket.length > 0) {
+      response.push({
+        targetHeader,
+        targetRange: { start: null, end: null },
+        total: nullBucket.length,
+        baseHeaderCounts: countBaseHeaderValues(nullBucket, baseHeader, allBaseValues),
+      });
+    }
+
+    // blanks bucket
+    if (blankBucket.length > 0) {
+      response.push({
+        targetHeader,
+        targetRange: { start: '', end: '' },
+        total: blankBucket.length,
+        baseHeaderCounts: countBaseHeaderValues(blankBucket, baseHeader, allBaseValues),
+      });
+    }
+
+    // zero bucket
+    if (zeroBucket.length > 0) {
+      response.push({
+        targetHeader,
+        targetRange: { start: 0, end: 0 },
+        total: zeroBucket.length,
+        baseHeaderCounts: countBaseHeaderValues(zeroBucket, baseHeader, allBaseValues),
+      });
+    }
+
+    // remaining buckets
+    const sortedRemaining = sortByType(remaining, targetHeader, 'number');
+    const buckets = splitIntoBuckets(sortedRemaining, categoryCount);
+
+    for (const bucket of buckets) {
+      const range = extractRange(bucket, targetHeader);
+      response.push({
+        targetHeader,
+        targetRange: range,
+        total: bucket.length,
+        baseHeaderCounts: countBaseHeaderValues(bucket, baseHeader, allBaseValues),
+      });
+    }
+
+    return response;
+  }
+
+  // fallback for non-numeric
+  const sortedTarget = sortByType(workingData, targetHeader, detectedType);
+  const buckets = splitIntoBuckets(sortedTarget, categoryCount);
+
+  return buckets.map(bucket => {
+    let targetRange;
+    if (detectedType === 'date') {
+      targetRange = extractRange(bucket, targetHeader);
+    } else {
+      const labelSet = new Set();
+      for (const row of bucket) {
+        const val = row[targetHeader];
+        if (val != null) labelSet.add(String(val).trim());
+      }
+      targetRange = { labels: Array.from(labelSet) };
+    }
+
+    return {
+      targetHeader,
+      targetRange,
+      total: bucket.length,
+      baseHeaderCounts: countBaseHeaderValues(bucket, baseHeader, allBaseValues),
+    };
+  });
 }
 
 
@@ -439,8 +581,13 @@ function manualDistribute(data, baseHeader, nestedHeaders = [], manualRanges = [
     for (let j = 0; j < manualRanges.length; j++) {
       const header = manualRanges[j].header;
       const val = row[header];
-      if (val == null) continue;
-      const norm = String(val).trim().toLowerCase();
+      // if (val == null) continue;
+      let norm;
+      if (val == null || String(val).trim() === '') {
+        norm = val == null ? 'NULL' : 'blanks';
+      } else {
+        norm = String(val).trim().toLowerCase();
+      }
       if (!labelMaps[header]) labelMaps[header] = {};
       if (!labelMaps[header][norm]) labelMaps[header][norm] = [];
       labelMaps[header][norm].push(row);
@@ -493,7 +640,7 @@ async function getCategoryStats(req, res) {
       if (!targetHeader || categoryCount > structuredData.length) {
         return res.status(200).json([]);
       }
-      breakdown = autoDistribute(structuredData, baseHeader, targetHeader, categoryCount, nestedHeaders);
+      breakdown = autoDistributeSecond(structuredData, baseHeader, targetHeader, categoryCount, nestedHeaders);
     } else {
       breakdown = manualDistribute(structuredData, baseHeader, nestedHeaders, manualRanges);
     }

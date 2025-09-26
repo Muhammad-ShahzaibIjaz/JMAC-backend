@@ -19,7 +19,11 @@ function getAllBaseHeaderValues(data, baseKey) {
   const values = new Set();
   for (let i = 0; i < data.length; i++) {
     const val = data[i][baseKey];
-    if (val != null && val !== '') values.add(val);
+    if (val != null && val !== '') {
+      values.add(val);
+    } else {
+      values.add(val == null ? 'NULL' : 'blanks');
+    }
   }
   return Array.from(values);
 }
@@ -27,8 +31,14 @@ function getAllBaseHeaderValues(data, baseKey) {
 function countBaseHeaderValues(data, baseKey, allPossibleValues = []) {
   const counts = Object.fromEntries(allPossibleValues.map(v => [v, 0]));
   for (let i = 0; i < data.length; i++) {
-    const val = data[i][baseKey];
-    if (val in counts) counts[val]++;
+    const raw = data[i][baseKey];
+    let key;
+    if (raw !== null && raw !== '') {
+      key = raw;
+    } else {
+      key = raw == null ? 'NULL' : 'blanks';
+    }
+    if (key in counts) counts[key]++;
   }
   return counts;
 }
