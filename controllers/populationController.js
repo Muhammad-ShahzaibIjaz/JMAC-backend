@@ -378,6 +378,65 @@ async function getStructuredData(templateId, sheetId) {
 
 
 
+// function handleNestedHeaders(nestedHeaders, data) {
+//   if (!nestedHeaders?.length) return data;
+
+//   let filteredData = data;
+
+//   for (const { header, ranges, bucketNumber } of nestedHeaders) {
+//     if (!header || !ranges?.length) continue;
+
+//     const detectedType = detectType(filteredData, header);
+//     const sorted = sortByType(filteredData, header, detectedType);
+//     if (detectedType === 'number') {
+//       filteredData = filteredData.filter(row => +row[header] !== 0);
+//     }
+
+//     const buckets = splitIntoBuckets(sorted, bucketNumber || ranges.length);
+//     console.log(`Buckets for ${header}:`, buckets.length);
+//     const targetLabels = new Set(['International-Transfer', 'International-Freshman']);
+
+//     for (let i = 0; i < buckets.length; i++) {
+//       const bucket = buckets[i];
+//       const matchingRows = bucket.filter(row =>
+//         targetLabels.has(String(row['First_Year/Transfer/Continuing/Readmit/Online']).trim())
+//       );
+//       console.log(`Bucket ${i + 1} — Matching count: ${matchingRows.length}`);
+//     }
+//     const labelBuckets = new Map();
+//     for (const bucket of buckets) {
+//       const key = extractRange(bucket, header);
+//       labelBuckets.set(`${looselyNormalize(key.start)}|${looselyNormalize(key.end)}`, bucket);
+//     }
+
+//     for (const range of ranges) {
+//       const { start, end, labels } = range;
+//       console.log(`Processing range for ${header}: ${start} to ${end} with labels:`, labels);
+//       if (labels?.length) {
+//         const labelSet = new Set(labels.map(l => String(l).trim()));
+//         console.log('Label set:', labelSet);
+//         const match = buckets.find(bucket =>
+//           bucket.some(row => labelSet.has(String(row[header]).trim()))
+//         );
+//         console.log('Found matching bucket:', match.length);
+//         if (match) {
+//           filteredData = filteredData.filter(row => match.includes(row));
+//           console.log('Filtered data count:', filteredData.length);
+//         }
+//       } else {
+//         const key = `${looselyNormalize(start)}|${looselyNormalize(end)}`;
+//         if (labelBuckets.has(key)) {
+//           const match = labelBuckets.get(key);
+//           filteredData = filteredData.filter(row => match.includes(row));
+//           console.log('Filtered data count:', filteredData.length);
+//         }
+//       }
+//     }
+//   }
+
+//   return filteredData;
+// }
+
 function handleNestedHeaders(nestedHeaders, data) {
   if (!nestedHeaders?.length) return data;
 
@@ -388,11 +447,13 @@ function handleNestedHeaders(nestedHeaders, data) {
 
     const detectedType = detectType(filteredData, header);
     const sorted = sortByType(filteredData, header, detectedType);
+
     if (detectedType === 'number') {
       filteredData = filteredData.filter(row => +row[header] !== 0);
     }
 
     const buckets = splitIntoBuckets(sorted, bucketNumber || ranges.length);
+    console.log(`Buckets for ${header}:`, buckets.length);
 
     const labelBuckets = new Map();
     for (const bucket of buckets) {
@@ -400,25 +461,47 @@ function handleNestedHeaders(nestedHeaders, data) {
       labelBuckets.set(`${looselyNormalize(key.start)}|${looselyNormalize(key.end)}`, bucket);
     }
 
+    let combinedMatches = [];
+
     for (const range of ranges) {
       const { start, end, labels } = range;
 
       if (labels?.length) {
-        const labelSet = new Set(labels.map(l => String(l).trim().toLowerCase()));
-        const match = buckets.find(bucket =>
-          bucket.every(row => labelSet.has(String(row[header]).trim().toLowerCase()))
-        );
-        if (match) {
-          filteredData = filteredData.filter(row => match.includes(row));
+        const labelSet = new Set(labels.map(l => looselyNormalize(l)));
+        console.log(`Label set for ${header}:`, labelSet);
+
+        for (let i = 0; i < buckets.length; i++) {
+          const bucket = buckets[i];
+          const matchingRows = bucket.filter(row =>
+            labelSet.has(looselyNormalize(row[header]))
+          );
+          console.log(`Bucket ${i + 1} — Matching count: ${matchingRows.length}`);
+          combinedMatches.push(...matchingRows);
         }
-      } else {
-        const key = `${looselyNormalize(start)}|${looselyNormalize(end)}`;
-        if (labelBuckets.has(key)) {
-          const match = labelBuckets.get(key);
-          filteredData = filteredData.filter(row => match.includes(row));
+      } else if (start != null && end != null) {
+        for (let i = 0; i < buckets.length; i++) {
+          const bucket = buckets[i];
+          const matchingRows = bucket.filter(row => {
+            const val = row[header];
+            if (val == null || val === '') return false;
+
+            if (detectedType === 'number') {
+              return +val >= +start && +val <= +end;
+            }
+            if (detectedType === 'date') {
+              return Date.parse(val) >= Date.parse(start) && Date.parse(val) <= Date.parse(end);
+            }
+            return false;
+          });
+          console.log(`Bucket ${i + 1} — Range match count: ${matchingRows.length}`);
+          combinedMatches.push(...matchingRows);
         }
       }
     }
+
+    const matchSet = new Set(combinedMatches);
+    filteredData = filteredData.filter(row => matchSet.has(row));
+    console.log(`Filtered data count after ${header}:`, filteredData.length);
   }
 
   return filteredData;
