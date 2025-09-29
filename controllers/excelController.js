@@ -501,7 +501,7 @@ function prepareInsertPayload(sheet, templateHeadersFromDB, dbMappings, isOrigin
 
     let matchIndex = -1;
 
-    if (mappedName && !isOriginal) {
+    if (mappedName && isOriginal) {
       matchIndex = sheet.headers.findIndex(h => h.toLowerCase() === mappedName);
     }
 
@@ -540,7 +540,6 @@ async function saveFileAndSingleSheetData(processedFiles, templateId, mappingTem
   const templateHeaders = await fetchTemplateHeaders(templateId, transaction);
   const mapHeaders = await fetchMapHeaders(mappingTemplateId, transaction);
   const resolvedPayload = prepareInsertPayload(sheet, templateHeaders, mapHeaders, isOriginal);
-  
   const headerMapping = resolveHeaderMapping(sheet.headers, templateHeaders, mapHeaders);
   const rowMap = deduplicateRows(sheet.data);
   validateTextLengths(rowMap, sheet.headers, headerMapping);
@@ -914,7 +913,7 @@ async function getTemplateAndMappings(templateId, mappingTemplateId, isOriginal,
   const templateHeaders = await Header.findAll({ where: { templateId }, transaction });
 
   const headerMap = new Map(); // templateHeader.name → [mappedNames]
-  if (mappingTemplateId && !isOriginal) {
+  if (mappingTemplateId && isOriginal) {
     const mapHeaders = await MapHeader.findAll({ where: { mappingTemplateId }, transaction });
     for (const th of templateHeaders) {
       const mapped = mapHeaders
@@ -1122,7 +1121,6 @@ async function processAndSaveSelectedSheets(req, res) {
             `Header count mismatch for ${sheet.sheetName} in ${selection.fileName}: expected ${selectionSheet.totalHeaders}, got ${sheet.headers.length}`
           );
         }
-        console.log(sheet.data.length);
       }
 
       if (selectedSheets.length > 0) {

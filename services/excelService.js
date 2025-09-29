@@ -190,7 +190,11 @@ async function headerProcessor(files, headerOrientation='horizontal', headerPosi
           return null;
         }
         const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: null, raw: false});
+        console.log(jsonData[0]);
+        console.log(jsonData[1]);
         const { headers, data } = processDataRows(jsonData, headerOrientation, headerPosition, isRowSkipped);
+        console.log(`Processed sheet '${sheetName}' in file '${file.originalname}': Found ${headers.length} headers and ${data.length} data rows.`);
+        console.log(`Headers: ${headers.join(", ")}`);
         return {
           sheetName,
           headers,
