@@ -344,7 +344,6 @@ const applyPopulationRule = async (templateId, sheetId, conditions, headers) => 
         });
 
         const maxRowIndex = result.maxRow ?? 0;
-        console.log(`Max row index in sheet ${sheetId}: ${maxRowIndex}`);
         const evaluationHeaderIds = allHeaders.map(h => h.id);
 
         const sheetDataForEvaluation = await SheetData.findAll({
@@ -378,7 +377,6 @@ const applyPopulationRule = async (templateId, sheetId, conditions, headers) => 
             const isValid = evaluateConditions(filteredRowData, conditions);
             if (isValid) matchingRowIndices.push(rowIndex);
         }
-        console.log(`Found ${matchingRowIndices.length} matching rows`);
         return matchingRowIndices;
 
     } catch (error) {
@@ -422,7 +420,6 @@ async function getAveragesFromMatchedRows(sheetId, matchedRowIndexes, templateId
     return { netRevenue: 0, discountRate: 0 };
   }
 
-  console.log(`Calculating averages for ${matchedRowIndexes.length} matched rows`);
   // Step 1: Get headerIds for Net_Tuition_Revenue and NACUBO_Discount_Rate
   const headers = await Header.findAll({
     where: {
@@ -491,8 +488,6 @@ async function getAveragesMetricsFromMatchedRows(sheetId, matchedRowIndexes, tem
   if (!sheetId || !matchedRowIndexes || matchedRowIndexes.length === 0) {
     return { netRevenue: 0, netCharges: 0, nacuboDiscount: 0, totalDiscount: 0 };
   }
-
-  console.log(`Calculating averages for ${matchedRowIndexes.length} matched rows`);
   // Step 1: Get headerIds for Net_Tuition_Revenue and NACUBO_Discount_Rate
   const headers = await Header.findAll({
     where: {
@@ -733,6 +728,436 @@ const getStudentHeadCountByYear = async (req, res) => {
 };
 
 
+const getRules = async (templateId) => {
+    const populationRules = await PopulationRule.findAll({
+        where: { templateId }
+    });
+    if (!populationRules) {
+        throw new Error('Population rules not found');
+    }
+    return populationRules.map(rule => ({
+        name: rule.ruleName,
+        conditions: rule.conditions,
+        headers: rule.headers
+    }));
+};
+
+async function getAveragesNetRevenueFromMatchedRows(sheetId, matchedRowIndexes, templateId) {
+  if (!sheetId || !matchedRowIndexes || matchedRowIndexes.length === 0) {
+    return { netRevenue: 0};
+  }
+
+  // Step 1: Get headerIds for Net_Tuition_Revenue and NACUBO_Discount_Rate
+  const headers = await Header.findAll({
+    where: {
+      templateId,
+      name: { [Op.in]: ['Net_Tuition_Revenue'] },
+    },
+    raw: true,
+  });
+
+  const headerMap = headers.reduce((acc, h) => {
+    acc[h.name] = h.id;
+    return acc;
+  }, {});
+
+  const netTuitionHeaderId = headerMap['Net_Tuition_Revenue'];
+
+  if (!netTuitionHeaderId) {
+    return { netRevenue: 0 };
+  }
+
+  // Step 2: Fetch relevant SheetData rows
+  const dataRows = await SheetData.findAll({
+    where: {
+      sheetId,
+      rowIndex: { [Op.in]: matchedRowIndexes },
+      headerId: { [Op.in]: [netTuitionHeaderId] },
+    },
+    attributes: ['headerId', 'value'],
+    raw: true,
+  });
+
+  // Step 3: Group and calculate averages
+  let netTuitionSum = 0;
+  let netTuitionCount = 0;
+
+  dataRows.forEach((row) => {
+    let rawValue = row.value;
+
+    // Handle percentage strings like "99%" or " 100 %"
+    if (typeof rawValue === 'string' && rawValue.includes('%')) {
+      rawValue = rawValue.replace('%', '').trim();
+    }
+
+    const val = parseFloat(rawValue);
+    if (isNaN(val)) return;
+
+    if (row.headerId === netTuitionHeaderId) {
+      netTuitionSum += val;
+      netTuitionCount++;
+    }
+  });
+
+  return {
+    netRevenue: netTuitionCount ? Math.round(netTuitionSum / netTuitionCount) : 0,
+  };
+}
+
+
+const getKPIOfStudents = async (req, res) => {
+  const { selectedDate, previousYearDate, twoYearsAgoDate, templateId } = req.body;
+
+  try {
+    if (!templateId || !selectedDate) {
+      return res.status(400).json({ error: 'templateId and selectedDate are required' });
+    }
+
+    const selectedYear = new Date(selectedDate).getFullYear();
+    const previousYear = selectedYear - 1;
+    const twoYearsAgo = selectedYear - 2;
+
+    const sheetIds = {
+      [selectedYear]: await getSheetIdBySubmissionDate(selectedDate, templateId),
+      [previousYear]: await getSheetIdBySubmissionDate(previousYearDate, templateId),
+      [twoYearsAgo]: await getSheetIdBySubmissionDate(twoYearsAgoDate, templateId),
+    };
+
+    const allStatuses = await getStatusesByTemplateId(templateId);
+    const populationRules = await getRules(templateId);
+
+    const yearPromises = Object.entries(sheetIds).map(async ([yearLabel, sheetId]) => {
+      const ruleResults = [];
+
+      for (const rule of populationRules) {
+        let statuses = [];
+
+        if (!sheetId) {
+          statuses = allStatuses.map(status => ({
+            statusName: status.statusName,
+            headCount: 0,
+            netRevenue: 0,
+          }));
+        } else {
+          const matchingRows = await applyPopulationRule(templateId, sheetId, rule.conditions, rule.headers);
+
+          if (matchingRows.length > 0) {
+            statuses = await Promise.all(allStatuses.map(async status => {
+              const { selectedStatuses, targetHeader, statusName } = status;
+              const { count, rowIndexes } = await calculateStatusStudents(sheetId, selectedStatuses, targetHeader, templateId, matchingRows);
+              const revenueStats = await getAveragesNetRevenueFromMatchedRows(sheetId, rowIndexes, templateId);
+              return {
+                statusName,
+                headCount: count,
+                netRevenue: revenueStats.netRevenue || 0,
+              };
+            }));
+          } else {
+            statuses = allStatuses.map(status => ({
+              statusName: status.statusName,
+              headCount: 0,
+              netRevenue: 0,
+            }));
+          }
+        }
+        // Push rule result with ruleName
+        ruleResults.push({
+          ruleName: rule.name, // Include ruleName here
+          statuses,
+        });
+      }
+
+      return {
+        yearLabel,
+        result: ruleResults,
+      };
+    });
+
+    const finalResults = await Promise.all(yearPromises);
+    res.status(200).json(finalResults);
+
+  } catch (err) {
+    console.log("Error while getting KPI: ", err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+async function getFinancialMetricsFromMatchedRows(sheetId, matchedRowIndexes, templateId) {
+  if (!sheetId || !matchedRowIndexes || matchedRowIndexes.length === 0) {
+    return { TIUG: 0, TIFUG: 0, Avg_TIFUG: 0, Avg_TSG: 0, SNC: 0, Avg_SNC: 0, Avg_NACUBO: 0, Avg_Discount: 0, Avg_C_Discount: 0, Student_Pell: 0, Avg_Need_Met: 0, Avg_SFN: 0, Avg_TNM: 0, Avg_TUN: 0 };
+  }
+
+  const headers = await Header.findAll({
+    where: {
+      templateId,
+      name: { [Op.in]: ['Total_Institutional_Gift', 'Total_Institutional_Unfunded_Gift', 'NACUBO_Discount_Rate', 'Total_Discount_Rate',
+      'Institutional_Merit_As_%_Of_Need_Met', 'Total_Gift_Aid', 'Net_Charges_To_Student', 'Campus_Discount Rate',
+      'Y/N Is_Student_Pell_Eligible', 'Student_Financial_Need', 'Total_Need_Met', 'GAP/Unmet_Need'] },
+    },
+    raw: true,
+  });
+
+  const headerMap = headers.reduce((acc, h) => {
+    acc[h.name] = h.id;
+    return acc;
+  }, {});
+
+  const totalInstGiftId = headerMap['Total_Institutional_Gift'];
+  const totalInstUnfundedGiftId = headerMap['Total_Institutional_Unfunded_Gift'];
+  const discountRateHeaderId = headerMap['NACUBO_Discount_Rate'];
+  const totalDiscountHeaderId = headerMap['Total_Discount_Rate'];
+  const instMeritNeedId = headerMap['Institutional_Merit_As_%_Of_Need_Met'];
+  const totalGiftAidId = headerMap['Total_Gift_Aid'];
+  const netChargesId = headerMap['Net_Charges_To_Student'];
+  const campusDiscountId = headerMap['Campus_Discount Rate'];
+  const studentPellId = headerMap['Y/N Is_Student_Pell_Eligible'];
+  const studentFinancialNeedId = headerMap['Student_Financial_Need'];
+  const totalNeedMetId = headerMap['Total_Need_Met'];
+  const gapUnmetNeedId = headerMap['GAP/Unmet_Need'];
+
+  if (!totalInstGiftId && !totalInstUnfundedGiftId && !discountRateHeaderId && !totalDiscountHeaderId 
+    && !instMeritNeedId && !totalGiftAidId && !netChargesId && !campusDiscountId &&
+    !studentPellId && !studentFinancialNeedId && !totalNeedMetId && !gapUnmetNeedId) {
+    return { TIUG: 0, TIFUG: 0, Avg_TIFUG: 0, Avg_TSG: 0, SNC: 0, Avg_SNC: 0, Avg_NACUBO: 0, Avg_Discount: 0, Avg_C_Discount: 0, Student_Pell: 0, Avg_Need_Met: 0, Avg_SFN: 0, Avg_TNM: 0, Avg_TUN: 0 };
+  }
+
+  // Step 2: Fetch relevant SheetData rows
+  const dataRows = await SheetData.findAll({
+    where: {
+      sheetId,
+      rowIndex: { [Op.in]: matchedRowIndexes },
+      headerId: { [Op.in]: [totalInstGiftId, totalInstUnfundedGiftId, discountRateHeaderId, totalDiscountHeaderId,
+        instMeritNeedId, totalGiftAidId, netChargesId, campusDiscountId, studentPellId,
+        studentFinancialNeedId, totalNeedMetId, gapUnmetNeedId] },
+    },
+    attributes: ['headerId', 'value'],
+    raw: true,
+  });
+
+  // Step 3: Group and calculate averages
+  let totalInstGiftSum = 0;
+  let totalInstGiftCount = 0;
+  let totalInstUnfundedGiftSum = 0;
+  let totalInstUnfundedGiftCount = 0;
+  let totalNACUBORateSum = 0;
+  let totalNACUBORateCount = 0;
+  let totalDiscountSum = 0;
+  let totalDiscountCount = 0;
+  let instMeritNeedSum = 0;
+  let instMeritNeedCount = 0;
+
+  // Step 4: Additional aggregations
+  let totalGiftAidSum = 0, totalGiftAidCount = 0;
+  let netChargesSum = 0, netChargesCount = 0;
+  let campusDiscountSum = 0, campusDiscountCount = 0;
+  let pellEligibleCount = 0;
+  let studentFinancialNeedSum = 0, studentFinancialNeedCount = 0;
+  let totalNeedMetSum = 0, totalNeedMetCount = 0;
+  let gapUnmetNeedSum = 0, gapUnmetNeedCount = 0;
+
+
+  dataRows.forEach((row) => {
+    let rawValue = row.value;
+
+    // Handle percentage strings like "99%" or " 100 %"
+    if (typeof rawValue === 'string' && rawValue.includes('%')) {
+      rawValue = rawValue.replace('%', '').trim();
+    }
+
+    const val = parseFloat(rawValue);
+    if (isNaN(val)) return;
+
+    if (row.headerId === totalInstGiftId) {
+      totalInstGiftSum += val;
+      totalInstGiftCount++;
+    } else if (row.headerId === totalInstUnfundedGiftId) {
+      totalInstUnfundedGiftSum += val;
+      totalInstUnfundedGiftCount++;
+    } else if (row.headerId === discountRateHeaderId) {
+      totalNACUBORateSum += val;
+      totalNACUBORateCount++;
+    } else if (row.headerId === instMeritNeedId) {
+      instMeritNeedSum += val;
+      instMeritNeedCount++;
+    } else if (row.headerId === totalDiscountHeaderId) {
+      totalDiscountSum += val;
+      totalDiscountCount++;
+    } else if (row.headerId === totalGiftAidId) {
+      totalGiftAidSum += val;
+      totalGiftAidCount++;
+    } else if (row.headerId === netChargesId) {
+      netChargesSum += val;
+      netChargesCount++;
+    } else if (row.headerId === campusDiscountId) {
+      campusDiscountSum += val;
+      campusDiscountCount++;
+    } else if (row.headerId === studentFinancialNeedId) {
+      studentFinancialNeedSum += val;
+      studentFinancialNeedCount++;
+    } else if (row.headerId === totalNeedMetId) {
+      totalNeedMetSum += val;
+      totalNeedMetCount++;
+    } else if (row.headerId === gapUnmetNeedId) {
+      gapUnmetNeedSum += val;
+      gapUnmetNeedCount++;
+    }
+  });
+
+  dataRows.forEach((row) => {
+    const val = typeof row.value === 'string' ? row.value.trim().toUpperCase() : '';
+    if (row.headerId === studentPellId && val === 'Y') {
+      pellEligibleCount++;
+    }
+  });
+  const totalStudents = matchedRowIndexes.length;
+  let nacuboDiscount = totalNACUBORateCount ? (totalNACUBORateSum / totalNACUBORateCount).toFixed(2) : 0;
+  let totalDiscount = totalDiscountCount ? (totalDiscountSum / totalDiscountCount).toFixed(2) : 0;
+
+  return {
+    TIUG: Math.round(totalInstUnfundedGiftSum),
+    TIFUG: Math.round(totalInstGiftSum),
+    Avg_TIFUG: totalStudents ? Math.round(totalInstGiftSum / totalStudents) : 0,
+    Avg_TSG: totalGiftAidCount ? Math.round(totalGiftAidSum / totalGiftAidCount) : 0,
+    SNC: Math.round(netChargesSum),
+    Avg_SNC: netChargesCount ? Math.round(netChargesSum / netChargesCount) : 0,
+    Avg_NACUBO: nacuboDiscount,
+    Avg_Discount: totalDiscount,
+    Avg_C_Discount: campusDiscountCount ? (campusDiscountSum / campusDiscountCount).toFixed(2) : 0,
+    Student_Pell: totalStudents ? ((pellEligibleCount / totalStudents) * 100).toFixed(2) : 0,
+    Avg_Need_Met: instMeritNeedCount ? Math.round(instMeritNeedSum / instMeritNeedCount) : 0,
+    Avg_SFN: studentFinancialNeedCount ? Math.round(studentFinancialNeedSum / studentFinancialNeedCount) : 0,
+    Avg_TNM: totalNeedMetCount ? Math.round(totalNeedMetSum / totalNeedMetCount) : 0,
+    Avg_TUN: gapUnmetNeedCount ? Math.round(gapUnmetNeedSum / gapUnmetNeedCount) : 0,
+  };
+}
+
+async function getFAFSAFromMatchedRows(sheetId, matchedRowIndexes, templateId) {
+  if (!sheetId || !matchedRowIndexes || matchedRowIndexes.length === 0) {
+    return { FAFSA: 0 };
+  }
+
+  const headers = await Header.findAll({
+    where: {
+      templateId,
+      name: { [Op.in]: ['Y/N FAFSA_Received', 'Y/N Is_Student_Pell_Eligible'] },
+    },
+    raw: true,
+  });
+
+  const headerMap = headers.reduce((acc, h) => {
+    acc[h.name] = h.id;
+    return acc;
+  }, {});
+
+  const fafsaReceivedId = headerMap['Y/N FAFSA_Received'];
+  const studentPellId = headerMap['Y/N Is_Student_Pell_Eligible'];
+
+  if (!fafsaReceivedId || !studentPellId) {
+    return { FAFSA: 0 };
+  }
+
+  const dataRows = await SheetData.findAll({
+    where: {
+      sheetId,
+      rowIndex: { [Op.in]: matchedRowIndexes },
+      headerId: { [Op.in]: [fafsaReceivedId, studentPellId] },
+    },
+    attributes: ['headerId', 'value', 'rowIndex'],
+    raw: true,
+  });
+
+  // Group values by rowIndex
+  const rowMap = {};
+  for (const row of dataRows) {
+    const val = typeof row.value === 'string' ? row.value.trim().toUpperCase() : '';
+    if (!rowMap[row.rowIndex]) rowMap[row.rowIndex] = {};
+    if (row.headerId === fafsaReceivedId) rowMap[row.rowIndex].fafsa = val;
+    if (row.headerId === studentPellId) rowMap[row.rowIndex].pell = val;
+  }
+
+  let fafsaYesCount = 0;
+  let pellEligibleWithFafsaCount = 0;
+
+  for (const rowIndex of matchedRowIndexes) {
+    const entry = rowMap[rowIndex];
+    if (entry?.fafsa === 'Y') {
+      fafsaYesCount++;
+      if (entry.pell === 'Y') {
+        pellEligibleWithFafsaCount++;
+      }
+    }
+  }
+
+  return {
+    FAFSA: fafsaYesCount ? ((pellEligibleWithFafsaCount / fafsaYesCount) * 100).toFixed(2) : 0,
+  };
+}
+
+const getFinancialAidsValues = async (req, res) => {
+  const { selectedDate, templateId, populationRuleId } = req.body;
+
+  try {
+    if (!selectedDate || !templateId || !populationRuleId) {
+      return res.status(400).json({ error: 'All fields are required' });
+    }
+
+    const selectedSheetId = await getSheetIdBySubmissionDate(selectedDate, templateId);
+
+    const allStatuses = await getStatusesByTemplateId(templateId);
+
+    if (!selectedSheetId) {
+      const fallbackStatuses = allStatuses.map(status => ({
+        statusName: status.statusName,
+        TIUG: 0, TIFUG: 0, Avg_TIFUG: 0, Avg_TSG: 0, SNC: 0, Avg_SNC: 0,
+        Avg_NACUBO: 0, Avg_Discount: 0, Avg_C_Discount: 0,
+        FAFSA: 0, Student_Pell: 0, Avg_Need_Met: 0,
+        Avg_SFN: 0, Avg_TNM: 0, Avg_TUN: 0
+      }));
+      return res.status(200).json(fallbackStatuses);
+    }
+
+    const { conditions, headers } = await getRuleConditionsAndHeaders(populationRuleId);
+    const matchingRows = await applyPopulationRule(templateId, selectedSheetId, conditions, headers);
+
+    const statusCounts = [];
+
+    if (matchingRows.length > 0) {
+      for (const status of allStatuses) {
+        const { selectedStatuses, targetHeader, statusName } = status;
+        const { rowIndexes } = await calculateStatusStudents(
+          selectedSheetId,
+          selectedStatuses,
+          targetHeader,
+          templateId,
+          matchingRows
+        );
+
+        const revenueStats = await getFinancialMetricsFromMatchedRows(selectedSheetId, rowIndexes, templateId);
+        const fafsaStats = await getFAFSAFromMatchedRows(selectedSheetId, rowIndexes, templateId);
+
+        statusCounts.push({
+          statusName,
+          ...revenueStats,
+          ...fafsaStats
+        });
+      }
+    } else {
+      statusCounts.push(...allStatuses.map(status => ({
+        statusName: status.statusName,
+        TIUG: 0, TIFUG: 0, Avg_TIFUG: 0, Avg_TSG: 0, SNC: 0, Avg_SNC: 0,
+        Avg_NACUBO: 0, Avg_Discount: 0, Avg_C_Discount: 0,
+        FAFSA: 0, Student_Pell: 0, Avg_Need_Met: 0,
+        Avg_SFN: 0, Avg_TNM: 0, Avg_TUN: 0
+      })));
+    }
+
+    return res.status(200).json(statusCounts);
+
+  } catch (err) {
+    console.error("Error while getting financial aids values:", err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
 
 module.exports = {
     savePopulationStatus,
@@ -744,5 +1169,7 @@ module.exports = {
     updatePopulationStatus,
     deletePopulationStatus,
     findClosestPreviousDate,
-    getStudentHeadCountByYear
+    getStudentHeadCountByYear,
+    getKPIOfStudents,
+    getFinancialAidsValues
 };

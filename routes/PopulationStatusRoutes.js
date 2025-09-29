@@ -12,5 +12,7 @@ router.put('/submission', populationStatusController.updatePopulationSubmissionD
 router.delete('/submission/:id', populationStatusController.deletePopulationSubmission);
 router.post('/closest-dates', populationStatusController.findClosestPreviousDate);
 router.post('/headcount-by-year', populationStatusController.getStudentHeadCountByYear);
+router.post('/kpi-of-students', populationStatusController.getKPIOfStudents);
+router.post('/financial-aids', populationStatusController.getFinancialAidsValues);
 
 module.exports = router;
