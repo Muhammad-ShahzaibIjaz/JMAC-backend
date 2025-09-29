@@ -468,9 +468,9 @@ const desiredOrder = [
 
 
 const desiredOrderType = [
-  "integer",
-  "integer",
-  "integer",
+  "text",
+  "text",
+  "text",
   "text",
   "text",
   "text",
