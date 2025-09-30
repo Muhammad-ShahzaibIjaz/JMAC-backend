@@ -94,4 +94,32 @@ async function generateExcelFile({ headers, maxRowIndex, totalErrorRows, errorRo
   return await workbook.xlsx.writeBuffer();
 }
 
-module.exports = {generateExcelFile};
+async function generateHeaderMappingExcel(mappingTable) {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet('Header Mapping');
+
+  // Add rows to sheet
+  sheet.addRows(mappingTable);
+
+  // Style header row
+  const headerRow = sheet.getRow(1);
+  headerRow.eachCell(cell => {
+    cell.font = { bold: true };
+    cell.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFB0C4DE' }, // light steel blue
+    };
+  });
+
+  // Set column widths
+  sheet.columns = [
+    { width: 30 },
+    { width: 30 },
+  ];
+
+  // Return buffer
+  return await workbook.xlsx.writeBuffer();
+}
+
+module.exports = { generateExcelFile, generateHeaderMappingExcel };

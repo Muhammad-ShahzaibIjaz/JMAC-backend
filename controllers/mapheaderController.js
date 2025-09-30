@@ -1,8 +1,11 @@
 const MappingTemplate = require('../models/MappingTemplate');
 const MapHeader = require('../models/MapHeader');
+const Header = require('../models/Header');
 const sequelize  = require('../config/database');
 const { v4: uuidv4 } = require('uuid');
 const { Op } = require('sequelize');
+const { Template } = require('../models');
+const { generateHeaderMappingExcel } = require('../services/SheetService');
 
 
 
@@ -107,7 +110,77 @@ async function getMapHeader(req, res) {
   }
 }
 
+const getHeaderMappingTable = async (templateId, mappingTemplateId) => {
+  try {
+    const headers = await Header.findAll({
+      where: { templateId },
+      attributes: ['id', 'name']
+    });
+
+    const headerIds = headers.map(h => h.id);
+
+    const mappings = await MapHeader.findAll({
+      where: {
+        mappingTemplateId,
+        headerId: headerIds
+      },
+      attributes: ['headerId', 'name']
+    });
+
+    const mapByHeaderId = new Map(
+      mappings.map(m => [m.headerId, m.name])
+    );
+
+    const table = [
+      ['SMARTAID Headers', 'Mapped Header'], // Header row
+      ...headers.map(header => [
+        header.name,
+        mapByHeaderId.get(header.id) || ''
+      ])
+    ];
+
+    return table;
+  } catch (error) {
+    console.error("Error generating header mapping table:", error);
+    throw error;
+  }
+};
+
+const exportHeaderMapping = async (req, res) => {
+  try {
+    const { templateId, mappingTemplateId } = req.query;
+
+    if (!templateId || !mappingTemplateId) {
+      return res.status(400).json({ error: 'templateId and mappingTemplateId are required' });
+    }
+
+    const template = await Template.findByPk(templateId);
+    const mappingTemplate = await MappingTemplate.findByPk(mappingTemplateId);
+    
+
+    if (!template) {
+      return res.status(404).json({ error: 'Template not found' });
+    }
+
+    if (!mappingTemplate) {
+      return res.status(404).json({ error: 'Mapping Template not found' });
+    }
+
+    const mappingTable = await getHeaderMappingTable(templateId, mappingTemplateId);
+    const buffer = await generateHeaderMappingExcel(mappingTable);
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename=${template.name}_${mappingTemplate.name}.xlsx`);
+    res.status(200).send(buffer);
+  } catch (error) {
+    console.error("Error exporting header mapping:", error);
+    res.status(500).json({ error: 'Failed to export header mapping' });
+  }
+}
+
+
 module.exports = {
   updateMapHeader,
   getMapHeader,
+  exportHeaderMapping
 };

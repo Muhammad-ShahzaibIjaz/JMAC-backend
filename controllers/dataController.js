@@ -5336,13 +5336,10 @@ async function getStatusValues(req, res) {
   }
 }
 
-
-async function getHeaderValues(req, res) {
-  const { templateId, sheetId, headerId } = req.body;
-
+async function extractHeaderValues(headerId, sheetId) {
   try {
-    if (!templateId || !sheetId || !headerId) {
-      return res.status(400).json({ message: 'templateId, sheetId, and headerId are required.' });
+    if (!headerId || !sheetId) {
+      throw new Error('headerId and sheetId are required.');
     }
 
     const data = await SheetData.findAll({
@@ -5352,6 +5349,24 @@ async function getHeaderValues(req, res) {
     });
 
     const values = data.map(d => d.value).filter(v => v !== null && v !== "");
+
+    return values;
+  } catch (error) {
+    console.error('Error in getHeaderValues:', error);
+    throw error;
+  }
+}
+
+
+async function getHeaderValues(req, res) {
+  const { templateId, sheetId, headerId } = req.body;
+
+  try {
+    if (!templateId || !sheetId || !headerId) {
+      return res.status(400).json({ message: 'templateId, sheetId, and headerId are required.' });
+    }
+
+    const values = await extractHeaderValues(headerId, sheetId);
 
     return res.status(200).json({ values });
   } catch (error) {
@@ -5390,5 +5405,6 @@ module.exports = {
   evaluateSheetDataAndAssign,
   getStatusValues,
   getHeaderValues,
-  FacilityZipFiller
+  FacilityZipFiller,
+  extractHeaderValues
 };

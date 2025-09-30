@@ -20,5 +20,6 @@ router.get('/population-rules/:templateId', ruleController.getPopulationRuleByTe
 router.get('/population-rule', ruleController.getPopulationRuleById);
 router.delete('/population-rule', ruleController.deletePopulationRule);
 router.put('/population-rule', ruleController.updatePopulationRule);
+router.post('/auto-population-rule', ruleController.autoPopulationRule);
 
 module.exports = router;

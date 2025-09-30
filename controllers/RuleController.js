@@ -2,7 +2,9 @@ const Rule = require("../models/Rule");
 const CalculationRule = require("../models/CalculationRule");
 const { v4: uuidv4 } = require("uuid");
 const { Header, ConditionalRule, PopulationRule } = require("../models");
+const {extractHeaderValues} = require("./dataController");
 const { bulkUpdates } = require("./dataController");
+const { Op } = require('sequelize');
 
 const createRule = async (req, res) => {
   try {
@@ -447,6 +449,83 @@ const deletePopulationRule = async (req, res) => {
   }
 };
 
+const autoPopulationRule = async (req, res) => {
+  const { templateId, sheetId, targetHeader } = req.body;
+
+  try {
+    if (!templateId || !sheetId || !targetHeader) {
+      return res.status(400).json({ error: "All fields (templateId, sheetId, targetHeader) are required" });
+    }
+
+    const header = await Header.findOne({ where: { templateId, name: targetHeader } });
+    if (!header) {
+      return res.status(404).json({ error: "Header not found" });
+    }
+
+    const uniqueValues = await extractHeaderValues(header.id, sheetId);
+
+    const existingRules = await PopulationRule.findAll({
+      where: {
+        templateId,
+        headers: {
+          [Op.contains]: [targetHeader]
+        }
+      }
+    });
+
+    const existingConditions = new Set(
+      existingRules.map(rule => JSON.stringify(rule.conditions))
+    );
+
+    const newRules = [];
+
+    for (const value of uniqueValues) {
+      const isValidValue = /[a-zA-Z0-9]/.test(value);
+      if (!isValidValue) continue;
+      const condition = {
+        all: [
+          {
+            field: targetHeader,
+            value: value,
+            operator: "equal"
+          }
+        ]
+      };
+
+      if (!existingConditions.has(JSON.stringify(condition))) {
+        const ruleName = `${value}`;
+        const newRule = await PopulationRule.create({
+          templateId,
+          ruleName,
+          conditions: condition,
+          headers: [targetHeader]
+        });
+        newRules.push(newRule);
+      }
+    }
+
+    const transformedRules = newRules.map((rule) => {
+      const conditionBlock = rule.conditions;
+      const combinatorKey = Object.keys(conditionBlock)[0];
+      const conditionList = conditionBlock[combinatorKey];
+
+      const conditionCount = Array.isArray(conditionList) ? conditionList.length : 0;
+
+      return {
+        id: rule.id,
+        ruleName: rule.ruleName,
+        conditions: conditionCount,
+      };
+    });
+
+    return res.status(200).json(transformedRules);
+
+  } catch (error) {
+    console.error("Error in auto population rule:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+
 module.exports = {
   createRule,
   updateRule,
@@ -465,5 +544,6 @@ module.exports = {
   getPopulationRuleByTemplateId,
   getPopulationRuleById,
   deletePopulationRule,
-  updatePopulationRule
+  updatePopulationRule,
+  autoPopulationRule
 };
