@@ -14,5 +14,6 @@ router.post('/closest-dates', populationStatusController.findClosestPreviousDate
 router.post('/headcount-by-year', populationStatusController.getStudentHeadCountByYear);
 router.post('/kpi-of-students', populationStatusController.getKPIOfStudents);
 router.post('/financial-aids', populationStatusController.getFinancialAidsValues);
+router.post('/fafsa-filer-summary', populationStatusController.getFAFSAFilerSummary);
 
 module.exports = router;

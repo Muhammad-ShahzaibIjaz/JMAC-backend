@@ -1159,6 +1159,156 @@ const getFinancialAidsValues = async (req, res) => {
   }
 };
 
+const calculateFilerStats = async (sheetId, templateId, admittedRowIndexes) => {
+  // Step 1: Get header IDs for SAI and Student_Financial_Need
+  const [saiHeader, needHeader] = await Promise.all([
+    Header.findOne({ where: { templateId, name: 'SAI' } }),
+    Header.findOne({ where: { templateId, name: 'Student_Financial_Need' } })
+  ]);
+
+  if (!saiHeader || !needHeader) {
+    return { totalFilers: 0, needBased: 0, totalFilerPercent: 0, needBasedPercent: 0, totalFilerSAI: 0, needBasedSAI: 0, totalFilerAvgNeed: 0, needBasedAvgNeed: 0 }
+  };
+
+  // Step 2: Fetch SAI and Need data for admittedRowIndexes
+  const [saiRows, needRows] = await Promise.all([
+    SheetData.findAll({
+      where: {
+        sheetId,
+        rowIndex: { [Op.in]: admittedRowIndexes },
+        headerId: saiHeader.id
+      },
+      attributes: ['rowIndex', 'value'],
+      raw: true
+    }),
+    SheetData.findAll({
+      where: {
+        sheetId,
+        rowIndex: { [Op.in]: admittedRowIndexes },
+        headerId: needHeader.id
+      },
+      attributes: ['rowIndex', 'value'],
+      raw: true
+    })
+  ]);
+
+  // Step 3: Build lookup maps for fast access
+  const saiMap = Object.fromEntries(saiRows.map(r => [r.rowIndex, r.value]));
+  const needMap = Object.fromEntries(needRows.map(r => [r.rowIndex, r.value]));
+
+  // Step 4: Filter totalFilers (SAI not blank)
+  const totalFilers = admittedRowIndexes.filter(index => {
+    const val = saiMap[index];
+    return val !== null && val !== undefined && val.toString().trim() !== '';
+  });
+
+  // Step 5: Filter needBased (SAI exists AND Need > 0)
+  const needBased = totalFilers.filter(index => {
+    const needVal = parseFloat(needMap[index]);
+    return !isNaN(needVal) && needVal > 0;
+  });
+
+  // Step 6: Calculate percentages
+  const admittedCount = admittedRowIndexes.length;
+  const totalFilerPercent = admittedCount ? ((totalFilers.length / admittedCount) * 100).toFixed(2) : 0;
+  const needBasedPercent = admittedCount ? ((needBased.length / admittedCount) * 100).toFixed(2) : 0;
+
+  // Step 7: Calculate averages
+  const totalFilerSAIValues = totalFilers.map(i => parseFloat(saiMap[i])).filter(v => !isNaN(v));
+  const needBasedSAIValues = needBased.map(i => parseFloat(saiMap[i])).filter(v => !isNaN(v));
+  const totalFilerNeedValues = totalFilers.map(i => parseFloat(needMap[i])).filter(v => !isNaN(v));
+  const needBasedNeedValues = needBased.map(i => parseFloat(needMap[i])).filter(v => !isNaN(v));
+
+  const avg = arr => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+
+  return {
+    totalFilers: totalFilers.length,
+    needBased: needBased.length,
+    totalFilerPercent,
+    needBasedPercent,
+    totalFilerAvgSAI: avg(totalFilerSAIValues),
+    needBasedAvgSAI: avg(needBasedSAIValues),
+    totalFilerAvgNeed: avg(totalFilerNeedValues),
+    needBasedAvgNeed: avg(needBasedNeedValues)
+  };
+};
+
+const getFAFSAFilerSummary = async (req, res) => {
+  const {selectedDate, previousYearDate, twoYearsAgoDate, templateId, populationRuleId} = req.body;
+
+  try {
+    if (!selectedDate || !templateId || !populationRuleId) {
+      return res.status(400).json({ error: 'All fields are required' });
+    }
+    const selectedYear = new Date(selectedDate).getFullYear();
+    const previousYear = selectedYear - 1;
+    const twoYearsAgo = selectedYear - 2;
+
+    const sheetIds = {
+      [selectedYear]: await getSheetIdBySubmissionDate(selectedDate, templateId),
+      [previousYear]: await getSheetIdBySubmissionDate(previousYearDate, templateId),
+      [twoYearsAgo]: await getSheetIdBySubmissionDate(twoYearsAgoDate, templateId),
+    };
+
+    const { conditions, headers } = await getRuleConditionsAndHeaders(populationRuleId);
+    const allStatuses = await getStatusesByTemplateId(templateId);
+
+    const yearPromises = Object.entries(sheetIds).map(async ([yearLabel, sheetId]) => {
+      if (sheetId === null) {
+        return {
+          yearLabel,
+          result: {
+            statuses: allStatuses.map(status => ({ statusName: status.statusName, totalFilers: 0, needBased: 0, totalFilerPercent: 0, needBasedPercent: 0, totalFilerSAI: 0, needBasedSAI: 0, totalFilerAvgNeed: 0, needBasedAvgNeed: 0 })),
+          }
+        };
+      }
+
+      const matchingRows = await applyPopulationRule(templateId, sheetId, conditions, headers);
+
+      const statusCounts = [];
+
+      if (matchingRows.length > 0) {
+        for (const status of allStatuses) {
+          const { selectedStatuses, targetHeader, statusName } = status;
+          const { count, rowIndexes } = await calculateStatusStudents(sheetId, selectedStatuses, targetHeader, templateId, matchingRows);
+          const revenueStats = await calculateFilerStats(sheetId, templateId, rowIndexes);
+          statusCounts.push({ statusName, ...revenueStats });
+        }
+
+        return {
+          yearLabel,
+          result: {
+            statuses: statusCounts,
+          }
+        };
+      } else {
+        return {
+          yearLabel,
+          result: {
+            statuses: allStatuses.map(status => ({ statusName: status.statusName, totalFilers: 0, needBased: 0, totalFilerPercent: 0, needBasedPercent: 0, totalFilerSAI: 0, needBasedSAI: 0, totalFilerAvgNeed: 0, needBasedAvgNeed: 0 })),
+          }
+        };
+      }
+    });
+
+    // Wait for all years to finish
+    const yearResults = await Promise.all(yearPromises);
+
+    // Build final results object
+    const results = {};
+    yearResults.forEach(({ yearLabel, result }) => {
+      results[yearLabel] = result;
+    });
+
+    res.status(200).json(results);
+  } catch (err) {
+    console.error("Error while getting FAFSA filer summary:", err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+
+
 module.exports = {
     savePopulationStatus,
     savePopulationSubmissionDate,
@@ -1171,5 +1321,6 @@ module.exports = {
     findClosestPreviousDate,
     getStudentHeadCountByYear,
     getKPIOfStudents,
-    getFinancialAidsValues
+    getFinancialAidsValues,
+    getFAFSAFilerSummary
 };
