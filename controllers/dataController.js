@@ -1313,7 +1313,7 @@ async function bulkUpdates(headerId, value, templateId, sheetId) {
     );
 
     const newRows = [];
-    for (let i = 1; i <= maxRowIndex; i++) {
+    for (let i = 0; i <= maxRowIndex; i++) {
       if (!existingRowIndexes.has(i)) {
         newRows.push({
           id: uuidv4(),
