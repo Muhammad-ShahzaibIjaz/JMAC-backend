@@ -1,4 +1,4 @@
-const normalizeKey = key => key.replace(/[^a-zA-Z0-9_]/g, '_');
+const normalizeKey = key => typeof key === 'string' ? key.replace(/[^a-zA-Z0-9_]/g, '_') : '';
 
 function evaluateConditions(rowData, conditionBlock) {
   const getValue = (field) => {
