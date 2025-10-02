@@ -385,6 +385,65 @@ const applyPopulationRule = async (templateId, sheetId, conditions, headers) => 
     }
 }
 
+const applyNeedBracket = async (templateId, sheetId, conditions, headers, matchingRows) => {
+    try{
+        if (!templateId || !sheetId || !conditions || !headers || !matchingRows) {
+            throw new Error('templateId, sheetId, conditions, headers, and matchingRows are required');
+        }
+        const allHeaders = await Header.findAll({
+            where:{
+                templateId,
+                name: {[Op.in]: headers}
+            },
+            raw: true,
+        });
+
+        if (allHeaders.length === 0) {
+            throw new Error('No matching headers found');
+        }
+
+        const evaluationHeaderIds = allHeaders.map(h => h.id);
+
+        const sheetDataForEvaluation = await SheetData.findAll({
+            where: {
+                sheetId,
+                headerId: { [Op.in]: evaluationHeaderIds },
+                rowIndex: { [Op.in]: matchingRows },
+            },
+            raw: true,
+        });
+
+        const evalRows = new Map();
+        sheetDataForEvaluation.forEach(entry => {
+            const header = allHeaders.find(h => h.id === entry.headerId);
+            const normalizedName = normalizeKey(header.name);
+            const row = evalRows.get(entry.rowIndex) || {};
+            row[normalizedName] = { value: entry.value, id: entry.id };
+            evalRows.set(entry.rowIndex, row);
+        });
+
+        const matchingRowIndices = [];
+
+        for (const rowIndex of matchingRows) {
+          const rowData = evalRows.get(rowIndex) || {};
+
+          const filteredRowData = {};
+          for (const name of headers) {
+            const normalized = normalizeKey(name);
+            filteredRowData[normalized] = rowData[normalized] ?? { value: null };
+          }
+
+          const isValid = evaluateConditions(filteredRowData, conditions);
+          if (isValid) matchingRowIndices.push(rowIndex);
+        }
+
+        return matchingRowIndices;
+    } catch (error) {
+        console.error('Error applying need brackets:', error);
+        throw error;
+    }
+}
+
 const getSheetId = async (submissionId) => {
     const submission = await PopulationSubmission.findByPk(submissionId);
     if (!submission) {
@@ -621,6 +680,47 @@ const getStatusesByTemplateId = async (templateId) => {
   }
 }
 
+const getAwardsByTemplateId = async (templateId, sheetIds = []) => {
+  try {
+    const headerKeys = Array.from({ length: 20 }, (_, i) => `Awd_Cd${i + 1}`);
+
+    const headers = await Header.findAll({
+      where: {
+        templateId,
+        name: headerKeys,
+      },
+      attributes: ['id'],
+      raw: true,
+    });
+
+    if (!headers.length || !sheetIds.length) return [];
+
+    const headerIds = headers.map(h => h.id);
+
+    // 🔁 Batch fetch all relevant SheetData in one go
+    const sheetDataRows = await SheetData.findAll({
+      where: {
+        headerId: { [Op.in]: headerIds },
+        sheetId: { [Op.in]: sheetIds.filter(Boolean) },
+      },
+      attributes: ['value'],
+      raw: true,
+    });
+
+    // 🧠 Deduplicate values
+    const uniqueAwards = new Set();
+    for (const { value } of sheetDataRows) {
+      const name = value?.trim();
+      if (name && name !== 'NULL') uniqueAwards.add(name);
+    }
+
+    return Array.from(uniqueAwards);
+  } catch (error) {
+    console.error('Error fetching awards by template ID:', error);
+    return [];
+  }
+};
+
 
 const calculateStatusStudents = async (sheetId, selectedStatuses, targetHeader, templateId, matchingRows) => {
   const statusHeader = await Header.findOne({
@@ -730,7 +830,7 @@ const getStudentHeadCountByYear = async (req, res) => {
 
 const getRules = async (templateId) => {
     const populationRules = await PopulationRule.findAll({
-        where: { templateId }
+        where: { templateId, ruleType: 'population' }
     });
     if (!populationRules) {
         throw new Error('Population rules not found');
@@ -1307,7 +1407,288 @@ const getFAFSAFilerSummary = async (req, res) => {
   }
 };
 
+const getAwardAmountsByTemplateId = async (templateId, rowIndexes = []) => {
+  try {
+    const awardKeys = Array.from({ length: 20 }, (_, i) => `Awd_Cd${i + 1}`);
+    const amountKeys = Array.from({ length: 20 }, (_, i) => `Awd_Amt${i + 1}`);
+    const statusKeys = Array.from({ length: 20 }, (_, i) => `Awd_Status${i + 1}`);
 
+    const headers = await Header.findAll({
+      where: {
+        templateId,
+        name: [...awardKeys, ...amountKeys, ...statusKeys],
+      },
+    });
+
+    if (!headers.length) return [];
+
+    const headerMap = {};
+    headers.forEach(h => {
+      headerMap[h.name] = h.id;
+    });
+
+    const allHeaderIds = Object.values(headerMap);
+
+    // 🔁 Batch fetch all SheetData in one go
+    const sheetDataRows = await SheetData.findAll({
+      where: {
+        headerId: { [Op.in]: allHeaderIds },
+        rowIndex: { [Op.in]: rowIndexes },
+      },
+      attributes: ['headerId', 'rowIndex', 'value'],
+      raw: true,
+    });
+
+    // 🧠 Build fast lookup: data[rowIndex][headerId] = value
+    const data = {};
+    for (const { headerId, rowIndex, value } of sheetDataRows) {
+      if (!data[rowIndex]) data[rowIndex] = {};
+      data[rowIndex][headerId] = value;
+    }
+
+    const awardStats = {};
+
+    for (const rowIndex of rowIndexes) {
+      for (let i = 0; i < 20; i++) {
+        const cdKey = `Awd_Cd${i + 1}`;
+        const amtKey = `Awd_Amt${i + 1}`;
+        const statusKey = `Awd_Status${i + 1}`;
+
+        const cdVal = data[rowIndex]?.[headerMap[cdKey]];
+        const amtVal = data[rowIndex]?.[headerMap[amtKey]];
+        const statusVal = data[rowIndex]?.[headerMap[statusKey]];
+
+        const awardName = cdVal?.trim();
+        const amount = parseFloat(amtVal) || 0;
+        const status = statusVal?.trim()?.toLowerCase();
+
+        if (!awardName || !['accepted', 'pending'].includes(status)) continue;
+
+        if (!awardStats[awardName]) {
+          awardStats[awardName] = {
+            acceptedAmount: 0,
+            pendingAmount: 0,
+            acceptedCount: 0,
+            pendingCount: 0,
+            totalAmount: 0,
+          };
+        }
+
+        if (status === 'accepted') {
+          awardStats[awardName].acceptedAmount += amount;
+          awardStats[awardName].acceptedCount += 1;
+        } else if (status === 'pending') {
+          awardStats[awardName].pendingAmount += amount;
+          awardStats[awardName].pendingCount += 1;
+        }
+
+        awardStats[awardName].totalAmount += amount;
+      }
+    }
+
+    return awardStats;
+  } catch (error) {
+    console.error('Error calculating award amounts:', error);
+    return {};
+  }
+};
+
+const calculateAvgSAIAndNeed = async (sheetId, templateId, admittedRowIndexes) => {
+  try {
+    const headers = await Header.findAll({
+      where: {
+        templateId,
+        name: ['SAI', 'Student_Financial_Need'],
+      },
+      attributes: ['id', 'name'],
+      raw: true,
+    });
+
+    const headerMap = {};
+    headers.forEach(h => { headerMap[h.name] = h.id; });
+
+    const saiId = headerMap['SAI'];
+    const needId = headerMap['Student_Financial_Need'];
+
+    if (!saiId || !needId) return { AvgSAI: 0, AvgNeed: 0 };
+
+    // 🔁 Batch fetch both SAI and Need rows in one query
+    const sheetDataRows = await SheetData.findAll({
+      where: {
+        sheetId,
+        rowIndex: { [Op.in]: admittedRowIndexes },
+        headerId: { [Op.in]: [saiId, needId] },
+      },
+      attributes: ['headerId', 'value'],
+      raw: true,
+    });
+
+    // 🧠 Split values
+    const saiValues = [];
+    const needValues = [];
+
+    for (const { headerId, value } of sheetDataRows) {
+      const num = parseFloat(value);
+      if (isNaN(num)) continue;
+
+      if (headerId === saiId) saiValues.push(num);
+      else if (headerId === needId) needValues.push(num);
+    }
+
+    const avg = arr => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+
+    return {
+      AvgSAI: avg(saiValues),
+      AvgNeed: avg(needValues),
+    };
+  } catch (error) {
+    console.error('Error calculating averages:', error);
+    return { AvgSAI: 0, AvgNeed: 0 };
+  }
+};
+
+const getAwardStats = async (req, res) => {
+  const { selectedDate, previousYearDate, twoYearsAgoDate, templateId, populationRuleId, needBracketId='', isAllStudent=false } = req.body;
+  try {
+    if (!selectedDate || !templateId || !populationRuleId) {
+      return res.status(400).json({ error: 'All fields are required' });
+    }
+    const selectedYear = new Date(selectedDate).getFullYear();
+    const previousYear = selectedYear - 1;
+    const twoYearsAgo = selectedYear - 2;
+    const sheetIds = {
+      [selectedYear]: await getSheetIdBySubmissionDate(selectedDate, templateId),
+      [previousYear]: await getSheetIdBySubmissionDate(previousYearDate, templateId),
+      [twoYearsAgo]: await getSheetIdBySubmissionDate(twoYearsAgoDate, templateId),
+    };
+    const allStatuses = await getStatusesByTemplateId(templateId);
+    const rawSheetIds = Object.values(sheetIds);
+    const validSheetIds = rawSheetIds.filter(id => id);
+    const allAwards = await getAwardsByTemplateId(templateId, validSheetIds);
+    const zeroedAwardStats = {};
+    allAwards.forEach(award => {
+      zeroedAwardStats[award] = {
+        acceptedAmount: 0,
+        acceptedCount: 0,
+        pendingAmount: 0,
+        pendingCount: 0,
+        totalAmount: 0,
+      };
+    });
+    let yearPromises;
+    if (!isAllStudent) {
+      const { conditions, headers } = await getRuleConditionsAndHeaders(populationRuleId);
+      yearPromises = Object.entries(sheetIds).map(async ([yearLabel, sheetId]) => {
+        if (sheetId === null) {
+          return {
+            yearLabel,
+            result: {
+              statuses: allStatuses.map(status => ({ statusName: status.statusName, awards: zeroedAwardStats, avgNeed: 0, avgSAI: 0})),
+            }
+          };
+        }
+        let matchingRows;
+        matchingRows = await applyPopulationRule(templateId, sheetId, conditions, headers);
+
+        if (matchingRows.length === 0) {
+          return {
+            yearLabel,
+            result: {
+              statuses: allStatuses.map(status => ({ statusName: status.statusName, awards: zeroedAwardStats, avgNeed: 0, avgSAI: 0})),
+            }
+          };
+        }
+        if (needBracketId !== '') {
+          const { conditions, headers } = await getRuleConditionsAndHeaders(needBracketId);
+          matchingRows = await applyNeedBracket(templateId, sheetId, conditions, headers, matchingRows);
+        }
+        const statusCounts = [];
+        if (matchingRows.length > 0) {
+          for (const status of allStatuses) {
+            const { selectedStatuses, targetHeader, statusName } = status;
+            const { count, rowIndexes } = await calculateStatusStudents(sheetId, selectedStatuses, targetHeader, templateId, matchingRows);
+            const awardStats = await getAwardAmountsByTemplateId(templateId, rowIndexes);
+            const { AvgSAI, AvgNeed } = await calculateAvgSAIAndNeed(sheetId, templateId, rowIndexes);
+            statusCounts.push({ statusName, awards: awardStats, avgSAI: AvgSAI, avgNeed: AvgNeed });
+          }
+
+          return {
+            yearLabel,
+            result: {
+              statuses: statusCounts,
+            }
+          };
+        } else {
+          return {
+            yearLabel,
+            result: {
+              statuses: allStatuses.map(status => ({ statusName: status.statusName, awards: zeroedAwardStats, avgNeed: 0, avgSAI: 0})),
+            }
+          };
+        };
+      });
+
+    } else {
+      yearPromises = Object.entries(sheetIds).map(async ([yearLabel, sheetId]) => {
+        if (sheetId === null) {
+          return {
+            yearLabel,
+            result: {
+              statuses: allStatuses.map(status => ({ statusName: status.statusName, awards: zeroedAwardStats, avgNeed: 0, avgSAI: 0})),
+            }
+          };
+        }
+        let matchingRows;
+        if (needBracketId !== '') {
+          const { conditions, headers } = await getRuleConditionsAndHeaders(needBracketId);
+          matchingRows = await applyNeedBracket(templateId, sheetId, conditions, headers, matchingRows);
+        } else {
+          matchingRows = (
+              await SheetData.findAll({
+                where: { sheetId },
+                attributes: [[sequelize.fn('DISTINCT', sequelize.col('rowIndex')), 'rowIndex']],
+                raw: true,
+              })
+            ).map(r => r.rowIndex);
+        }
+        const statusCounts = [];
+        if (matchingRows.length > 0) {
+          for (const status of allStatuses) {
+            const { selectedStatuses, targetHeader, statusName } = status;
+            const { count, rowIndexes } = await calculateStatusStudents(sheetId, selectedStatuses, targetHeader, templateId, matchingRows);
+            const awardStats = await getAwardAmountsByTemplateId(templateId, rowIndexes);
+            const { AvgSAI, AvgNeed } = await calculateAvgSAIAndNeed(sheetId, templateId, rowIndexes);
+            statusCounts.push({ statusName, awards: awardStats, avgSAI: AvgSAI, avgNeed: AvgNeed });
+          }
+
+          return {
+            yearLabel,
+            result: {
+              statuses: statusCounts,
+            }
+          };
+        } else {
+          return {
+            yearLabel,
+            result: {
+              statuses: allStatuses.map(status => ({ statusName: status.statusName, awards: zeroedAwardStats, avgNeed: 0, avgSAI: 0})),
+            }
+          };
+        };
+      });
+    }
+    const yearResults = await Promise.all(yearPromises);
+    const results = {};
+      yearResults.forEach(({ yearLabel, result }) => {
+        results[yearLabel] = result;
+    });
+
+    res.status(200).json(results);
+  } catch (err) {
+    console.error("Error while getting award stats:", err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
 
 module.exports = {
     savePopulationStatus,
@@ -1322,5 +1703,6 @@ module.exports = {
     getStudentHeadCountByYear,
     getKPIOfStudents,
     getFinancialAidsValues,
-    getFAFSAFilerSummary
+    getFAFSAFilerSummary,
+    getAwardStats
 };

@@ -315,7 +315,7 @@ const deleteConditionalRule = async (req, res) => {
 
 const createPopulationRule = async (req, res) => {
   try {
-    const { ruleName, conditions, headers, templateId } = req.body;
+    const { ruleName, conditions, headers, templateId, ruleType = 'population' } = req.body;
 
     if (!ruleName || !conditions || !headers || !templateId) {
       return res.status(400).json({ error: "All fields (ruleName, conditions, headers, templateId) are required" });
@@ -323,7 +323,7 @@ const createPopulationRule = async (req, res) => {
 
     const uniqueHeaders = [...new Set(headers)];
 
-    const existingRule = await PopulationRule.findOne({ where: { ruleName, templateId } });
+    const existingRule = await PopulationRule.findOne({ where: { ruleName, templateId, ruleType } });
     if (existingRule) {
       return res.status(409).json({ error: "Population rule with the same name already exists for this template" });
     }
@@ -332,7 +332,8 @@ const createPopulationRule = async (req, res) => {
       ruleName,
       conditions,
       headers: uniqueHeaders,
-      templateId
+      templateId,
+      ruleType
     });
 
     return res.status(201).json({ id: rule.id, ruleName: rule.ruleName, conditions: Array.isArray(conditions.all)
@@ -387,10 +388,10 @@ const updatePopulationRule = async (req, res) => {
 
 
 const getPopulationRuleByTemplateId = async (req, res) => {
-  const { templateId } = req.params;
+  const { templateId, ruleType } = req.params;
   try {
-    const rules = await PopulationRule.findAll({ 
-      where: { templateId },
+    const rules = await PopulationRule.findAll({
+      where: { templateId, ruleType },
       attributes: ['id', 'ruleName', 'conditions'],
       order: [['createdAt', 'DESC']]
     });
@@ -469,7 +470,8 @@ const autoPopulationRule = async (req, res) => {
         templateId,
         headers: {
           [Op.contains]: [targetHeader]
-        }
+        },
+        ruleType: 'population'
       }
     });
 

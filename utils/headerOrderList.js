@@ -1033,7 +1033,6 @@ const requiredHeadersName = [
   "Total_Work_Aid",
 ];
 
-
 const awardTypePatterns = {
   "Total_Performance_Gift": /^I[TA].G$/,
   "Total_Institutional_Merit_Gift": /^I[MI].G$/,

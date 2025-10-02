@@ -29,7 +29,12 @@ const PopulationRule = sequelize.define(
         type: DataTypes.ARRAY(DataTypes.TEXT),
         allowNull: false,
         defaultValue: [],
-    }
+    },
+    ruleType: {
+      type: DataTypes.ENUM('population', 'needBracket'),
+      allowNull: false,
+      defaultValue: 'population',
+    },
 },
   {
     tableName: 'PopulationRule',

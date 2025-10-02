@@ -16,7 +16,7 @@ router.get('/conditional-rules/:templateId', ruleController.getAllConditionalRul
 router.get('/conditional-rule', ruleController.getConditionalRuleById);
 router.delete('/conditional-rule', ruleController.deleteConditionalRule);
 router.post('/population-rule', ruleController.createPopulationRule);
-router.get('/population-rules/:templateId', ruleController.getPopulationRuleByTemplateId);
+router.get('/population-rules/:templateId/:ruleType', ruleController.getPopulationRuleByTemplateId);
 router.get('/population-rule', ruleController.getPopulationRuleById);
 router.delete('/population-rule', ruleController.deletePopulationRule);
 router.put('/population-rule', ruleController.updatePopulationRule);
