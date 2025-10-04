@@ -1548,7 +1548,7 @@ const calculateAvgSAIAndNeed = async (sheetId, templateId, admittedRowIndexes) =
 };
 
 const getAwardStats = async (req, res) => {
-  const { selectedDate, previousYearDate, twoYearsAgoDate, templateId, populationRuleId, needBracketId='', isAllStudent=false } = req.body;
+  const { selectedDate, previousYearDate, twoYearsAgoDate, templateId, populationRuleId, financialBandId='', academicBandId='', isAllStudent=false } = req.body;
   try {
     if (!selectedDate || !templateId || !populationRuleId) {
       return res.status(400).json({ error: 'All fields are required' });
@@ -1598,8 +1598,12 @@ const getAwardStats = async (req, res) => {
             }
           };
         }
-        if (needBracketId !== '') {
-          const { conditions, headers } = await getRuleConditionsAndHeaders(needBracketId);
+        if (financialBandId !== '') {
+          const { conditions, headers } = await getRuleConditionsAndHeaders(financialBandId);
+          matchingRows = await applyNeedBracket(templateId, sheetId, conditions, headers, matchingRows);
+        }
+        if (academicBandId !== '') {
+          const { conditions, headers } = await getRuleConditionsAndHeaders(academicBandId);
           matchingRows = await applyNeedBracket(templateId, sheetId, conditions, headers, matchingRows);
         }
         const statusCounts = [];
@@ -1639,20 +1643,24 @@ const getAwardStats = async (req, res) => {
           };
         }
         let matchingRows;
-        if (needBracketId !== '') {
-          const { conditions, headers } = await getRuleConditionsAndHeaders(needBracketId);
-          matchingRows = await applyNeedBracket(templateId, sheetId, conditions, headers, matchingRows);
-        } else {
-          matchingRows = (
-              await SheetData.findAll({
-                where: { sheetId },
-                attributes: [[sequelize.fn('DISTINCT', sequelize.col('rowIndex')), 'rowIndex']],
-                raw: true,
-              })
-            ).map(r => r.rowIndex);
-        }
+        matchingRows = (
+          await SheetData.findAll({
+            where: { sheetId },
+            attributes: [[sequelize.fn('DISTINCT', sequelize.col('rowIndex')), 'rowIndex']],
+            raw: true,
+          })
+        ).map(r => r.rowIndex);
         const statusCounts = [];
         if (matchingRows.length > 0) {
+          if (financialBandId !== '') {
+            const { conditions, headers } = await getRuleConditionsAndHeaders(financialBandId);
+            matchingRows = await applyNeedBracket(templateId, sheetId, conditions, headers, matchingRows);
+          }
+          if (academicBandId !== '') {
+            const { conditions, headers } = await getRuleConditionsAndHeaders(academicBandId);
+            matchingRows = await applyNeedBracket(templateId, sheetId, conditions, headers, matchingRows);
+          }
+
           for (const status of allStatuses) {
             const { selectedStatuses, targetHeader, statusName } = status;
             const { count, rowIndexes } = await calculateStatusStudents(sheetId, selectedStatuses, targetHeader, templateId, matchingRows);
@@ -1690,6 +1698,137 @@ const getAwardStats = async (req, res) => {
   }
 }
 
+const getStealthMatchedRows = async (templateId, sheetId, matchingRows) => {
+  const stealthHeader = await Header.findOne({
+    where: { templateId, name: 'Y/N Stealth APP' },
+    attributes: ['id'],
+    raw: true,
+  });
+
+  if (!stealthHeader) return { stealthRowIndexes: [], non_stealthRowIndexes: [] };
+
+  const stealthRows = await SheetData.findAll({
+    where: {
+      sheetId,
+      rowIndex: { [Op.in]: matchingRows },
+      headerId: stealthHeader.id,
+    },
+    attributes: ['rowIndex', 'value'],
+    raw: true,
+  });
+
+  const stealthRowIndexes = [];
+  const non_stealthRowIndexes = [];
+
+  for (const { rowIndex, value } of stealthRows) {
+    const val = typeof value === 'string' ? value.trim().toUpperCase() : '';
+    (val === 'Y' ? stealthRowIndexes : non_stealthRowIndexes).push(rowIndex);
+  }
+
+  return { stealthRowIndexes, non_stealthRowIndexes };
+};
+
+
+const getStudentStealthCountByYear = async (req, res) => {
+  const { selectedDate, previousYearDate, twoYearsAgoDate, templateId, populationRuleId } = req.body;
+
+  try {
+    if (!selectedDate || !templateId || !populationRuleId) {
+      return res.status(400).json({ error: 'All fields are required' });
+    }
+
+    const selectedYear = new Date(selectedDate).getFullYear();
+    const previousYear = selectedYear - 1;
+    const twoYearsAgo = selectedYear - 2;
+
+
+    const sheetIds = {
+      [selectedYear]: await getSheetIdBySubmissionDate(selectedDate, templateId),
+      [previousYear]: await getSheetIdBySubmissionDate(previousYearDate, templateId),
+      [twoYearsAgo]: await getSheetIdBySubmissionDate(twoYearsAgoDate, templateId),
+    };
+
+    const { conditions, headers } = await getRuleConditionsAndHeaders(populationRuleId);
+    const allStatuses = await getStatusesByTemplateId(templateId);
+
+    const yearPromises = Object.entries(sheetIds).map(async ([yearLabel, sheetId]) => {
+      if (sheetId === null) {
+        return {
+          yearLabel,
+          result: {
+            stealthData: {
+              statuses: allStatuses.map(status => ({ statusName: status.statusName, count: 0, netRevenue: 0, netCharges: 0, nacuboDiscount: 0, totalDiscount: 0 })),
+            },
+            non_stealthData: {
+              statuses: allStatuses.map(status => ({ statusName: status.statusName, count: 0, netRevenue: 0, netCharges: 0, nacuboDiscount: 0, totalDiscount: 0 })),
+            }
+          }
+        };
+      }
+
+      const matchingRows = await applyPopulationRule(templateId, sheetId, conditions, headers);
+
+      if (matchingRows.length > 0) {
+        const { stealthRowIndexes, non_stealthRowIndexes } = await getStealthMatchedRows(templateId, sheetId, matchingRows);
+        const stealthStatusCounts = [];
+        const non_stealthStatusCounts = [];
+        for (const status of allStatuses) {
+          const { selectedStatuses, targetHeader, statusName } = status;
+          if (stealthRowIndexes.length > 0) {
+            const { count, rowIndexes } = await calculateStatusStudents(sheetId, selectedStatuses, targetHeader, templateId, stealthRowIndexes);
+            const revenueStats = await getAveragesMetricsFromMatchedRows(sheetId, rowIndexes, templateId);
+            stealthStatusCounts.push({ statusName, count, ...revenueStats });
+          } else {
+            stealthStatusCounts.push({ statusName, count: 0, netRevenue: 0, netCharges: 0, nacuboDiscount: 0, totalDiscount: 0 });
+          }
+          if (non_stealthRowIndexes.length > 0) {
+            const { count, rowIndexes } = await calculateStatusStudents(sheetId, selectedStatuses, targetHeader, templateId, non_stealthRowIndexes);
+            const revenueStats = await getAveragesMetricsFromMatchedRows(sheetId, rowIndexes, templateId);
+            non_stealthStatusCounts.push({ statusName, count, ...revenueStats });
+          } else {
+            non_stealthStatusCounts.push({ statusName, count: 0, netRevenue: 0, netCharges: 0, nacuboDiscount: 0, totalDiscount: 0 });
+          }
+        }
+
+        return {
+          yearLabel,
+          result: {
+            stealthData: { statuses: stealthStatusCounts },
+            non_stealthData: { statuses: non_stealthStatusCounts }
+          }
+        };
+      } else {
+        return {
+          yearLabel,
+          result: {
+            stealthData: {
+              statuses: allStatuses.map(status => ({ statusName: status.statusName, count: 0, netRevenue: 0, netCharges: 0, nacuboDiscount: 0, totalDiscount: 0 })),
+            },
+            non_stealthData: {
+              statuses: allStatuses.map(status => ({ statusName: status.statusName, count: 0, netRevenue: 0, netCharges: 0, nacuboDiscount: 0, totalDiscount: 0 })),
+            }
+          }
+        };
+      }
+    });
+
+    // Wait for all years to finish
+    const yearResults = await Promise.all(yearPromises);
+
+    // Build final results object
+    const results = {};
+    yearResults.forEach(({ yearLabel, result }) => {
+      results[yearLabel] = result;
+    });
+
+    res.status(200).json(results);
+  } catch (error) {
+    console.error('Error getting stealth student headCount by year:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+
 module.exports = {
     savePopulationStatus,
     savePopulationSubmissionDate,
@@ -1704,5 +1843,6 @@ module.exports = {
     getKPIOfStudents,
     getFinancialAidsValues,
     getFAFSAFilerSummary,
-    getAwardStats
+    getAwardStats,
+    getStudentStealthCountByYear
 };

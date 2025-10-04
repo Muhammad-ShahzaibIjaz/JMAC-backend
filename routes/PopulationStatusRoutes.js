@@ -16,5 +16,6 @@ router.post('/kpi-of-students', populationStatusController.getKPIOfStudents);
 router.post('/financial-aids', populationStatusController.getFinancialAidsValues);
 router.post('/fafsa-filer-summary', populationStatusController.getFAFSAFilerSummary);
 router.post('/award-stats', populationStatusController.getAwardStats);
+router.post('/stealth-headcount-by-year', populationStatusController.getStudentStealthCountByYear);
 
 module.exports = router;

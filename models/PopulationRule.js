@@ -31,7 +31,7 @@ const PopulationRule = sequelize.define(
         defaultValue: [],
     },
     ruleType: {
-      type: DataTypes.ENUM('population', 'needBracket'),
+      type: DataTypes.ENUM('population', 'academic-band', 'financial-band'),
       allowNull: false,
       defaultValue: 'population',
     },

@@ -336,7 +336,7 @@ const createPopulationRule = async (req, res) => {
       ruleType
     });
 
-    return res.status(201).json({ id: rule.id, ruleName: rule.ruleName, conditions: Array.isArray(conditions.all)
+    return res.status(201).json({ id: rule.id, ruleName: rule.ruleName, ruleType: rule.ruleType, conditions: Array.isArray(conditions.all)
   ? conditions.all.length
   : Array.isArray(conditions.any)
     ? conditions.any.length
@@ -348,12 +348,12 @@ const createPopulationRule = async (req, res) => {
 };
 
 const updatePopulationRule = async (req, res) => {
-  const { id, ruleName, conditions, headers } = req.body;
+  const { id, ruleName, conditions, headers, ruleType } = req.body;
 
   try {
-    if (!id || !ruleName || !conditions || !headers) {
+    if (!id || !ruleName || !conditions || !headers || !ruleType) {
       return res.status(400).json({
-        error: "All fields (id, ruleName, conditions, headers) are required"
+        error: "All fields (id, ruleName, conditions, headers, ruleType) are required"
       });
     }
 
@@ -367,13 +367,15 @@ const updatePopulationRule = async (req, res) => {
     await rule.update({
       ruleName,
       conditions,
-      headers: uniqueHeaders
+      headers: uniqueHeaders,
+      ruleType
     });
 
     // ✅ Match createPopulationRule response format
     return res.status(200).json({
       id: rule.id,
       ruleName: rule.ruleName,
+      ruleType: rule.ruleType,
       conditions: Array.isArray(conditions.all)
         ? conditions.all.length
         : Array.isArray(conditions.any)
@@ -406,6 +408,7 @@ const getPopulationRuleByTemplateId = async (req, res) => {
         id: rule.id,
         ruleName: rule.ruleName,
         conditions: conditionCount,
+        ruleType: rule.ruleType
       };
     });
     return res.status(200).json(transformedRules);
@@ -420,7 +423,7 @@ const getPopulationRuleById = async (req, res) => {
   const { id } = req.query;
   try {
     const rule = await PopulationRule.findByPk(id, {
-      attributes: ['id', 'ruleName', 'conditions', 'headers'],
+      attributes: ['id', 'ruleName', 'conditions', 'headers', 'ruleType'],
       raw: true
     });
     if (!rule) {
