@@ -122,4 +122,49 @@ async function generateHeaderMappingExcel(mappingTable) {
   return await workbook.xlsx.writeBuffer();
 }
 
-module.exports = { generateExcelFile, generateHeaderMappingExcel };
+
+async function generateMultiYearExcelFile(data) {
+  const workbook = new ExcelJS.Workbook();
+
+  // Sort years descending so latest year comes first
+  const sortedYears = Object.keys(data).sort((a, b) => b - a);
+
+  for (const year of sortedYears) {
+    const { headers, rows } = data[year];
+    const sheet = workbook.addWorksheet(`${year}`);
+
+    // Add header row
+    sheet.addRow(headers);
+
+    // Add data rows
+    for (const row of rows) {
+      const rowData = headers.map(h => {
+        let value = row[h] ?? '';
+        value = typeof value === 'string' ? value.replace(/[\u0000-\u001F\u007F-\u009F]/g, '') : value;
+        const parsedDate = new Date(value);
+        if (h.toLowerCase().includes('date') && !isNaN(parsedDate.getTime())) {
+          return parsedDate;
+        }
+        return value;
+      });
+      sheet.addRow(rowData);
+    }
+
+    // Format date columns
+    headers.forEach((h, i) => {
+      if (h.toLowerCase().includes('date')) {
+        sheet.getColumn(i + 1).numFmt = 'mm-dd-yyyy';
+      }
+    });
+
+    // Set column widths
+    sheet.columns = headers.map(h => ({
+      width: Math.max(h.length, 15),
+    }));
+  }
+
+  // Return buffer
+  return await workbook.xlsx.writeBuffer();
+}
+
+module.exports = { generateExcelFile, generateHeaderMappingExcel, generateMultiYearExcelFile };

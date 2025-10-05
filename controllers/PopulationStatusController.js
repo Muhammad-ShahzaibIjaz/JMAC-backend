@@ -2,6 +2,8 @@ const sequelize = require('../config/database');
 const { DataTypes, Op, QueryTypes } = require('sequelize');
 const { PopulationStatus, PopulationSubmission, Header, PopulationRule, SheetData } = require('../models');
 const { evaluateConditions } = require('../services/evaluation');
+const { generateMultiYearExcelFile } = require('../services/SheetService');
+const { desiredOrder } = require('../utils/headerOrderList');
 
 const savePopulationStatus = async (req, res) => {
     const { templateId, statusName, selectedStatuses, targetHeader } = req.body;
@@ -1717,12 +1719,24 @@ const getStealthMatchedRows = async (templateId, sheetId, matchingRows) => {
     raw: true,
   });
 
+  const stealthRowMap = new Map();
+  for (const { rowIndex, value } of stealthRows) {
+    const val = typeof value === 'string' ? value.trim().toUpperCase() : '';
+    stealthRowMap.set(rowIndex, val);
+  }
+
+
   const stealthRowIndexes = [];
   const non_stealthRowIndexes = [];
 
-  for (const { rowIndex, value } of stealthRows) {
-    const val = typeof value === 'string' ? value.trim().toUpperCase() : '';
-    (val === 'Y' ? stealthRowIndexes : non_stealthRowIndexes).push(rowIndex);
+
+  for (const rowIndex of matchingRows) {
+    const val = stealthRowMap.get(rowIndex);
+    if (val === 'Y') {
+      stealthRowIndexes.push(rowIndex);
+    } else {
+      non_stealthRowIndexes.push(rowIndex);
+    }
   }
 
   return { stealthRowIndexes, non_stealthRowIndexes };
@@ -1844,6 +1858,133 @@ const getStudentStealthCountByYear = async (req, res) => {
   }
 };
 
+function normalize(str) {
+  return str.toLowerCase().replace(/[_\s]/g, '');
+}
+
+function sortHeadersFlexibleMatch(headers) {
+  const headerMap = new Map(headers.map(h => [normalize(h.name), h]));
+  const ordered = desiredOrder.map(name => headerMap.get(normalize(name))).filter(Boolean);
+  const matchedKeys = new Set(ordered.map(h => normalize(h.name)));
+  const extras = headers.filter(h => !matchedKeys.has(normalize(h.name)));
+  return [...ordered, ...extras];
+}
+
+const getExportableStudentData = async (req, res) => {
+  const {
+    selectedDate,
+    previousYearDate,
+    twoYearsAgoDate,
+    templateId,
+    populationRuleId,
+    statusId,
+  } = req.body;
+
+  try {
+    if (!selectedDate || !templateId || !populationRuleId || !statusId) {
+      return res.status(400).json({ error: 'Required fields missing' });
+    }
+
+    const selectedYear = new Date(selectedDate).getFullYear();
+    const previousYear = selectedYear - 1;
+    const twoYearsAgo = selectedYear - 2;
+
+    const sheetIds = {
+      [selectedYear]: await getSheetIdBySubmissionDate(selectedDate, templateId),
+      [previousYear]: await getSheetIdBySubmissionDate(previousYearDate, templateId),
+      [twoYearsAgo]: await getSheetIdBySubmissionDate(twoYearsAgoDate, templateId),
+    };
+
+    const { conditions, headers } = await getRuleConditionsAndHeaders(populationRuleId);
+
+    const statusObj = await PopulationStatus.findOne({
+      where: { id: statusId },
+      attributes: ['statusName', 'selectedStatuses', 'targetHeader'],
+      raw: true,
+    });
+
+    if (!statusObj) {
+      return res.status(400).json({ error: 'Invalid statusId' });
+    }
+
+    const { selectedStatuses, targetHeader } = statusObj;
+
+    const allHeaders = await Header.findAll({
+      where: { templateId },
+      attributes: ['id', 'name'],
+      raw: true,
+    });
+    const sortedHeaders = sortHeadersFlexibleMatch(allHeaders);
+    const headerMap = Object.fromEntries(sortedHeaders.map(h => [h.id, h.name]));
+    const headerNames = sortedHeaders.map(h => h.name);
+
+    const yearPromises = Object.entries(sheetIds).map(async ([yearLabel, sheetId]) => {
+      if (!sheetId) {
+        return { yearLabel, headers: headerNames, rows: [] };
+      }
+
+      const matchingRows = await applyPopulationRule(templateId, sheetId, conditions, headers);
+
+      if (matchingRows.length === 0) {
+        return { yearLabel, headers: headerNames, rows: [] };
+      }
+
+      const { rowIndexes } = await calculateStatusStudents(
+        sheetId,
+        selectedStatuses,
+        targetHeader,
+        templateId,
+        matchingRows
+      );
+
+      if (rowIndexes.length === 0) {
+        return { yearLabel, headers: headerNames, rows: [] };
+      }
+
+      const sheetData = await SheetData.findAll({
+        where: {
+          sheetId,
+          rowIndex: { [Op.in]: rowIndexes },
+          headerId: { [Op.in]: sortedHeaders.map(h => h.id) },
+        },
+        attributes: ['rowIndex', 'headerId', 'value'],
+        raw: true,
+      });
+
+      const grouped = {};
+      for (const { rowIndex, headerId, value } of sheetData) {
+        if (!grouped[rowIndex]) grouped[rowIndex] = {};
+        grouped[rowIndex][headerMap[headerId]] = value;
+      }
+
+      const rows = rowIndexes.map(index => {
+        const row = grouped[index] || {};
+        return headerNames.reduce((acc, name) => {
+          acc[name] = row[name] ?? '';
+          return acc;
+        }, {});
+      });
+
+      return { yearLabel, headers: headerNames, rows };
+    });
+
+    const yearResults = await Promise.all(yearPromises);
+
+    const final = {};
+    yearResults.forEach(({ yearLabel, headers, rows }) => {
+      final[yearLabel] = { headers, rows };
+    });
+
+    const buffer = await generateMultiYearExcelFile(final);
+    const currentDate = new Date().toISOString().split('T')[0];
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename=${statusObj.statusName}_${currentDate}.xlsx`);
+    res.status(200).send(buffer);
+  } catch (error) {
+    console.error('Error exporting student data:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
 
 module.exports = {
     savePopulationStatus,
@@ -1860,5 +2001,6 @@ module.exports = {
     getFinancialAidsValues,
     getFAFSAFilerSummary,
     getAwardStats,
-    getStudentStealthCountByYear
+    getStudentStealthCountByYear,
+    getExportableStudentData
 };
