@@ -1753,15 +1753,29 @@ const getStudentStealthCountByYear = async (req, res) => {
 
     const yearPromises = Object.entries(sheetIds).map(async ([yearLabel, sheetId]) => {
       if (sheetId === null) {
+        const statusCounts = allStatuses.map(status => ({
+          statusName: status.statusName,
+          totalCount: 0,
+          stealthCount: 0,
+          nonStealthCount: 0,
+          stealthStats: {
+            netRevenue: 0,
+            netCharges: 0,
+            nacuboDiscount: 0,
+            totalDiscount: 0
+          },
+          nonStealthStats: {
+            netRevenue: 0,
+            netCharges: 0,
+            nacuboDiscount: 0,
+            totalDiscount: 0
+          }
+        }));
+
         return {
           yearLabel,
           result: {
-            stealthData: {
-              statuses: allStatuses.map(status => ({ statusName: status.statusName, count: 0, netRevenue: 0, netCharges: 0, nacuboDiscount: 0, totalDiscount: 0 })),
-            },
-            non_stealthData: {
-              statuses: allStatuses.map(status => ({ statusName: status.statusName, count: 0, netRevenue: 0, netCharges: 0, nacuboDiscount: 0, totalDiscount: 0 })),
-            }
+            statuses: statusCounts
           }
         };
       }
@@ -1769,44 +1783,46 @@ const getStudentStealthCountByYear = async (req, res) => {
       const matchingRows = await applyPopulationRule(templateId, sheetId, conditions, headers);
 
       if (matchingRows.length > 0) {
-        const { stealthRowIndexes, non_stealthRowIndexes } = await getStealthMatchedRows(templateId, sheetId, matchingRows);
-        const stealthStatusCounts = [];
-        const non_stealthStatusCounts = [];
+        const statusCounts = [];
         for (const status of allStatuses) {
           const { selectedStatuses, targetHeader, statusName } = status;
-          if (stealthRowIndexes.length > 0) {
-            const { count, rowIndexes } = await calculateStatusStudents(sheetId, selectedStatuses, targetHeader, templateId, stealthRowIndexes);
-            const revenueStats = await getAveragesMetricsFromMatchedRows(sheetId, rowIndexes, templateId);
-            stealthStatusCounts.push({ statusName, count, ...revenueStats });
-          } else {
-            stealthStatusCounts.push({ statusName, count: 0, netRevenue: 0, netCharges: 0, nacuboDiscount: 0, totalDiscount: 0 });
-          }
-          if (non_stealthRowIndexes.length > 0) {
-            const { count, rowIndexes } = await calculateStatusStudents(sheetId, selectedStatuses, targetHeader, templateId, non_stealthRowIndexes);
-            const revenueStats = await getAveragesMetricsFromMatchedRows(sheetId, rowIndexes, templateId);
-            non_stealthStatusCounts.push({ statusName, count, ...revenueStats });
-          } else {
-            non_stealthStatusCounts.push({ statusName, count: 0, netRevenue: 0, netCharges: 0, nacuboDiscount: 0, totalDiscount: 0 });
-          }
+          const { count, rowIndexes } = await calculateStatusStudents(sheetId, selectedStatuses, targetHeader, templateId, matchingRows);
+          const { stealthRowIndexes, non_stealthRowIndexes } = await getStealthMatchedRows(templateId, sheetId, rowIndexes);
+          const stealthRevenueStats = await getAveragesMetricsFromMatchedRows(sheetId, stealthRowIndexes, templateId);
+          const nonStealthRevenueStats = await getAveragesMetricsFromMatchedRows(sheetId, non_stealthRowIndexes, templateId);
+          statusCounts.push({ statusName, totalCount: count, stealthCount: stealthRowIndexes.length, nonStealthCount: non_stealthRowIndexes.length,  stealthStats: stealthRevenueStats, nonStealthStats: nonStealthRevenueStats });
         }
 
         return {
           yearLabel,
           result: {
-            stealthData: { statuses: stealthStatusCounts },
-            non_stealthData: { statuses: non_stealthStatusCounts }
+            statuses: statusCounts,
           }
         };
       } else {
+        const statusCounts = allStatuses.map(status => ({
+          statusName: status.statusName,
+          totalCount: 0,
+          stealthCount: 0,
+          nonStealthCount: 0,
+          stealthStats: {
+            netRevenue: 0,
+            netCharges: 0,
+            nacuboDiscount: 0,
+            totalDiscount: 0
+          },
+          nonStealthStats: {
+            netRevenue: 0,
+            netCharges: 0,
+            nacuboDiscount: 0,
+            totalDiscount: 0
+          }
+        }));
+
         return {
           yearLabel,
           result: {
-            stealthData: {
-              statuses: allStatuses.map(status => ({ statusName: status.statusName, count: 0, netRevenue: 0, netCharges: 0, nacuboDiscount: 0, totalDiscount: 0 })),
-            },
-            non_stealthData: {
-              statuses: allStatuses.map(status => ({ statusName: status.statusName, count: 0, netRevenue: 0, netCharges: 0, nacuboDiscount: 0, totalDiscount: 0 })),
-            }
+            statuses: statusCounts
           }
         };
       }
