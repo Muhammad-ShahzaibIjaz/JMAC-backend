@@ -394,7 +394,7 @@ const getPopulationRuleByTemplateId = async (req, res) => {
   try {
     const rules = await PopulationRule.findAll({
       where: { templateId, ruleType },
-      attributes: ['id', 'ruleName', 'conditions'],
+      attributes: ['id', 'ruleName', 'conditions', 'ruleType'],
       order: [['createdAt', 'DESC']]
     });
     const transformedRules = rules.map((rule) => {
