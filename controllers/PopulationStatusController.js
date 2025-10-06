@@ -4,6 +4,7 @@ const { PopulationStatus, PopulationSubmission, Header, PopulationRule, SheetDat
 const { evaluateConditions } = require('../services/evaluation');
 const { generateMultiYearExcelFile } = require('../services/SheetService');
 const { desiredOrder } = require('../utils/headerOrderList');
+const { all } = require('axios');
 
 const savePopulationStatus = async (req, res) => {
     const { templateId, statusName, selectedStatuses, targetHeader } = req.body;
@@ -626,6 +627,112 @@ async function getAveragesMetricsFromMatchedRows(sheetId, matchedRowIndexes, tem
   };
 }
 
+async function getAveragesMetricsFromMatchedRowsOfPackage(sheetId, matchedRowIndexes, templateId, packageRowIndexes, non_packageRowIndexes) {
+  if (!sheetId || !matchedRowIndexes || matchedRowIndexes.length === 0) {
+    return {
+      all: { netRevenue: 0, netCharges: 0, nacuboDiscount: 0, totalDiscount: 0 },
+      package: { netRevenue: 0, netCharges: 0, nacuboDiscount: 0, totalDiscount: 0 },
+      nonPackage: { netRevenue: 0, netCharges: 0, nacuboDiscount: 0, totalDiscount: 0 }
+    };
+  }
+
+  const headers = await Header.findAll({
+    where: {
+      templateId,
+      name: { [Op.in]: ['Net_Tuition_Revenue', 'Net_Charges_To_Student', 'NACUBO_Discount_Rate', 'Total_Discount_Rate'] },
+    },
+    raw: true,
+  });
+
+  const headerMap = headers.reduce((acc, h) => {
+    acc[h.name] = h.id;
+    return acc;
+  }, {});
+
+  const netTuitionHeaderId = headerMap['Net_Tuition_Revenue'];
+  const discountRateHeaderId = headerMap['NACUBO_Discount_Rate'];
+  const netChargesHeaderId = headerMap['Net_Charges_To_Student'];
+  const totalDiscountHeaderId = headerMap['Total_Discount_Rate'];
+
+  if (!netTuitionHeaderId && !discountRateHeaderId && !netChargesHeaderId && !totalDiscountHeaderId) {
+    return {
+      all: { netRevenue: 0, netCharges: 0, nacuboDiscount: 0, totalDiscount: 0 },
+      package: { netRevenue: 0, netCharges: 0, nacuboDiscount: 0, totalDiscount: 0 },
+      nonPackage: { netRevenue: 0, netCharges: 0, nacuboDiscount: 0, totalDiscount: 0 }
+    };
+  }
+
+  const dataRows = await SheetData.findAll({
+    where: {
+      sheetId,
+      rowIndex: { [Op.in]: matchedRowIndexes },
+      headerId: { [Op.in]: [netTuitionHeaderId, netChargesHeaderId, discountRateHeaderId, totalDiscountHeaderId] },
+    },
+    attributes: ['headerId', 'rowIndex', 'value'],
+    raw: true,
+  });
+
+  const initializeMetrics = () => ({
+    netTuitionSum: 0,
+    netTuitionCount: 0,
+    nacuboSum: 0,
+    nacuboCount: 0,
+    netChargesSum: 0,
+    netChargesCount: 0,
+    totalDiscountSum: 0,
+    totalDiscountCount: 0,
+  });
+
+  const allMetrics = initializeMetrics();
+  const packageMetrics = initializeMetrics();
+  const nonPackageMetrics = initializeMetrics();
+
+  const processRow = (row, metrics) => {
+    let rawValue = row.value;
+    if (typeof rawValue === 'string' && rawValue.includes('%')) {
+      rawValue = rawValue.replace('%', '').trim();
+    }
+    const val = parseFloat(rawValue);
+    if (isNaN(val)) return;
+
+    if (row.headerId === netTuitionHeaderId) {
+      metrics.netTuitionSum += val;
+      metrics.netTuitionCount++;
+    } else if (row.headerId === discountRateHeaderId) {
+      metrics.nacuboSum += val;
+      metrics.nacuboCount++;
+    } else if (row.headerId === netChargesHeaderId) {
+      metrics.netChargesSum += val;
+      metrics.netChargesCount++;
+    } else if (row.headerId === totalDiscountHeaderId) {
+      metrics.totalDiscountSum += val;
+      metrics.totalDiscountCount++;
+    }
+  };
+
+  dataRows.forEach((row) => {
+    processRow(row, allMetrics);
+    if (packageRowIndexes.includes(row.rowIndex)) {
+      processRow(row, packageMetrics);
+    } else if (non_packageRowIndexes.includes(row.rowIndex)) {
+      processRow(row, nonPackageMetrics);
+    }
+  });
+
+  const formatMetrics = (metrics) => ({
+    netRevenue: metrics.netTuitionCount ? Math.round(metrics.netTuitionSum / metrics.netTuitionCount) : 0,
+    netCharges: metrics.netChargesCount ? Math.round(metrics.netChargesSum / metrics.netChargesCount) : 0,
+    nacuboDiscount: metrics.nacuboCount ? (metrics.nacuboSum / metrics.nacuboCount).toFixed(2) : 0,
+    totalDiscount: metrics.totalDiscountCount ? (metrics.totalDiscountSum / metrics.totalDiscountCount).toFixed(2) : 0,
+  });
+
+  return {
+    all: formatMetrics(allMetrics),
+    package: formatMetrics(packageMetrics),
+    nonPackage: formatMetrics(nonPackageMetrics),
+  };
+}
+
 const getAdmittedStatuses = async (templateId) => {
   try{
     const admittedStatus = await PopulationStatus.findOne({
@@ -752,6 +859,50 @@ const calculateStatusStudents = async (sheetId, selectedStatuses, targetHeader, 
 }
 
 
+const calculatePackageStudents = async (sheetId, templateId, matchingRows) => {
+  const header = await Header.findOne({
+    where: {
+      templateId,
+      name: 'Y/N Is_Student_Packaged'
+    }
+  });
+
+  if (!header) return 0;
+
+  const dataRows = await SheetData.findAll({
+    where: {
+      sheetId,
+      rowIndex: { [Op.in]: matchingRows },
+      headerId: header.id,
+    },
+    attributes: ['rowIndex', 'value'],
+    raw: true,
+  });
+
+  const rowMap = new Map();
+  for (const { rowIndex, value } of dataRows) {
+    const val = typeof value === 'string' ? value.trim().toUpperCase() : '';
+    rowMap.set(rowIndex, val);
+  }
+
+
+  const packageRowIndexes = [];
+  const non_packageRowIndexes = [];
+
+
+  for (const rowIndex of matchingRows) {
+    const val = rowMap.get(rowIndex);
+    if (val === 'Y') {
+      packageRowIndexes.push(rowIndex);
+    } else {
+      non_packageRowIndexes.push(rowIndex);
+    }
+  }
+
+  return { packageRowIndexes, non_packageRowIndexes };
+}
+
+
 
 const getStudentHeadCountByYear = async (req, res) => {
   const { selectedDate, previousYearDate, twoYearsAgoDate, templateId, populationRuleId } = req.body;
@@ -780,7 +931,7 @@ const getStudentHeadCountByYear = async (req, res) => {
         return {
           yearLabel,
           result: {
-            statuses: allStatuses.map(status => ({ statusName: status.statusName, count: 0, netRevenue: 0, netCharges: 0, nacuboDiscount: 0, totalDiscount: 0 })),
+            statuses: allStatuses.map(status => ({ statusName: status.statusName, count: 0, packageCount: 0, nonPackageCount: 0, all: {netRevenue: 0, netCharges: 0, nacuboDiscount: 0, totalDiscount: 0}, package: {netRevenue: 0, netCharges: 0, nacuboDiscount: 0, totalDiscount: 0}, nonPackage: {netRevenue: 0, netCharges: 0, nacuboDiscount: 0, totalDiscount: 0} })),
           }
         };
       }
@@ -793,8 +944,11 @@ const getStudentHeadCountByYear = async (req, res) => {
         for (const status of allStatuses) {
           const { selectedStatuses, targetHeader, statusName } = status;
           const { count, rowIndexes } = await calculateStatusStudents(sheetId, selectedStatuses, targetHeader, templateId, matchingRows);
-          const revenueStats = await getAveragesMetricsFromMatchedRows(sheetId, rowIndexes, templateId);
-          statusCounts.push({ statusName, count, ...revenueStats });
+          let { packageRowIndexes, non_packageRowIndexes } = await calculatePackageStudents(sheetId, templateId, rowIndexes);
+          packageRowIndexes = Array.isArray(packageRowIndexes) ? packageRowIndexes : [];
+          non_packageRowIndexes = Array.isArray(non_packageRowIndexes) ? non_packageRowIndexes : [];
+          const revenueStats = await getAveragesMetricsFromMatchedRowsOfPackage(sheetId, rowIndexes, templateId, packageRowIndexes, non_packageRowIndexes);
+          statusCounts.push({ statusName, count, packageCount: packageRowIndexes.length, nonPackageCount: non_packageRowIndexes.length, ...revenueStats });
         }
 
         return {
@@ -807,7 +961,7 @@ const getStudentHeadCountByYear = async (req, res) => {
         return {
           yearLabel,
           result: {
-            statuses: allStatuses.map(status => ({ statusName: status.statusName, count: 0, netRevenue: 0, netCharges: 0, nacuboDiscount: 0, totalDiscount: 0 })),
+            statuses: allStatuses.map(status => ({ statusName: status.statusName, count: 0, packageCount: 0, nonPackageCount: 0, all: {netRevenue: 0, netCharges: 0, nacuboDiscount: 0, totalDiscount: 0}, package: {netRevenue: 0, netCharges: 0, nacuboDiscount: 0, totalDiscount: 0}, nonPackage: {netRevenue: 0, netCharges: 0, nacuboDiscount: 0, totalDiscount: 0} })),
           }
         };
       }
