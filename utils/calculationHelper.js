@@ -10,8 +10,8 @@ function calculateTotalDiscountRate(netCharges, totalDirectCost) {
   return (rate * 100).toFixed(2);
 }
 
-function calculateNetTuition(tuition, totalInstitutionalGift) {
-  return tuition - totalInstitutionalGift;
+function calculateNetTuition(tuition, totalInstitutionalGift, fees) {
+  return (tuition + fees) - totalInstitutionalGift;
 }
 
 function calculateNetCharges(tuition, fees, housingCost, food, gift) {

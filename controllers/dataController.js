@@ -4182,7 +4182,7 @@ async function processNetTuition(templateId, sheetId, maxRowIndex) {
     const headers = await Header.findAll({
       where: {
         templateId,
-        name: ['2_Semester_Tuition', 'Total_Institutional_Gift', 'Net_Tuition_Revenue']
+        name: ['2_Semester_Tuition', 'Total_Institutional_Gift', 'Net_Tuition_Revenue', '2_Semester_Fees']
       },
       transaction
     });
@@ -4198,7 +4198,7 @@ async function processNetTuition(templateId, sheetId, maxRowIndex) {
     // Step 2: Fetch relevant SheetData
     const sheetData = await SheetData.findAll({
       where: {
-        headerId: [headerMap['2_Semester_Tuition'], headerMap['Total_Institutional_Gift']],
+        headerId: [headerMap['2_Semester_Tuition'], headerMap['Total_Institutional_Gift'], headerMap['2_Semester_Fees']],
         sheetId: sheetId
       },
       transaction
@@ -4226,6 +4226,7 @@ async function processNetTuition(templateId, sheetId, maxRowIndex) {
       const values = grouped[rowIndex] || {};
       const tuition = values[headerMap['2_Semester_Tuition']] || 0;
       const gift = values[headerMap['Total_Institutional_Gift']] || 0;
+      const fees = values[headerMap['2_Semester_Fees']] || 0;
 
       const netTuition = calculateNetTuition(tuition, gift);
 
