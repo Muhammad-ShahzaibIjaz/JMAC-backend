@@ -4228,7 +4228,7 @@ async function processNetTuition(templateId, sheetId, maxRowIndex) {
       const gift = values[headerMap['Total_Institutional_Gift']] || 0;
       const fees = values[headerMap['2_Semester_Fees']] || 0;
 
-      const netTuition = calculateNetTuition(tuition, gift);
+      const netTuition = calculateNetTuition(tuition, gift, fees);
 
       const existing = await SheetData.findOne({
         where: {
