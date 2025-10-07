@@ -66,6 +66,55 @@ const createConditionalRule = async (req, res) => {
   }
 };
 
+const updateConditionalRule = async (req, res) => {
+  try {
+    const { id, ruleName, conditions, headers, targetHeaderName, targetValue, templateId } = req.body;
+
+    // Validate input
+    if (!id || !ruleName || !conditions || !headers || !targetHeaderName || !targetValue || !templateId) {
+      return res.status(400).json({
+        error: "All fields (id, ruleName, conditions, headers, targetHeaderName, targetValue, templateId) are required"
+      });
+    }
+
+    const uniqueHeaders = [...new Set(headers)];
+
+    const rule = await ConditionalRule.findByPk(id);
+    if (!rule) {
+      return res.status(404).json({ error: "Rule not found" });
+    }
+
+    await rule.update({
+      ruleName,
+      conditions,
+      targetHeaderName,
+      targetValue,
+      headers: uniqueHeaders,
+      templateId
+    });
+
+    // Transform updated rule to match getAllConditionalRules format
+    const conditionBlock = rule.conditions;
+    const combinatorKey = Object.keys(conditionBlock)[0];
+    const conditionList = conditionBlock[combinatorKey];
+    const conditionCount = Array.isArray(conditionList) ? conditionList.length : 0;
+
+    const transformedRule = {
+      id: rule.id,
+      ruleName: rule.ruleName,
+      conditions: conditionCount,
+      headers: rule.headers,
+      targetHeaderName: rule.targetHeaderName,
+      targetValue: rule.targetValue
+    };
+
+    return res.status(200).json(transformedRule);
+  } catch (error) {
+    console.error("Error updating rule:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+
 const updateRule = async (req, res) => {
   try {
     const { id } = req.params;
@@ -550,5 +599,6 @@ module.exports = {
   getPopulationRuleById,
   deletePopulationRule,
   updatePopulationRule,
-  autoPopulationRule
+  autoPopulationRule,
+  updateConditionalRule
 };
