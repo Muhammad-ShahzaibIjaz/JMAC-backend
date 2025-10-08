@@ -3801,7 +3801,6 @@ async function calculateAwards(templateId, sheetId, acceptedStatuses, transactio
 }
 
 async function processNACUBODiscountRates(templateId, sheetId, maxRowIndex) {
-  console.log('Processing NACUBO Discount Rates... and maxRowIndex is ', maxRowIndex);
   const transaction = await sequelize.transaction();
   try {
     // Step 1: Fetch headers
@@ -3813,7 +3812,6 @@ async function processNACUBODiscountRates(templateId, sheetId, maxRowIndex) {
       transaction
     });
 
-    console.log('Fetched headers:', headers.length);
 
     const headerMap = {};
     headers.forEach(h => headerMap[h.name] = h.id);
@@ -3822,7 +3820,6 @@ async function processNACUBODiscountRates(templateId, sheetId, maxRowIndex) {
       await transaction.rollback();
       return { message: 'NACUBO_Discount_Rate header not found.' };
     }
-    console.log('Coming After Check');
     // Step 2: Fetch relevant SheetData
     const sheetData = await SheetData.findAll({
       where: {
@@ -4108,7 +4105,6 @@ async function processTotalDirectCost(templateId, sheetId, maxRowIndex) {
       const food = values[headerMap['2_Semester_Meals']] || 0;
 
       const netCharges = calculateTotalDirectCost(tuition, fees, housing, food);
-      console.log(`Row ${rowIndex}: Calculated Total_Direct_Cost = ${netCharges}`);
 
       const existing = await SheetData.findOne({
         where: {
