@@ -5567,10 +5567,10 @@ async function getNullAwardRows(templateId, sheetId) {
 }
 
 async function populateAward20Fields(templateId, targetHeaderId, sheetId, targetRows) {
-  console.log('Populating Awd_Amt20, Awd_Cd20, Awd_Status20...');
+  console.log('Populating Awd_Amt20, Awd_Cd20, Awd_Status20, Awd_CR20...');
   const transaction = await sequelize.transaction();
   try {
-    // Step 1: Get header IDs for Awd_Amt20, Awd_Cd20, Awd_Status20
+    // Step 1: Get header IDs
     const headers = await Header.findAll({
       where: {
         templateId,
@@ -5590,7 +5590,14 @@ async function populateAward20Fields(templateId, targetHeaderId, sheetId, target
       return { message: 'One or more target headers not found.' };
     }
 
-    // Step 2: Fetch SheetData for targetHeaderId and targetRows
+    // Step 2: Create OperationLog
+    const operationLog = await OperationLog.create({
+      templateId,
+      sheetId,
+      operationType: 'BULK_UPSERT'
+    }, { transaction });
+
+    // Step 3: Fetch source values from targetHeaderId
     const sourceData = await SheetData.findAll({
       where: {
         headerId: targetHeaderId,
@@ -5602,50 +5609,70 @@ async function populateAward20Fields(templateId, targetHeaderId, sheetId, target
 
     const valueMap = new Map();
     for (const entry of sourceData) {
-      valueMap.set(entry.rowIndex, entry.value?.trim() || '0');
+      const cleaned = entry.value?.replace(/[^\d.-]/g, '') || '0';
+      valueMap.set(entry.rowIndex, cleaned);
     }
 
-    // Step 3: Prepare insert payloads
-    const insertPayload = [];
+    // Step 4: Fetch existing SheetData for target rows and headers
+    const existingData = await SheetData.findAll({
+      where: {
+        sheetId,
+        rowIndex: targetRows,
+        headerId: [amt20Id, cd20Id, status20Id, cr20Id]
+      },
+      transaction
+    });
+
+    const existingMap = new Map(); // key: `${headerId}_${rowIndex}`
+    for (const entry of existingData) {
+      const key = `${entry.headerId}_${entry.rowIndex}`;
+      existingMap.set(key, entry.value);
+    }
+
+    // Step 5: Prepare upsert + snapshot payloads
+    const upsertPayload = [];
+    const snapshotPayload = [];
 
     for (const rowIndex of targetRows) {
-      const value = valueMap.get(rowIndex) || '0';
+      const amtValue = valueMap.get(rowIndex) || '0';
 
-      insertPayload.push(
-        {
-          headerId: amt20Id,
+      const entries = [
+        { headerId: amt20Id, value: amtValue },
+        { headerId: cd20Id, value: 'B:International' },
+        { headerId: status20Id, value: 'Accepted' },
+        { headerId: cr20Id, value: 'IMUG' }
+      ];
+
+      for (const { headerId, value } of entries) {
+        const key = `${headerId}_${rowIndex}`;
+        const originalValue = existingMap.get(key) ?? null;
+
+        snapshotPayload.push({
+          operationLogId: operationLog.id,
+          headerId,
           sheetId,
           rowIndex,
-          value
-        },
-        {
-          headerId: cd20Id,
-          sheetId,
-          rowIndex,
-          value: 'B:International'
-        },
-        {
-          headerId: status20Id,
-          sheetId,
-          rowIndex,
-          value: 'Accepted'
-        },
-        {
-          headerId: cr20Id,
-          sheetId,
-          rowIndex,
-          value: 'IMUG'
-        }
-      );
+          originalValue,
+          newValue: value,
+          changeType: originalValue === null ? 'INSERT' : 'UPDATE'
+        });
+
+        upsertPayload.push({ headerId, sheetId, rowIndex, value });
+      }
     }
 
-    // Step 4: Bulk insert
-    await SheetData.bulkCreate(insertPayload, { transaction });
+    // Step 6: Bulk upsert and snapshot
+    await SheetData.bulkCreate(upsertPayload, {
+      transaction,
+      updateOnDuplicate: ['value']
+    });
+
+    await SheetDataSnapshot.bulkCreate(snapshotPayload, { transaction });
 
     await transaction.commit();
     return {
-      message: `Inserted Awd_Amt20, Awd_Cd20, Awd_Status20 for ${targetRows.length} rows.`,
-      rowsAffected: insertPayload.length
+      message: `Upserted award fields with snapshot logging for ${targetRows.length} rows.`,
+      rowsAffected: upsertPayload.length
     };
   } catch (error) {
     await transaction.rollback();
@@ -5670,7 +5697,7 @@ async function autoFillInternationalAwards(req, res) {
     if (!header) {
       return res.status(404).json({ message: `Header "${targetHeader}" not found for the given templateId.` });
     }
-    const result = await populateAward20Fields(header.id, sheetId, targetRows);
+    const result = await populateAward20Fields(templateId, header.id, sheetId, targetRows);
     return res.status(200).json({ message: 'Auto-fill completed.', details: result });
   } catch (error) {
     console.error('Error in autoFillInternationalAwards:', error);
