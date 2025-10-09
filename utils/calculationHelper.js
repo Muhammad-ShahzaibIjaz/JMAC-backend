@@ -40,6 +40,14 @@ function calculateTotalNeedMet(need, totalNeedBasedAid) {
   return (rate * 100).toFixed(2);
 }
 
+function calculateTotalInstitutionalMeritGift(need, totalMeritBasedAid) {
+  if (need === 0) return 100;
+  const upper = need - totalMeritBasedAid;
+  if (upper <= 0) return 100;
+  const rate = upper / need;
+  return (rate * 100).toFixed(2);
+}
+
 function matchCriteria(value, criteria) {
   if (criteria.includes('*') || criteria.includes('?')) {
     // Convert custom pattern to regex
@@ -66,5 +74,6 @@ module.exports = {
   calculateGap,
   matchCriteria,
   calculateTotalNeedMet,
-  calculateTotalDirectCost
+  calculateTotalDirectCost,
+  calculateTotalInstitutionalMeritGift
 };

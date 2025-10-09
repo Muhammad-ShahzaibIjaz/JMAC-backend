@@ -14,8 +14,9 @@ const { convertScore } = require('../services/conversion');
 const { getCipTitle } = require('../services/cipService');
 const { desiredOrder, requiredHeadersName, awardTypePatterns } = require('../utils/headerOrderList');
 const { buildZipCountyMap } = require('../services/countyService');
-const { calculateNACUBODiscountRate, calculateNetCharges, calculateGap, calculateNeedMet, calculateTotalDiscountRate, calculateNetTuition, calculateNeed, matchCriteria, calculateTotalNeedMet, calculateTotalDirectCost } = require('../utils/calculationHelper');
+const { calculateNACUBODiscountRate, calculateNetCharges, calculateGap, calculateNeedMet, calculateTotalDiscountRate, calculateNetTuition, calculateNeed, matchCriteria, calculateTotalNeedMet, calculateTotalDirectCost, calculateTotalInstitutionalMeritGift } = require('../utils/calculationHelper');
 const { evaluateConditions } = require('../services/evaluation');
+const { parse } = require('csv-parse/browser/esm');
 
 async function deleteSheetData(req, res) {
   try {
@@ -4936,7 +4937,7 @@ async function processTotalNeedMet_W(templateId, sheetId, maxRowIndex) {
     const headers = await Header.findAll({
       where: {
         templateId,
-        name: ['Student_Financial_Need', 'Total_Institutional_Gift', '%_Of_Need_Met_W/Gift_Aid']
+        name: ['Student_Financial_Need', 'Total_Merit_Based_Aid', '%_Of_Need_Met_W/Gift_Aid']
       },
       transaction
     });
@@ -4952,7 +4953,7 @@ async function processTotalNeedMet_W(templateId, sheetId, maxRowIndex) {
     // Step 2: Fetch relevant SheetData
     const sheetData = await SheetData.findAll({
       where: {
-        headerId: [headerMap['Student_Financial_Need'], headerMap['Total_Institutional_Gift']],
+        headerId: [headerMap['Student_Financial_Need'], headerMap['Total_Merit_Based_Aid']],
         sheetId: sheetId
       },
       transaction
@@ -4979,9 +4980,9 @@ async function processTotalNeedMet_W(templateId, sheetId, maxRowIndex) {
     for (let rowIndex = 0; rowIndex <= maxRowIndex; rowIndex++) {
       const values = grouped[rowIndex] || {};
       const need = values[headerMap['Student_Financial_Need']] || 0;
-      const totalInstitutionalGift = values[headerMap['Total_Institutional_Gift']] || 0;
+      const totalMeritAid = values[headerMap['Total_Merit_Based_Aid']] || 0;
 
-      const discountRate = calculateTotalNeedMet(need, totalInstitutionalGift);
+      const discountRate = calculateTotalInstitutionalMeritGift(need, totalMeritAid);
 
       const existing = await SheetData.findOne({
         where: {
@@ -5047,6 +5048,140 @@ async function processTotalNeedMet_W(templateId, sheetId, maxRowIndex) {
   }
 }
 
+async function processCampusDiscount(templateId, sheetId, maxRowIndex) {
+  console.log('Processing Campus Discount Rates...');
+  const transaction = await sequelize.transaction();
+  try {
+    // Step 1: Fetch headers
+    const headers = await Header.findAll({
+      where: {
+        templateId,
+        name: ['Net_Tuition_Revenue', 'Total_Institutional_Gift', 'Campus_Discount Rate']
+      },
+      transaction
+    });
+
+    const headerMap = Object.fromEntries(headers.map(h => [h.name, h.id]));
+    const netId = headerMap['Net_Tuition_Revenue'];
+    const giftId = headerMap['Total_Institutional_Gift'];
+    const discountId = headerMap['Campus_Discount Rate'];
+
+    if (!discountId) {
+      await transaction.rollback();
+      return { message: 'Campus_Discount Rate header not found.' };
+    }
+
+    // Step 2: Fetch all relevant SheetData
+    const sheetData = await SheetData.findAll({
+      where: {
+        headerId: [netId, giftId],
+        sheetId
+      },
+      transaction
+    });
+
+    // Step 3: Group by rowIndex and compute totalNetTuitionRevenue
+    const grouped = new Map();
+    let totalNetTuitionRevenue = 0;
+
+    for (const data of sheetData) {
+      const rowIndex = data.rowIndex;
+      const value = parseFloat(data.value) || 0;
+      const row = grouped.get(rowIndex) || {};
+      row[data.headerId] = value;
+      grouped.set(rowIndex, row);
+
+      if (data.headerId === netId) {
+        totalNetTuitionRevenue += value;
+      }
+    }
+
+    // Step 4: Fetch existing Campus_Discount Rate entries in bulk
+    const existingDiscounts = await SheetData.findAll({
+      where: {
+        headerId: discountId,
+        sheetId
+      },
+      transaction
+    });
+
+    const existingMap = new Map();
+    for (const entry of existingDiscounts) {
+      existingMap.set(entry.rowIndex, entry);
+    }
+
+    // Step 5: Create OperationLog
+    const operationLog = await OperationLog.create({
+      templateId,
+      sheetId,
+      operationType: 'CALCULATION'
+    }, { transaction });
+
+    // Step 6: Prepare payloads
+    const insertPayload = [];
+    const updatePayload = [];
+    const snapshotPayload = [];
+
+    for (let rowIndex = 0; rowIndex <= maxRowIndex; rowIndex++) {
+      const values = grouped.get(rowIndex) || {};
+      const net = values[netId] || 0;
+      const gift = values[giftId] || 0;
+
+      const discountRate = totalNetTuitionRevenue > 0
+        ? parseFloat(((gift / totalNetTuitionRevenue) * 100).toFixed(4))
+        : 0;
+
+      const newValue = discountRate.toString();
+      const existing = existingMap.get(rowIndex);
+
+      snapshotPayload.push({
+        operationLogId: operationLog.id,
+        headerId: discountId,
+        sheetId,
+        rowIndex,
+        originalValue: existing?.value || null,
+        newValue,
+        changeType: existing ? 'UPDATE' : 'INSERT'
+      });
+
+      if (existing) {
+        existing.value = newValue;
+        updatePayload.push(existing);
+      } else {
+        insertPayload.push({
+          headerId: discountId,
+          sheetId,
+          rowIndex,
+          value: newValue
+        });
+      }
+    }
+
+    // Step 7: Bulk insert/update
+    if (insertPayload.length > 0) {
+      await SheetData.bulkCreate(insertPayload, { transaction });
+    }
+
+    if (updatePayload.length > 0) {
+      await Promise.all(updatePayload.map(entry => entry.save({ transaction })));
+    }
+
+    if (snapshotPayload.length > 0) {
+      await SheetDataSnapshot.bulkCreate(snapshotPayload, { transaction });
+    }
+
+    await transaction.commit();
+    return {
+      message: 'Processed Campus Discount Rates with logging and snapshots.',
+      rowsAffected: insertPayload.length + updatePayload.length
+    };
+  } catch (error) {
+    await transaction.rollback();
+    console.error('Error processing Campus Discount Rates:', error);
+    throw error;
+  }
+}
+
 
 async function calculateFurtherMetrics(templateId, sheetId, maxRowIndex) {
   await processNACUBODiscountRates(templateId, sheetId, maxRowIndex);
@@ -5059,6 +5194,7 @@ async function calculateFurtherMetrics(templateId, sheetId, maxRowIndex) {
   await processGap(templateId, sheetId, maxRowIndex);
   await processTotalNeedMet(templateId, sheetId, maxRowIndex);
   await processTotalNeedMet_W(templateId, sheetId, maxRowIndex);
+  await processCampusDiscount(templateId, sheetId, maxRowIndex);
 }
 
 async function calculateAwardInfo(req, res) {
@@ -5372,6 +5508,177 @@ async function getHeaderValues(req, res) {
   }
 }
 
+
+async function getNullAwardRows(templateId, sheetId) {
+  console.log('Finding rows with all NULL awards...');
+  const transaction = await sequelize.transaction();
+  try {
+    // Step 1: Get headerIds for Awd_Cd1 to Awd_Cd20
+    const awardHeaders = await Header.findAll({
+      where: {
+        templateId,
+        name: Array.from({ length: 20 }, (_, i) => `Awd_Cd${i + 1}`)
+      },
+      transaction
+    });
+
+    const awardHeaderIds = awardHeaders.map(h => h.id);
+    if (awardHeaderIds.length === 0) {
+      await transaction.rollback();
+      return { message: 'No award headers found.' };
+    }
+
+    // Step 2: Fetch all SheetData for those headers
+    const awardData = await SheetData.findAll({
+      where: {
+        headerId: awardHeaderIds,
+        sheetId
+      },
+      transaction
+    });
+
+    // Step 3: Group by rowIndex
+    const rowMap = new Map(); // rowIndex → count of non-null awards
+
+    for (const entry of awardData) {
+      const rowIndex = entry.rowIndex;
+      const value = entry.value?.trim();
+      if (value && value.toLowerCase() !== 'null') {
+        rowMap.set(rowIndex, (rowMap.get(rowIndex) || 0) + 1);
+      } else {
+        rowMap.set(rowIndex, rowMap.get(rowIndex) || 0);
+      }
+    }
+
+    // Step 4: Filter rows where all 20 awards are null
+    const nullRows = [];
+    for (const [rowIndex, nonNullCount] of rowMap.entries()) {
+      if (nonNullCount === 0) {
+        nullRows.push(rowIndex);
+      }
+    }
+
+    await transaction.commit();
+    return nullRows;
+  } catch (error) {
+    await transaction.rollback();
+    console.error('Error finding NULL award rows:', error);
+    throw error;
+  }
+}
+
+async function populateAward20Fields(targetHeaderId, sheetId, targetRows) {
+  console.log('Populating Awd_Amt20, Awd_Cd20, Awd_Status20...');
+  const transaction = await sequelize.transaction();
+  try {
+    // Step 1: Get header IDs for Awd_Amt20, Awd_Cd20, Awd_Status20
+    const headers = await Header.findAll({
+      where: {
+        sheetId,
+        name: ['Awd_Amt20', 'Awd_Cd20', 'Awd_Status20', 'Awd_CR20']
+      },
+      transaction
+    });
+
+    const headerMap = Object.fromEntries(headers.map(h => [h.name, h.id]));
+    const amt20Id = headerMap['Awd_Amt20'];
+    const cd20Id = headerMap['Awd_Cd20'];
+    const status20Id = headerMap['Awd_Status20'];
+    const cr20Id = headerMap['Awd_CR20'];
+
+    if (!amt20Id || !cd20Id || !status20Id || !cr20Id) {
+      await transaction.rollback();
+      return { message: 'One or more target headers not found.' };
+    }
+
+    // Step 2: Fetch SheetData for targetHeaderId and targetRows
+    const sourceData = await SheetData.findAll({
+      where: {
+        headerId: targetHeaderId,
+        sheetId,
+        rowIndex: targetRows
+      },
+      transaction
+    });
+
+    const valueMap = new Map();
+    for (const entry of sourceData) {
+      valueMap.set(entry.rowIndex, entry.value?.trim() || '0');
+    }
+
+    // Step 3: Prepare insert payloads
+    const insertPayload = [];
+
+    for (const rowIndex of targetRows) {
+      const value = valueMap.get(rowIndex) || '0';
+
+      insertPayload.push(
+        {
+          headerId: amt20Id,
+          sheetId,
+          rowIndex,
+          value
+        },
+        {
+          headerId: cd20Id,
+          sheetId,
+          rowIndex,
+          value: 'B:International'
+        },
+        {
+          headerId: status20Id,
+          sheetId,
+          rowIndex,
+          value: 'Accepted'
+        },
+        {
+          headerId: cr20Id,
+          sheetId,
+          rowIndex,
+          value: 'IMUG'
+        }
+      );
+    }
+
+    // Step 4: Bulk insert
+    await SheetData.bulkCreate(insertPayload, { transaction });
+
+    await transaction.commit();
+    return {
+      message: `Inserted Awd_Amt20, Awd_Cd20, Awd_Status20 for ${targetRows.length} rows.`,
+      rowsAffected: insertPayload.length
+    };
+  } catch (error) {
+    await transaction.rollback();
+    console.error('Error populating award fields:', error);
+    throw error;
+  }
+}
+
+
+async function autoFillInternationalAwards(req, res) {
+  const { templateId, sheetId, targetHeader } = req.body;
+  try {
+    if (!templateId || !sheetId || !targetHeader) {
+      return res.status(400).json({ message: 'templateId, sheetId, and targetHeader are required.' });
+    }
+    const targetRows = await getNullAwardRows(templateId, sheetId);
+    if (targetRows.length === 0) {
+      return res.status(200).json({ message: 'No rows with all NULL awards found.' });
+    }
+
+    const header = await Header.findOne({ where: { templateId, name: targetHeader } });
+    if (!header) {
+      return res.status(404).json({ message: `Header "${targetHeader}" not found for the given templateId.` });
+    }
+    const result = await populateAward20Fields(header.id, sheetId, targetRows);
+    return res.status(200).json({ message: 'Auto-fill completed.', details: result });
+  } catch (error) {
+    console.error('Error in autoFillInternationalAwards:', error);
+    return res.status(500).json({ message: 'Internal server error.', details: error.message });
+  }
+}
+
 module.exports = {
   deleteSheetData, 
   getMatrixPop, 
@@ -5403,5 +5710,6 @@ module.exports = {
   getStatusValues,
   getHeaderValues,
   FacilityZipFiller,
-  extractHeaderValues
+  extractHeaderValues,
+  autoFillInternationalAwards
 };
