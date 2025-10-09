@@ -860,17 +860,31 @@ async function getTemplateDataWithExcel(req, res) {
     }));
 
     const totalErrorRows = errorRows.size;
-    const buffer = await generateExcelFile({
+    const filePath = await generateExcelFile({
       headers: responseHeaders,
       maxRowIndex,
       totalErrorRows,
       errorRows,
       rowBuckets,
+      templateName
     });
-    const currentDate = new Date().toISOString().split('T')[0];
-    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename=${templateName}_${currentDate}.xlsx`);
-    res.status(200).send(buffer);
+
+    res.download(filePath, err => {
+      if (err) {
+        console.error('Download failed:', err);
+        res.status(500).json({ error: 'Failed to send file' });
+      } else {
+        console.log('File sent successfully.');
+        fs.unlink(filePath, unlinkErr => {
+          if (unlinkErr) {
+            console.error('Failed to delete file:', unlinkErr);
+          } else {
+            console.log('File deleted from disk.');
+          }
+        });
+      }
+    });
+    
   } catch (error) {
     console.error('Error generating template data with Excel:', error.message, error.stack);
     res.status(500).json({ error: 'Failed to generate Excel file' });
