@@ -16,7 +16,6 @@ const { desiredOrder, requiredHeadersName, awardTypePatterns } = require('../uti
 const { buildZipCountyMap } = require('../services/countyService');
 const { calculateNACUBODiscountRate, calculateNetCharges, calculateGap, calculateNeedMet, calculateTotalDiscountRate, calculateNetTuition, calculateNeed, matchCriteria, calculateTotalNeedMet, calculateTotalDirectCost, calculateTotalInstitutionalMeritGift } = require('../utils/calculationHelper');
 const { evaluateConditions } = require('../services/evaluation');
-const { parse } = require('csv-parse/browser/esm');
 
 async function deleteSheetData(req, res) {
   try {
@@ -5567,14 +5566,14 @@ async function getNullAwardRows(templateId, sheetId) {
   }
 }
 
-async function populateAward20Fields(targetHeaderId, sheetId, targetRows) {
+async function populateAward20Fields(templateId, targetHeaderId, sheetId, targetRows) {
   console.log('Populating Awd_Amt20, Awd_Cd20, Awd_Status20...');
   const transaction = await sequelize.transaction();
   try {
     // Step 1: Get header IDs for Awd_Amt20, Awd_Cd20, Awd_Status20
     const headers = await Header.findAll({
       where: {
-        sheetId,
+        templateId,
         name: ['Awd_Amt20', 'Awd_Cd20', 'Awd_Status20', 'Awd_CR20']
       },
       transaction
