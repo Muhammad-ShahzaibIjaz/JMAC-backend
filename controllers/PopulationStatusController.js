@@ -2151,7 +2151,7 @@ async function analyzeStudentsByStateAndCounty(sheetId, templateId, rowIndexes) 
           'SAI',
           'Student_Financial_Need',
           'Student_State',
-          'County',
+          'Home_County',
           'Student_Address_1',
           'Student_City',
         ],
@@ -2163,7 +2163,7 @@ async function analyzeStudentsByStateAndCounty(sheetId, templateId, rowIndexes) 
     const headerMap = {};
     headers.forEach(h => { headerMap[h.name] = h.id; });
     console.timeEnd('analyzeStudentsByStateAndCounty Headers Fetch');
-    const required = ['SAI', 'Student_Financial_Need', 'Student_State', 'County', 'Student_Address_1', 'Student_City'];
+    const required = ['SAI', 'Student_Financial_Need', 'Student_State', 'Home_County', 'Student_Address_1', 'Student_City'];
     for (const key of required) {
       if (!headerMap[key]) throw new Error(`Missing header: ${key}`);
     }
@@ -2238,7 +2238,7 @@ async function analyzeStudentsByStateAndCounty(sheetId, templateId, rowIndexes) 
     // 🧮 Step 6: Group by County
     const countyGroups = {};
     for (const s of enriched) {
-      const county = s.County?.trim();
+      const county = s.Home_County?.trim();
       if (!county) continue;
       if (!countyGroups[county]) countyGroups[county] = [];
       countyGroups[county].push(s);
