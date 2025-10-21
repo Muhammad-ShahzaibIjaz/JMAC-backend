@@ -4,7 +4,7 @@ const { PopulationStatus, PopulationSubmission, Header, PopulationRule, SheetDat
 const { evaluateConditions } = require('../services/evaluation');
 const { generateMultiYearExcelFile } = require('../services/SheetService');
 const { desiredOrder } = require('../utils/headerOrderList');
-const { all } = require('axios');
+const { geocodeStudents } = require('../utils/coordinateFinder');
 
 const savePopulationStatus = async (req, res) => {
     const { templateId, statusName, selectedStatuses, targetHeader } = req.body;
@@ -2140,6 +2140,210 @@ const getExportableStudentData = async (req, res) => {
   }
 };
 
+
+async function analyzeStudentsByStateAndCounty(sheetId, templateId, rowIndexes) {
+  try {
+    // 🎯 Step 1: Fetch required headers
+    const headers = await Header.findAll({
+      where: {
+        templateId,
+        name: [
+          'SAI',
+          'Student_Financial_Need',
+          'Student_State',
+          'County',
+          'Student_Address_1',
+          'Student_City',
+        ],
+      },
+      attributes: ['id', 'name'],
+      raw: true,
+    });
+    console.time('analyzeStudentsByStateAndCounty Headers Fetch');
+    const headerMap = {};
+    headers.forEach(h => { headerMap[h.name] = h.id; });
+    console.timeEnd('analyzeStudentsByStateAndCounty Headers Fetch');
+    const required = ['SAI', 'Student_Financial_Need', 'Student_State', 'County', 'Student_Address_1', 'Student_City'];
+    for (const key of required) {
+      if (!headerMap[key]) throw new Error(`Missing header: ${key}`);
+    }
+
+    // 📥 Step 2: Fetch SheetData for given rows
+    const sheetData = await SheetData.findAll({
+      where: {
+        sheetId,
+        rowIndex: { [Op.in]: rowIndexes },
+        headerId: { [Op.in]: Object.values(headerMap) },
+      },
+      attributes: ['rowIndex', 'headerId', 'value'],
+      raw: true,
+    });
+
+    // 🧠 Step 3: Reconstruct student objects
+    const studentMap = {};
+    for (const row of sheetData) {
+      const { rowIndex, headerId, value } = row;
+      if (!studentMap[rowIndex]) studentMap[rowIndex] = { rowIndex };
+      const headerName = Object.keys(headerMap).find(k => headerMap[k] === headerId);
+      studentMap[rowIndex][headerName] = value;
+    }
+
+    const students = Object.values(studentMap);
+
+    // 🗺️ Step 4: Geocode students
+    const enriched = await geocodeStudents(
+      students.map(s => ({
+        address: s.Student_Address_1,
+        city: s.Student_City,
+        state: s.Student_State,
+        ...s,
+      }))
+    );
+
+    // 🧮 Step 5: Group by State
+    const stateGroups = {};
+    for (const s of enriched) {
+      const state = s.Student_State?.trim();
+      if (!state) continue;
+      if (!stateGroups[state]) stateGroups[state] = [];
+      stateGroups[state].push(s);
+    }
+
+    const avg = arr => arr.length ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length) : 0;
+
+    const stateResults = {};
+    for (const [state, group] of Object.entries(stateGroups)) {
+      const saiValues = [];
+      const needValues = [];
+
+      for (const s of group) {
+        const sai = parseFloat(s.SAI);
+        const need = parseFloat(s.Student_Financial_Need);
+        if (!isNaN(sai)) saiValues.push(sai);
+        if (!isNaN(need)) needValues.push(need);
+      }
+
+      stateResults[state] = {
+        studentCount: group.length,
+        AvgSAI: avg(saiValues),
+        AvgNeed: avg(needValues),
+        students: group.map(s => ({
+          rowIndex: s.rowIndex,
+          latitude: s.latitude,
+          longitude: s.longitude,
+        })),
+      };
+    }
+
+    // 🧮 Step 6: Group by County
+    const countyGroups = {};
+    for (const s of enriched) {
+      const county = s.County?.trim();
+      if (!county) continue;
+      if (!countyGroups[county]) countyGroups[county] = [];
+      countyGroups[county].push(s);
+    }
+
+    const countyResults = {};
+    for (const [county, group] of Object.entries(countyGroups)) {
+      const saiValues = [];
+      const needValues = [];
+
+      for (const s of group) {
+        const sai = parseFloat(s.SAI);
+        const need = parseFloat(s.Student_Financial_Need);
+        if (!isNaN(sai)) saiValues.push(sai);
+        if (!isNaN(need)) needValues.push(need);
+      }
+
+      countyResults[county] = {
+        studentCount: group.length,
+        AvgSAI: avg(saiValues),
+        AvgNeed: avg(needValues),
+        students: group.map(s => ({
+          rowIndex: s.rowIndex,
+          latitude: s.latitude,
+          longitude: s.longitude,
+        })),
+      };
+    }
+
+    return { byState: stateResults, byCounty: countyResults };
+  } catch (err) {
+    console.error('Error in analyzeStudentsByStateAndCounty:', err);
+    return { byState: {}, byCounty: {} };
+  }
+}
+
+const getDatabyStateCounty = async (req, res) => {
+  const { selectedDate, templateId, populationRuleId } = req.body;
+
+  try {
+    if (!selectedDate || !templateId || !populationRuleId) {
+      return res.status(400).json({ error: 'All fields are required' });
+    }
+
+    const selectedSheetId = await getSheetIdBySubmissionDate(selectedDate, templateId);
+    const { conditions, headers } = await getRuleConditionsAndHeaders(populationRuleId);
+    const allStatuses = await getStatusesByTemplateId(templateId);
+
+    if (!selectedSheetId) {
+      const emptyStatuses = allStatuses.map(status => ({
+        statusName: status.statusName,
+        countryData: [],
+        countyData: []
+      }));
+      return res.status(200).json({ statuses: emptyStatuses });
+    }
+
+    const matchingRows = await applyPopulationRule(templateId, selectedSheetId, conditions, headers);
+    if (matchingRows.length === 0) {
+      const emptyStatuses = allStatuses.map(status => ({
+        statusName: status.statusName,
+        countryData: [],
+        countyData: []
+      }));
+      return res.status(200).json({ statuses: emptyStatuses });
+    }
+
+    console.time('statusProcessing');
+
+    const statusData = await Promise.all(
+      allStatuses.map(async status => {
+        const { selectedStatuses, targetHeader, statusName } = status;
+
+        const { count, rowIndexes } = await calculateStatusStudents(
+          selectedSheetId,
+          selectedStatuses,
+          targetHeader,
+          templateId,
+          matchingRows
+        );
+
+        const result = await analyzeStudentsByStateAndCounty(
+          selectedSheetId,
+          templateId,
+          rowIndexes
+        );
+
+        return {
+          statusName,
+          countryData: result.byState,
+          countyData: result.byCounty
+        };
+      })
+    );
+
+    console.timeEnd('statusProcessing');
+
+    return res.status(200).json({ statuses: statusData });
+
+  } catch (err) {
+    console.error("Error while getting data by country/county:", err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
 module.exports = {
     savePopulationStatus,
     savePopulationSubmissionDate,
@@ -2156,5 +2360,6 @@ module.exports = {
     getFAFSAFilerSummary,
     getAwardStats,
     getStudentStealthCountByYear,
-    getExportableStudentData
+    getExportableStudentData,
+    getDatabyStateCounty
 };

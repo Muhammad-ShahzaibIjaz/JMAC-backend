@@ -11,4 +11,5 @@ module.exports = {
   WORKER_URL: process.env.WORKER_URL,
   USER_ID: "default-user",
   FOLDER_NAME: "uploads",
+  GEO_API_KEY: process.env.GEO_API_KEY || "",
 };
