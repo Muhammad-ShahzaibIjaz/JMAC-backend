@@ -19,8 +19,8 @@ function evaluateConditions(rowData, conditionBlock) {
     switch (cond.operator) {
       case 'equal': return value === target;
       case 'notEqual': return value !== target;
-      case 'isNull': return value === null || value === '' || value !== "NULL" || value !== "null";
-      case 'isNotNull': return value !== null && value !== '';
+      case 'isNull': return value === null || value === '';
+      case 'isNotNull': return value !== null && value !== '' || value !== "NULL" || value !== "null";
       case 'contains': return typeof value === 'string' && value.includes(target);
       case 'notContains': return typeof value === 'string' && !value.includes(target);
       case 'startsWith': return typeof value === 'string' && value.startsWith(target);
