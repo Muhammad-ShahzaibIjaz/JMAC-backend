@@ -490,8 +490,10 @@ async function getHeadersWithMapHeaders(req, res) {
         {
           model: MapHeader,
           where: { mappingTemplateId: mappingtemplateId },
-          attributes: ['id','name', 'headerId'],
+          attributes: ['id','name', 'headerId', 'createdAt'],
           required: false,
+          separate: true,
+          order: [['createdAt', 'ASC']],
         },
       ],
     });

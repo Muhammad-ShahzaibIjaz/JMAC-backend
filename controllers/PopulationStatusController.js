@@ -2293,7 +2293,7 @@ const getDatabyStateCounty = async (req, res) => {
         countryData: [],
         countyData: []
       }));
-      return res.status(200).json({ statuses: emptyStatuses });
+      return res.status(200).json({ statuses: emptyStatuses, admittedStudentCount: 0 });
     }
 
     const matchingRows = await applyPopulationRule(templateId, selectedSheetId, conditions, headers);
@@ -2303,10 +2303,9 @@ const getDatabyStateCounty = async (req, res) => {
         countryData: [],
         countyData: []
       }));
-      return res.status(200).json({ statuses: emptyStatuses });
+      return res.status(200).json({ statuses: emptyStatuses, admittedStudentCount: 0 });
     }
-
-    console.time('statusProcessing');
+    let admittedStudentCount = 0;
 
     const statusData = await Promise.all(
       allStatuses.map(async status => {
@@ -2319,6 +2318,10 @@ const getDatabyStateCounty = async (req, res) => {
           templateId,
           matchingRows
         );
+
+        if (statusName.toLowerCase() === 'admitted') {
+          admittedStudentCount = count;
+        }
 
         const result = await analyzeStudentsByStateAndCounty(
           selectedSheetId,
@@ -2334,9 +2337,7 @@ const getDatabyStateCounty = async (req, res) => {
       })
     );
 
-    console.timeEnd('statusProcessing');
-
-    return res.status(200).json({ statuses: statusData });
+    return res.status(200).json({ statuses: statusData, admittedStudentCount });
 
   } catch (err) {
     console.error("Error while getting data by country/county:", err);

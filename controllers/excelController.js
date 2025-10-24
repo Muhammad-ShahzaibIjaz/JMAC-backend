@@ -51,335 +51,6 @@ async function fetchExistingHeaders(templateId) {
   }));
 }
 
-async function saveFileAndData(processedFiles, templateId, mappingtemplateId, transaction) {
-  const allSheets = [];
-
-  // Fetch headers for the given templateId
-  const templateHeaders = await Header.findAll({
-    where: { templateId },
-    transaction,
-  });
-
-  if (!templateHeaders.length) {
-    throw new Error(`No headers found for templateId: ${templateId}`);
-  }
-
-  // Fetch mapHeaders only if mappingtemplateId is provided and not empty
-  let headerToMapHeaders = new Map();
-  if (mappingtemplateId && mappingtemplateId !== "") {
-    const mapHeaders = await MapHeader.findAll({
-      where: { mappingTemplateId: mappingtemplateId },
-      transaction,
-    });
-
-    // Create a mapping of headerId to mapHeader names
-    for (const mapHeader of mapHeaders) {
-      if (mapHeader.headerId) {
-        if (!headerToMapHeaders.has(mapHeader.headerId)) {
-          headerToMapHeaders.set(mapHeader.headerId, []);
-        }
-        headerToMapHeaders.get(mapHeader.headerId).push(mapHeader.name.toLowerCase());
-      }
-    }
-  }
-
-  // Save files and collect sheet data
-  for (const processedFile of processedFiles) {
-    if (!processedFile.fileName || !processedFile.sheets) {
-      throw new Error(`Invalid processed file: ${JSON.stringify(processedFile)}`);
-    }
-
-    for (const sheet of processedFile.sheets) {
-      if (!sheet.headers || !sheet.data) {
-        throw new Error(`Invalid sheet in ${processedFile.fileName}: ${JSON.stringify(sheet)}`);
-      }
-      allSheets.push({
-        fileName: processedFile.fileName,
-        sheetName: sheet.sheetName,
-        headers: sheet.headers,
-        data: sheet.data,
-      });
-    }
-  }
-
-  // Function to check if a header has unique values across all sheets
-  const isHeaderUnique = (headerName) => {
-    const ids = new Set();
-    let totalRows = 0;
-    for (const sheet of allSheets) {
-      const idIndex = sheet.headers.findIndex((h) => h.toLowerCase() === headerName.toLowerCase());
-      if (idIndex === -1) return false; // Header not found in this sheet
-      for (const row of sheet.data) {
-        const id = row[idIndex];
-        if (id != null) {
-          ids.add(id);
-          totalRows++;
-        }
-      }
-    }
-    return ids.size === totalRows; // True if all non-null IDs are unique
-  };
-
-  let commonHeader;
-  const potentialPrimaryKeys = ['studentid','student id', 'student id alt', 'studentidalt', 'id', 'student_id', 'student_id_alt' , 'unique_id'];
-
-  if (allSheets.length > 1 || processedFiles.length > 1) {
-    // Find common header (e.g., ID) across all sheets
-    const headerCounts = new Map();
-    for (const sheet of allSheets) {
-      for (const header of sheet.headers) {
-        const lowerHeader = header.toLowerCase();
-        headerCounts.set(lowerHeader, (headerCounts.get(lowerHeader) || 0) + 1);
-      }
-    }
-
-    const commonHeaders = [...headerCounts.entries()]
-      .filter(([_, count]) => count === allSheets.length)
-      .map(([header]) => header);
-
-    
-    for (const key of potentialPrimaryKeys) {
-      if (commonHeaders.includes(key)) {
-        commonHeader = key;
-        break;
-      }
-    }
-
-    if (!commonHeader) {
-      // Find the first common header with unique values
-      for (const header of commonHeaders) {
-        if (isHeaderUnique(header)) {
-          commonHeader = header;
-          break;
-        } else {
-          console.warn(`Common header '${header}' has non-unique values`);
-        }
-      }
-    }
-
-    if (!commonHeader) {
-      throw new Error("No common header with unique values found across all sheets");
-    }
-  } else {
-    // Single sheet: Check predefined primary key headers
-    const sheet = allSheets[0];
-
-    for (const pk of potentialPrimaryKeys) {
-      if (sheet.headers.some((h) => h.toLowerCase() === pk.toLowerCase()) && isHeaderUnique(pk)) {
-        commonHeader = pk;
-        break;
-      }
-    }
-
-    // Fallback: Try each header in order, ensuring uniqueness
-    if (!commonHeader) {
-      for (const header of sheet.headers) {
-        if (isHeaderUnique(header.toLowerCase())) {
-          commonHeader = header.toLowerCase();
-          break;
-        } else {
-          console.warn(`Header '${header}' is not unique`);
-        }
-      }
-    }
-
-    if (!commonHeader) {
-      throw new Error("No unique header found in single sheet");
-    }
-  }
-
-
-  // Quality check: Detect duplicate headers in sheets
-  for (const sheet of allSheets) {
-    const headerSet = new Set();
-    for (const header of sheet.headers) {
-      const lowerHeader = header.toLowerCase();
-      if (headerSet.has(lowerHeader)) {
-        console.warn(`Duplicate header '${header}' found in sheet '${sheet.sheetName}' of file '${sheet.fileName}'`);
-        continue;
-      }
-      headerSet.add(lowerHeader);
-    }
-  }
-
-  // Map processed file headers to template headers
-  const headerMapping = new Map(); // Maps processed file header to template header
-  for (const sheet of allSheets) {
-    for (const fileHeader of sheet.headers) {
-      const lowerFileHeader = fileHeader.toLowerCase();
-
-      let matchedTemplateHeader = null;
-      if (mappingtemplateId && mappingtemplateId !== "") {
-        // Check if fileHeader matches any mapHeader
-        for (const templateHeader of templateHeaders) {
-          const mapHeaderNames = headerToMapHeaders.get(templateHeader.id) || [];
-          if (mapHeaderNames.includes(lowerFileHeader)) {
-            matchedTemplateHeader = templateHeader;
-            break;
-          }
-        }
-      }
-
-      // If no mapHeader match or no mappingtemplateId, try matching by template header name
-      if (!matchedTemplateHeader) {
-        matchedTemplateHeader = templateHeaders.find(
-          (h) => h.name.toLowerCase() === lowerFileHeader
-        );
-      }
-
-      if (matchedTemplateHeader) {
-        headerMapping.set(fileHeader, matchedTemplateHeader);
-      }
-    }
-  }
-
-  // Collect data by ID, allowing new data to be merged
-  const dataById = new Map();
-  for (const sheet of allSheets) {
-    const idIndex = sheet.headers.findIndex((h) => h.toLowerCase() === commonHeader);
-    if (idIndex === -1) {
-      throw new Error(`Common header '${commonHeader}' not found in sheet '${sheet.sheetName}'`);
-    }
-
-    for (const row of sheet.data) {
-      const id = row[idIndex];
-      if (id == null) {
-        console.warn(`Skipping row with null ID in sheet ${sheet.sheetName}`); // Debug log
-        continue;
-      }
-
-      if (!dataById.has(id)) {
-        dataById.set(id, { _nonNullCount: 0, _source: sheet.fileName });
-      }
-      const rowData = dataById.get(id);
-
-      // Calculate non-null count for this row
-      let nonNullCount = 0;
-      const newRowData = {};
-      for (const header of sheet.headers) {
-        if (header.toLowerCase() === commonHeader) continue;
-        const templateHeader = headerMapping.get(header);
-        if (templateHeader) {
-          const value = row[sheet.headers.indexOf(header)];
-          newRowData[templateHeader.id] = value != null ? value.toString() : null;
-          if (value != null) nonNullCount++;
-        }
-      }
-
-      // Update data if new row has more non-null values or if existing data is empty
-      if (!rowData._nonNullCount || nonNullCount >= rowData._nonNullCount) {
-        rowData._nonNullCount = nonNullCount;
-        rowData._source = sheet.fileName;
-        Object.assign(rowData, newRowData);
-      }
-    }
-  }
-
-  // Quality check: Validate data consistency
-  for (const [id, rowData] of dataById) {
-    for (const templateHeader of templateHeaders) {
-      const value = rowData[templateHeader.id];
-      if (value != null && templateHeader.columnType === "text" && value.length > 1000) {
-        console.warn(
-          `Data quality warning: Value for header '${templateHeader.name}' in ID '${id}' exceeds length limit`
-        );
-      }
-    }
-  }
-
-  // Prepare merged headers and data
-  const mergedHeaders = templateHeaders.map((h) => h.name);
-  const mergedData = [];
-  for (const [id, rowData] of dataById) {
-    const row = mergedHeaders.map((headerName) => {
-      const templateHeader = templateHeaders.find((h) => h.name === headerName);
-      if (templateHeader.name.toLowerCase() === commonHeader) return id;
-      return rowData[templateHeader.id] || null;
-    });
-    mergedData.push(row);
-  }
-
-  // Save or update headers
-  const savedHeaders = [];
-  for (const templateHeader of templateHeaders) {
-    let header = await Header.findOne({
-      where: {
-        id: templateHeader.id,
-        templateId,
-      },
-      transaction,
-    });
-
-    if (!header) {
-      header = await Header.create(
-        {
-          id: templateHeader.id,
-          name: templateHeader.name,
-          criticalityLevel: templateHeader.criticalityLevel || "3",
-          columnType: templateHeader.columnType || "text",
-          templateId,
-        },
-        { transaction }
-      );
-    }
-
-    const existingData = await SheetData.findAll({
-      where: { headerId: header.id },
-      transaction,
-    });
-    const existingRowCount = existingData.length;
-    const existingNonNullCount = existingData.filter((d) => d.value != null).length;
-
-    // Calculate new data quality
-    let newRowCount = 0;
-    let newNonNullCount = 0;
-    for (const row of mergedData) {
-      const colIndex = mergedHeaders.indexOf(header.name);
-      if (colIndex !== -1 && row[colIndex] != null) {
-        newNonNullCount++;
-      }
-      newRowCount++;
-    }
-
-    // Update if new data has more non-null values or if existing data is empty
-    const shouldUpdate =
-      existingRowCount === 0 ||
-      newNonNullCount > existingNonNullCount ||
-      (newNonNullCount === existingNonNullCount && newRowCount > existingRowCount);
-
-    if (shouldUpdate) {
-      await SheetData.destroy({
-        where: { headerId: header.id },
-        transaction,
-      });
-    }
-
-    savedHeaders.push({ header, shouldUpdate });
-  }
-
-  // Save merged data
-  for (let rowIndex = 0; rowIndex < mergedData.length; rowIndex++) {
-    const row = mergedData[rowIndex];
-    for (let colIndex = 0; colIndex < row.length && colIndex < savedHeaders.length; colIndex++) {
-      if (!savedHeaders[colIndex].shouldUpdate) continue;
-      const value = row[colIndex] != null ? row[colIndex].toString() : null;
-      await SheetData.create(
-        {
-          id: uuidv4(),
-          rowIndex: rowIndex + 1,
-          value,
-          headerId: savedHeaders[colIndex].header.id,
-        },
-        { transaction }
-      );
-    }
-  }
-
-  return { savedHeaders: savedHeaders.map((h) => h.header) };
-}
-
-
-
 function getValidSheet(processedFiles) {
   const sheet = processedFiles?.[0]?.sheets?.[0];
   if (!sheet || !sheet.headers || !sheet.data) {
@@ -405,23 +76,26 @@ function resolveHeaderMapping(fileHeaders, templateHeaders, mapHeaders) {
     if (!headerToMap.has(mapHeader.headerId)) {
       headerToMap.set(mapHeader.headerId, []);
     }
-    headerToMap.get(mapHeader.headerId).push(mapHeader.name.toLowerCase());
+    headerToMap.get(mapHeader.headerId).push(mapHeader.name.toLowerCase().trim());
   }
 
   const mapping = new Map();
   for (const fileHeader of fileHeaders) {
-    const lower = fileHeader.toLowerCase();
-    let matched = null;
+    const fileHeaderLower = fileHeader.toLowerCase();
+    let matchedTemplateHeader = null;
 
     for (const th of templateHeaders) {
       const aliases = headerToMap.get(th.id) || [];
-      if (aliases.includes(lower) || th.name.toLowerCase() === lower) {
-        matched = th;
-        break;
+
+      for (const alias of aliases) { 
+        if (alias.includes(fileHeaderLower) || th.name.toLowerCase() === fileHeaderLower) {
+          matchedTemplateHeader = th;
+          break;
+        }
       }
     }
 
-    if (matched) mapping.set(fileHeader, matched);
+    if (matchedTemplateHeader) mapping.set(fileHeader, matchedTemplateHeader);
   }
   return mapping;
 }
@@ -496,13 +170,20 @@ function prepareInsertPayload(sheet, templateHeadersFromDB, dbMappings, isOrigin
 
   for (const templateHeader of templateHeadersFromDB) {
     const originalName = templateHeader.name.toLowerCase();
-    const dbMappedEntry = dbMappings.find(m => m.headerId === templateHeader.id);
-    const mappedName = dbMappedEntry?.name?.toLowerCase();
+    const allMappedNames = dbMappings
+      .filter(m => m.headerId === templateHeader.id)
+      .map(m => m.name.toLowerCase().trim());
 
     let matchIndex = -1;
 
-    if (mappedName && isOriginal) {
-      matchIndex = sheet.headers.findIndex(h => h.toLowerCase() === mappedName);
+    if (allMappedNames.length > 0 && isOriginal) {
+      for (const mappedName of allMappedNames) {
+        matchIndex = sheet.headers.findIndex(h => h.toLowerCase() === mappedName);
+        if (matchIndex !== -1) {
+          console.log(`✅ Found mapping for ${templateHeader.name}: using column "${sheet.headers[matchIndex]}"`);
+          break; // Use the first found mapping
+        }
+      }
     }
 
     if (matchIndex === -1) {
@@ -539,8 +220,8 @@ async function saveFileAndSingleSheetData(processedFiles, templateId, mappingTem
   const sheet = getValidSheet(processedFiles);
   const templateHeaders = await fetchTemplateHeaders(templateId, transaction);
   const mapHeaders = await fetchMapHeaders(mappingTemplateId, transaction);
-  const resolvedPayload = prepareInsertPayload(sheet, templateHeaders, mapHeaders, isOriginal);
   const headerMapping = resolveHeaderMapping(sheet.headers, templateHeaders, mapHeaders);
+  const resolvedPayload = prepareInsertPayload(sheet, templateHeaders, mapHeaders, isOriginal);
   const rowMap = deduplicateRows(sheet.data);
   validateTextLengths(rowMap, sheet.headers, headerMapping);
 
@@ -933,7 +614,17 @@ async function getTemplateAndMappings(templateId, mappingTemplateId, isOriginal,
 
 function detectCommonHeaderAcrossSheets(allSheets, templateHeaders, headerMap) {
   const normalize = str => str.trim().toLowerCase();
-  const templateHeaderNames = new Set(templateHeaders.map(h => normalize(h.name)));
+  
+  // Create a set of ALL possible header names (template names + all mapped names)
+  const allPossibleHeaders = new Set();
+  for (const templateHeader of templateHeaders) {
+    const templateName = normalize(templateHeader.name);
+    const mappedNames = headerMap.get(templateName) || [];
+    
+    // Add template name and all mapped names
+    allPossibleHeaders.add(templateName);
+    mappedNames.forEach(name => allPossibleHeaders.add(name));
+  }
 
   const headerCounts = new Map();
   for (const sheet of allSheets) {
@@ -947,11 +638,10 @@ function detectCommonHeaderAcrossSheets(allSheets, templateHeaders, headerMap) {
     .filter(([_, count]) => count === allSheets.length)
     .map(([h]) => h);
 
-  for (const h of commonHeaders) {
-    for (const [templateName, mappedList] of headerMap.entries()) {
-      if (mappedList.includes(h) || templateName === h) {
-        return h; // Found a valid common header mapped to template
-      }
+  // Check if any common header matches any of our possible headers (template names or mapped names)
+  for (const commonHeader of commonHeaders) {
+    if (allPossibleHeaders.has(commonHeader)) {
+      return commonHeader;
     }
   }
 
@@ -962,40 +652,53 @@ function processSheetsAndMergeData(allSheets, commonHeader, templateHeaders, hea
   const normalize = str => str.trim().toLowerCase();
   const templateHeaderIds = new Map(templateHeaders.map(h => [normalize(h.name), h.id]));
 
-  const headerMapping = new Map(); // fileHeader → templateHeaderId
-  for (const sheet of allSheets) {
-    for (const fileHeader of sheet.headers) {
-      const lower = normalize(fileHeader);
-      for (const [templateName, mappedList] of headerMap.entries()) {
-        if (mappedList.includes(lower)) {
-          headerMapping.set(lower, templateHeaderIds.get(templateName));
-          break;
-        }
-      }
-      if (!headerMapping.has(lower) && templateHeaderIds.has(lower)) {
-        headerMapping.set(lower, templateHeaderIds.get(lower));
-      }
+  // Create reverse mapping: mapped name → template header ID
+  const mappedNameToTemplateId = new Map();
+  for (const [templateName, mappedNames] of headerMap.entries()) {
+    const templateId = templateHeaderIds.get(templateName);
+    if (templateId) {
+      // Add template name itself
+      mappedNameToTemplateId.set(templateName, templateId);
+      // Add all mapped names
+      mappedNames.forEach(mappedName => {
+        mappedNameToTemplateId.set(mappedName, templateId);
+      });
     }
   }
 
   const dataById = new Map();
+  
   for (const sheet of allSheets) {
-    const idIndex = sheet.headers.findIndex(h => normalize(h) === commonHeader);
-    if (idIndex === -1) continue;
+    // Find the common header column index in this sheet
+    const commonHeaderIndex = sheet.headers.findIndex(h => normalize(h) === commonHeader);
+    if (commonHeaderIndex === -1) continue;
 
+    // Create column mapping for this sheet: column index → template header ID
+    const columnMapping = new Map();
+    for (let i = 0; i < sheet.headers.length; i++) {
+      const headerName = normalize(sheet.headers[i]);
+      const templateId = mappedNameToTemplateId.get(headerName);
+      if (templateId) {
+        columnMapping.set(i, templateId);
+      }
+    }
+
+    // Process each row in the sheet
     for (const row of sheet.data) {
-      const id = row[idIndex];
+      const id = row[commonHeaderIndex];
       if (id == null) continue;
 
       if (!dataById.has(id)) dataById.set(id, {});
       const rowData = dataById.get(id);
 
-      for (let i = 0; i < sheet.headers.length; i++) {
-        const header = sheet.headers[i];
-        const templateId = headerMapping.get(normalize(header));
-        if (templateId) {
-          const value = row[i];
-          if (value != null) rowData[templateId] = value.toString();
+      // Fill data from all mapped columns in this sheet
+      for (const [columnIndex, templateId] of columnMapping.entries()) {
+        const value = row[columnIndex];
+        if (value != null && value !== '') {
+          // Only update if current value is empty or we want to override
+          if (!rowData[templateId] || rowData[templateId] === '') {
+            rowData[templateId] = value.toString();
+          }
         }
       }
     }

@@ -127,15 +127,19 @@ const getHeaderMappingTable = async (templateId, mappingTemplateId) => {
       attributes: ['headerId', 'name']
     });
 
-    const mapByHeaderId = new Map(
-      mappings.map(m => [m.headerId, m.name])
-    );
+    const mapByHeaderId = new Map();
+    mappings.forEach(m => {
+      if (!mapByHeaderId.has(m.headerId)) {
+        mapByHeaderId.set(m.headerId, []);
+      }
+      mapByHeaderId.get(m.headerId).push(m.name);
+    });
 
     const table = [
-      ['SMARTAID Headers', 'Mapped Header'], // Header row
+      ['SMARTAID Headers', 'Mapped Headers'], // Header row
       ...headers.map(header => [
         header.name,
-        mapByHeaderId.get(header.id) || ''
+        mapByHeaderId.get(header.id)?.join(', ') || ''
       ])
     ];
 
