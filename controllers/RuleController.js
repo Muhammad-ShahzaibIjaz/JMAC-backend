@@ -284,8 +284,8 @@ const createBulkRule = async (req, res) => {
   const { headerName, value, name, templateId } = req.body;
   try{
     // Validate input
-    if (!headerName || !value || !name || !templateId) {
-      return res.status(400).json({ error: "All fields (headerName, value, name, templateId) are required" });
+    if (!headerName || !name || !templateId) {
+      return res.status(400).json({ error: "All fields (headerName, name, templateId) are required" });
     }
     const isRuleExist = await CalculationRule.findOne({
       where: { header: headerName, templateId, name }
@@ -300,7 +300,7 @@ const createBulkRule = async (req, res) => {
       isGlobal: true,
       templateId
     });
-    return res.status(201).json({ id: rule.id, name: rule.name });
+    return res.status(201).json({ id: rule.id, name: rule.name, headerName, assignment: value });
   } catch (error) {
     console.error("Error creating bulk rule:", error);
     return res.status(500).json({ error: "Internal server error" });
