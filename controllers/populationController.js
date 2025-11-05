@@ -501,7 +501,6 @@ function handleNestedHeaders(nestedHeaders, data) {
 
     const matchSet = new Set(combinedMatches);
     filteredData = filteredData.filter(row => matchSet.has(row));
-    console.log(`Filtered data count after ${header}:`, filteredData.length);
   }
 
   return filteredData;
@@ -644,6 +643,7 @@ function autoDistribute(data, baseHeader, targetHeader, categoryCount, nestedHea
 
 function manualDistribute(data, baseHeader, nestedHeaders = [], manualRanges = []) {
   const categoryData = nestedHeaders.length ? handleNestedHeaders(nestedHeaders, data) : data;
+  console.log("Filtered data count:", categoryData.length);
 
   const allBaseValues = getAllBaseHeaderValues(categoryData, baseHeader);
 

@@ -2159,10 +2159,8 @@ async function analyzeStudentsByStateAndCounty(sheetId, templateId, rowIndexes) 
       attributes: ['id', 'name'],
       raw: true,
     });
-    console.time('analyzeStudentsByStateAndCounty Headers Fetch');
     const headerMap = {};
     headers.forEach(h => { headerMap[h.name] = h.id; });
-    console.timeEnd('analyzeStudentsByStateAndCounty Headers Fetch');
     const required = ['SAI', 'Student_Financial_Need', 'Student_State', 'Home_County', 'Student_Address_1', 'Student_City'];
     for (const key of required) {
       if (!headerMap[key]) throw new Error(`Missing header: ${key}`);
