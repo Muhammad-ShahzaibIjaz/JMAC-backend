@@ -6,7 +6,7 @@ const { DataTypes, Op, where, cast, col, fn, literal} = require('sequelize');
 const { v4: uuidv4 } = require('uuid');
 const math = require('mathjs');
 const { OperationLog, SheetDataSnapshot } = require('../models');
-const { countBaseHeaderValues, getAllBaseHeaderValues, sortByType, detectType, splitIntoBuckets, extractRange, looselyNormalize} = require('../utils/rangeHelper');
+const { countBaseHeaderValues, getAllBaseHeaderValues, sortByType, detectType, splitIntoBuckets, extractRange, looselyNormalize, splitByCount} = require('../utils/rangeHelper');
 
 
 const categorizer = async (req, res) => {
@@ -506,10 +506,152 @@ function handleNestedHeaders(nestedHeaders, data) {
   return filteredData;
 }
 
+// function autoDistributeSecond(data, baseHeader, targetHeader, categoryCount, nestedHeaders = []) {
+//   const workingData = handleNestedHeaders(nestedHeaders, data);
+//   const detectedType = detectType(workingData, targetHeader);
+//   const allBaseValues = getAllBaseHeaderValues(data, baseHeader);
+
+//   if (detectedType === 'number') {
+//     const nullBucket = [];
+//     const blankBucket = [];
+//     const zeroBucket = [];
+//     const remaining = [];
+
+//     for (const row of workingData) {
+//       const val = row[targetHeader];
+//       if (val === null) {
+//         nullBucket.push(row);
+//       } else if (val === '') {
+//         blankBucket.push(row);
+//       } else if (+val === 0) {
+//         zeroBucket.push(row);
+//       } else {
+//         remaining.push(row);
+//       }
+//     }
+
+//     const response = [];
+
+//     // NULL bucket
+//     if (nullBucket.length > 0) {
+//       response.push({
+//         targetHeader,
+//         targetRange: { start: null, end: null },
+//         total: nullBucket.length,
+//         baseHeaderCounts: countBaseHeaderValues(nullBucket, baseHeader, allBaseValues),
+//       });
+//     }
+
+//     // blanks bucket
+//     if (blankBucket.length > 0) {
+//       response.push({
+//         targetHeader,
+//         targetRange: { start: '', end: '' },
+//         total: blankBucket.length,
+//         baseHeaderCounts: countBaseHeaderValues(blankBucket, baseHeader, allBaseValues),
+//       });
+//     }
+
+//     // zero bucket
+//     if (zeroBucket.length > 0) {
+//       response.push({
+//         targetHeader,
+//         targetRange: { start: 0, end: 0 },
+//         total: zeroBucket.length,
+//         baseHeaderCounts: countBaseHeaderValues(zeroBucket, baseHeader, allBaseValues),
+//       });
+//     }
+
+//     // remaining buckets
+//     const sortedRemaining = sortByType(remaining, targetHeader, 'number');
+//     const buckets = splitIntoBuckets(sortedRemaining, categoryCount);
+
+//     for (const bucket of buckets) {
+//       const range = extractRange(bucket, targetHeader);
+//       response.push({
+//         targetHeader,
+//         targetRange: range,
+//         total: bucket.length,
+//         baseHeaderCounts: countBaseHeaderValues(bucket, baseHeader, allBaseValues),
+//       });
+//     }
+
+//     return response;
+//   }
+
+//   // fallback for non-numeric
+//   const sortedTarget = sortByType(workingData, targetHeader, detectedType);
+//   const buckets = splitIntoBuckets(sortedTarget, categoryCount);
+
+//   return buckets.map(bucket => {
+//     let targetRange;
+//     if (detectedType === 'date') {
+//       targetRange = extractRange(bucket, targetHeader);
+//     } else {
+//       const labelSet = new Set();
+//       for (const row of bucket) {
+//         const val = row[targetHeader];
+//         if (val != null) labelSet.add(String(val).trim());
+//       }
+//       targetRange = { labels: Array.from(labelSet) };
+//     }
+
+//     return {
+//       targetHeader,
+//       targetRange,
+//       total: bucket.length,
+//       baseHeaderCounts: countBaseHeaderValues(bucket, baseHeader, allBaseValues),
+//     };
+//   });
+// }
+
 function autoDistributeSecond(data, baseHeader, targetHeader, categoryCount, nestedHeaders = []) {
   const workingData = handleNestedHeaders(nestedHeaders, data);
   const detectedType = detectType(workingData, targetHeader);
   const allBaseValues = getAllBaseHeaderValues(data, baseHeader);
+
+  if (detectedType === 'string') {
+    const valueMap = new Map();
+    
+    for (const row of workingData) {
+      const val = row[targetHeader];
+      let key;
+      
+      if (val === null) {
+        key = 'NULL';
+      } else if (val === '') {
+        key = 'Blanks';
+      } else {
+        key = String(val).trim();
+      }
+      
+      if (!valueMap.has(key)) {
+        valueMap.set(key, []);
+      }
+      valueMap.get(key).push(row);
+    }
+    
+    const response = [];
+    for (const [label, bucket] of valueMap) {
+      let targetRange;
+      if (label === 'NULL') {
+        targetRange = { start: null, end: null };
+      } else if (label === 'Blanks') {
+        targetRange = { start: '', end: '' };
+      } else {
+        targetRange = { labels: [label] };
+      }
+      
+      response.push({
+        targetHeader,
+        targetRange,
+        total: bucket.length,
+        baseHeaderCounts: countBaseHeaderValues(bucket, baseHeader, allBaseValues),
+      });
+    }
+    
+    return response;
+  }
 
   if (detectedType === 'number') {
     const nullBucket = [];
@@ -532,7 +674,6 @@ function autoDistributeSecond(data, baseHeader, targetHeader, categoryCount, nes
 
     const response = [];
 
-    // NULL bucket
     if (nullBucket.length > 0) {
       response.push({
         targetHeader,
@@ -542,17 +683,15 @@ function autoDistributeSecond(data, baseHeader, targetHeader, categoryCount, nes
       });
     }
 
-    // blanks bucket
     if (blankBucket.length > 0) {
       response.push({
         targetHeader,
-        targetRange: { start: '', end: '' },
+        targetRange: { start: 'blank', end: 'blank' },
         total: blankBucket.length,
         baseHeaderCounts: countBaseHeaderValues(blankBucket, baseHeader, allBaseValues),
       });
     }
 
-    // zero bucket
     if (zeroBucket.length > 0) {
       response.push({
         targetHeader,
@@ -562,39 +701,32 @@ function autoDistributeSecond(data, baseHeader, targetHeader, categoryCount, nes
       });
     }
 
-    // remaining buckets
-    const sortedRemaining = sortByType(remaining, targetHeader, 'number');
-    const buckets = splitIntoBuckets(sortedRemaining, categoryCount);
+    const adjustedCategoryCount = Math.max(1, categoryCount - (response.length > 0 ? 1 : 0));
+    
+    if (remaining.length > 0) {
+      const sortedRemaining = sortByType(remaining, targetHeader, 'number');
+      const buckets = splitIntoBuckets(sortedRemaining, adjustedCategoryCount);
 
-    for (const bucket of buckets) {
-      const range = extractRange(bucket, targetHeader);
-      response.push({
-        targetHeader,
-        targetRange: range,
-        total: bucket.length,
-        baseHeaderCounts: countBaseHeaderValues(bucket, baseHeader, allBaseValues),
-      });
+      for (const bucket of buckets) {
+        const range = extractRange(bucket, targetHeader);
+        response.push({
+          targetHeader,
+          targetRange: range,
+          total: bucket.length,
+          baseHeaderCounts: countBaseHeaderValues(bucket, baseHeader, allBaseValues),
+        });
+      }
     }
 
     return response;
   }
 
-  // fallback for non-numeric
+  // DATE DATA: Keep original behavior
   const sortedTarget = sortByType(workingData, targetHeader, detectedType);
   const buckets = splitIntoBuckets(sortedTarget, categoryCount);
 
   return buckets.map(bucket => {
-    let targetRange;
-    if (detectedType === 'date') {
-      targetRange = extractRange(bucket, targetHeader);
-    } else {
-      const labelSet = new Set();
-      for (const row of bucket) {
-        const val = row[targetHeader];
-        if (val != null) labelSet.add(String(val).trim());
-      }
-      targetRange = { labels: Array.from(labelSet) };
-    }
+    const targetRange = extractRange(bucket, targetHeader);
 
     return {
       targetHeader,

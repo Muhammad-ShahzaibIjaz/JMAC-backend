@@ -43,14 +43,98 @@ function countBaseHeaderValues(data, baseKey, allPossibleValues = []) {
   return counts;
 }
 
-function detectType(data, header) {
-  for (let i = 0; i < data.length; i++) {
-    const val = data[i][header];
-    if (val == null) continue;
-    if (!isNaN(+val)) return 'number';
-    if (!isNaN(Date.parse(val))) return 'date';
+function detectType(data, header, options = {}) {
+  const {
+    sampleSize = 50,
+    confidenceThreshold = 0.8
+  } = options;
+
+  // Early return for empty data
+  if (!data || !Array.isArray(data) || data.length === 0) {
+    return 'string';
   }
+
+  let numericCount = 0;
+  let dateCount = 0;
+  let totalChecked = 0;
+
+  const sample = data.slice(0, Math.min(sampleSize, data.length));
+
+  for (let i = 0; i < sample.length; i++) {
+    const row = sample[i];
+    if (!row || row[header] === undefined) continue;
+
+    const value = row[header];
+
+    if (value === null || value === undefined || value === '' || value === 'NULL' || value === 'null') {
+      continue;
+    }
+
+    totalChecked++;
+    const stringValue = String(value).trim();
+
+    if (isValidNumber(stringValue)) {
+      numericCount++;
+    }
+    else if (isValidDate(stringValue)) {
+      dateCount++;
+    }
+  }
+
+  if (totalChecked > 0) {
+    const numericRatio = numericCount / totalChecked;
+    const dateRatio = dateCount / totalChecked;
+
+    if (numericRatio >= confidenceThreshold) {
+      return 'number';
+    }
+    if (dateRatio >= confidenceThreshold) {
+      return 'date';
+    }
+  }
+
   return 'string';
+}
+
+function isValidNumber(value) {
+
+  if (value === '' || 
+      value === 'true' || 
+      value === 'false' || 
+      /[a-df-zA-DF-Z]/.test(value)) { 
+    return false;
+  }
+
+  const num = Number(value);
+  
+  return !isNaN(num) && 
+         isFinite(num) && 
+         (String(num) === value || String(num) === value.trim());
+}
+
+function isValidDate(value) {
+  if (value.length < 6 || !/[\d\/\-\.]/.test(value)) {
+    return false;
+  }
+
+  const datePatterns = [
+    /^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4}$/,
+    /^\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2}$/,
+    /^\d{1,2}[\/\-]\d{4}$/,
+    /^\d{4}[\/\-]\d{1,2}$/,
+    /^\d{1,2}\.\d{1,2}\.\d{4}$/
+  ];
+
+  const isDatePattern = datePatterns.some(pattern => pattern.test(value));
+  
+  if (!isDatePattern) {
+    return false;
+  }
+
+  const date = new Date(value);
+  return !isNaN(date.getTime()) && 
+         date instanceof Date && 
+         String(date) !== 'Invalid Date';
 }
 
 // Utility: Sort by type
@@ -75,6 +159,23 @@ function splitIntoBuckets(data, count) {
   }
   return buckets;
 }
+
+function splitByCount(data, bucketCount, targetHeader) {
+  const sorted = sortByType(data, targetHeader, 'number');
+  const total = sorted.length;
+  const perBucket = Math.floor(total / bucketCount);
+  const buckets = [];
+
+  let start = 0;
+  for (let i = 0; i < bucketCount; i++) {
+    const end = i === bucketCount - 1 ? total : start + perBucket;
+    buckets.push(sorted.slice(start, end));
+    start = end;
+  }
+
+  return buckets;
+}
+
 
 // Utility: Extract range
 function extractRange(bucket, header) {
@@ -102,7 +203,7 @@ function extractRange(bucket, header) {
     const val = bucket[i][header];
     if (val == null) continue;
 
-    let norm;
+     let norm;
     if (type === 'number') norm = +val;
     else if (type === 'date') norm = Date.parse(val);
     else norm = String(val).trim();
@@ -124,4 +225,4 @@ function looselyNormalize(value) {
   return String(value).trim().toLowerCase();
 }
 
-module.exports = { buildRanges, countBaseHeaderValues, getAllBaseHeaderValues, sortByType, detectType, splitIntoBuckets, extractRange, looselyNormalize };
+module.exports = { buildRanges, countBaseHeaderValues, getAllBaseHeaderValues, sortByType, detectType, splitIntoBuckets, extractRange, looselyNormalize, splitByCount };
