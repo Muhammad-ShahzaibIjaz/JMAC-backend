@@ -75,7 +75,14 @@ const categorizer = async (req, res) => {
       if (numericValues.length === 0) throw new Error("No valid numerical values found");
 
       const [minMax] = await SheetData.findAll({
-        where: { headerId: header.id, sheetId },
+        where: {
+            headerId: header.id,
+            sheetId,
+            value: {
+              [Op.ne]: '',
+              [Op.not]: null
+            } 
+          },
         attributes: [
           [literal('MIN(CAST("value" AS DOUBLE PRECISION))'), 'min'],
           [literal('MAX(CAST("value" AS DOUBLE PRECISION))'), 'max']
