@@ -486,22 +486,47 @@ function handleNestedHeaders(nestedHeaders, data) {
           combinedMatches.push(...matchingRows);
         }
       } else if (start != null && end != null) {
-        for (let i = 0; i < buckets.length; i++) {
-          const bucket = buckets[i];
-          const matchingRows = bucket.filter(row => {
-            const val = row[header];
-            if (val == null || val === '') return false;
-
-            if (detectedType === 'number') {
-              return +val >= +start && +val <= +end;
-            }
-            if (detectedType === 'date') {
-              return Date.parse(val) >= Date.parse(start) && Date.parse(val) <= Date.parse(end);
-            }
-            return false;
-          });
-          console.log(`Bucket ${i + 1} — Range match count: ${matchingRows.length}`);
-          combinedMatches.push(...matchingRows);
+        // Handle "Blanks" as a special case
+        if (start === "Blanks" && end === "Blanks") {
+          for (let i = 0; i < buckets.length; i++) {
+            const bucket = buckets[i];
+            const matchingRows = bucket.filter(row => {
+              const val = row[header];
+              return val === ''; // Match empty strings (blanks)
+            });
+            console.log(`Bucket ${i + 1} — Blanks match count: ${matchingRows.length}`);
+            combinedMatches.push(...matchingRows);
+          }
+        } 
+        // Handle "NULL" as a special case
+        else if (start === "NULL" && end === "NULL") {
+          for (let i = 0; i < buckets.length; i++) {
+            const bucket = buckets[i];
+            const matchingRows = bucket.filter(row => {
+              const val = row[header];
+              return val === null; // Match null values
+            });
+            console.log(`Bucket ${i + 1} — NULL match count: ${matchingRows.length}`);
+            combinedMatches.push(...matchingRows);
+          }
+        } else {
+          for (let i = 0; i < buckets.length; i++) {
+            const bucket = buckets[i];
+            const matchingRows = bucket.filter(row => {
+              const val = row[header];
+              if (val == null || val === '') return false;
+  
+              if (detectedType === 'number') {
+                return +val >= +start && +val <= +end;
+              }
+              if (detectedType === 'date') {
+                return Date.parse(val) >= Date.parse(start) && Date.parse(val) <= Date.parse(end);
+              }
+              return false;
+            });
+            console.log(`Bucket ${i + 1} — Range match count: ${matchingRows.length}`);
+            combinedMatches.push(...matchingRows);
+          }
         }
       }
     }
