@@ -217,7 +217,7 @@ function extractRange(bucket, header) {
 
 function looselyNormalize(value) {
   if (value === null || value === 'NULL' || value === 'null') return 'NULL';
-  if (String(value).trim() === '') return 'Blanks';
+  if (String(value).trim() === '') return 'blanks';
   const num = parseFloat(value);
   if (!isNaN(num)) return num.toFixed(4);
   const date = new Date(value);
