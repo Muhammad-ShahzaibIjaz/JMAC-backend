@@ -564,7 +564,6 @@ const desiredOrderType = [
   "text",
   "text",
   "text",
-  "text",
   "Y/N",
   "text",
   "text",

@@ -3257,6 +3257,22 @@ async function evaluateSheetDataWithConditions(req, res) {
     const evaluationHeaderIds = evaluationHeaders.map(h => h.id);
     const allHeaderIds = sortedHeaders.map(h => h.id);
 
+    // 🔹 Step 2: Get max row index
+    const [result] = await sequelize.query(`
+      SELECT MAX("rowIndex") AS "maxRow"
+      FROM "SheetData"
+      WHERE "sheetId" = :sheetId
+        AND "headerId" IN (
+          SELECT "id" FROM "Header" WHERE "templateId" = :templateId
+        )
+    `, {
+      replacements: { sheetId, templateId },
+      type: QueryTypes.SELECT
+    });
+
+    const maxRowIndex = result.maxRow ?? 0;
+
+
 
     // 🔹 Step 3: Fetch SheetData for all relevant headers
     const sheetDataForEvaluation = await SheetData.findAll({
@@ -3281,15 +3297,21 @@ async function evaluateSheetDataWithConditions(req, res) {
     const matchingRowIndices = [];
     const errorRowIndices = [];
 
-    for (const [rowIndex, rowData] of evalRows.entries()) {
+    // 🔹 Step 6: Evaluate conditions across all rows
+
+    for (let rowIndex = 0; rowIndex <= maxRowIndex; rowIndex++) {
+      const rowData = evalRows.get(rowIndex) || {};
       const filteredRowData = {};
+
       for (const name of headers) {
         const normalized = normalizeKey(name);
-        filteredRowData[normalized] = rowData[normalized];
+        filteredRowData[normalized] = rowData[normalized] ?? { value: null };
       }
-      const isValid = evaluateConditions(rowData, conditions);
+
+      const isValid = evaluateConditions(filteredRowData, conditions);
       if (isValid) matchingRowIndices.push(rowIndex);
     }
+
 
     // 🔹 Step 6: Apply pagination
     const start = (currentPage - 1) * pageSize;
@@ -3358,6 +3380,7 @@ async function evaluateSheetDataWithConditions(req, res) {
         currentPage,
         pageSize,
         totalRows: matchingRowIndices.length,
+        fullTotalRows: maxRowIndex,
         totalPages: Math.ceil(matchingRowIndices.length / pageSize)
       }
     });
