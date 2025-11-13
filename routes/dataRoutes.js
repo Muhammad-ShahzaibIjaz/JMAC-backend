@@ -28,6 +28,7 @@ router.post('/apply-conditional-rule', dataController.evaluateSheetDataAndAssign
 router.post('/status-values', dataController.getStatusValues);
 router.post('/header-values', dataController.getHeaderValues);
 router.put('/auto-fill-award', dataController.autoFillInternationalAwards);
+router.post('/acceptance-status-values', dataController.getAcceptanceStatusValues);
 
 
 module.exports = router;

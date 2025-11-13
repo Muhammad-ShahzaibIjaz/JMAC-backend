@@ -25,6 +25,11 @@ const PellRule = sequelize.define(
       type: DataTypes.TEXT,
       allowNull: false,
     },
+    acceptanceStatus: {
+        type: DataTypes.ARRAY(DataTypes.TEXT),
+        allowNull: false,
+        defaultValue: ['Accepted', 'Pending'],
+    },
     templateId: {
         type: DataTypes.UUID,
         allowNull: false,

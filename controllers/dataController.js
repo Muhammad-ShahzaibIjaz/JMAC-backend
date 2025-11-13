@@ -5264,7 +5264,7 @@ async function calculateAwardInfo(req, res) {
   }
 }
 
-async function evaluatePellRowsSmart({ templateId, sheetId, pellSource, criteria, targetHeader }) {
+async function evaluatePellRowsSmart({ templateId, sheetId, pellSource, criteria, targetHeader, acceptanceStatus }) {
   const transaction = await sequelize.transaction();
   try {
     const operationLog = await OperationLog.create({
@@ -5323,7 +5323,7 @@ async function evaluatePellRowsSmart({ templateId, sheetId, pellSource, criteria
         const pellValue = row[pellHeaders[i].id];
         const statusValue = row[statusHeaders[i].id];
 
-        if (matchCriteria(pellValue, criteria) && ['accepted', 'pending'].includes(statusValue.toLowerCase())) {
+        if (matchCriteria(pellValue, criteria) && acceptanceStatus.map(s => s.toLowerCase()).includes(statusValue.toLowerCase())) {
           isEligible = true;
           break;
         }
@@ -5373,11 +5373,11 @@ async function evaluatePellRowsSmart({ templateId, sheetId, pellSource, criteria
 
 async function calculatePellFlag(req, res) {
   try{
-    const { templateId, sheetId, pellSource, criteria, targetHeader } = req.body;
-    if (!templateId || !sheetId || !pellSource || !criteria || !targetHeader) {
-      return res.status(400).json({ message: 'Invalid input. templateId, sheetId, pellSource, criteria, and targetHeader are required.' });
+    const { templateId, sheetId, pellSource, criteria, targetHeader, acceptanceStatus } = req.body;
+    if (!templateId || !sheetId || !pellSource || !criteria || !targetHeader || !acceptanceStatus) {
+      return res.status(400).json({ message: 'Invalid input. templateId, sheetId, pellSource, criteria, targetHeader, and acceptanceStatus are required.' });
     }
-    const result = await evaluatePellRowsSmart({ templateId, sheetId, pellSource, criteria, targetHeader });
+    const result = await evaluatePellRowsSmart({ templateId, sheetId, pellSource, criteria, targetHeader, acceptanceStatus });
     return res.status(200).json({ message: 'Pell flag calculation completed.', details: result });
   } catch(error){
     console.error('Error in calculatePellFlag:', error);
@@ -5604,7 +5604,7 @@ async function getNullAwardRows(templateId, sheetId) {
   }
 }
 
-async function populateAward20Fields(templateId, targetHeaderId, sheetId, targetRows) {
+async function populateAward20Fields(templateId, targetHeaderId, sheetId, targetRows, awardStatusName) {
   console.log('Populating Awd_Amt20, Awd_Cd20, Awd_Status20, Awd_CR20...');
   const transaction = await sequelize.transaction();
   try {
@@ -5677,7 +5677,7 @@ async function populateAward20Fields(templateId, targetHeaderId, sheetId, target
       const entries = [
         { headerId: amt20Id, value: amtValue },
         { headerId: cd20Id, value: 'B:International' },
-        { headerId: status20Id, value: 'Accepted' },
+        { headerId: status20Id, value: awardStatusName },
         { headerId: cr20Id, value: 'IMUG' }
       ];
 
@@ -5721,10 +5721,10 @@ async function populateAward20Fields(templateId, targetHeaderId, sheetId, target
 
 
 async function autoFillInternationalAwards(req, res) {
-  const { templateId, sheetId, targetHeader } = req.body;
+  const { templateId, sheetId, targetHeader, awardStatusName } = req.body;
   try {
-    if (!templateId || !sheetId || !targetHeader) {
-      return res.status(400).json({ message: 'templateId, sheetId, and targetHeader are required.' });
+    if (!templateId || !sheetId || !targetHeader || !awardStatusName) {
+      return res.status(400).json({ message: 'templateId, sheetId, targetHeader, and awardStatusName are required.' });
     }
     const targetRows = await getNullAwardRows(templateId, sheetId);
     if (targetRows.length === 0) {
@@ -5735,11 +5735,56 @@ async function autoFillInternationalAwards(req, res) {
     if (!header) {
       return res.status(404).json({ message: `Header "${targetHeader}" not found for the given templateId.` });
     }
-    const result = await populateAward20Fields(templateId, header.id, sheetId, targetRows);
+    const result = await populateAward20Fields(templateId, header.id, sheetId, targetRows, awardStatusName);
     return res.status(200).json({ message: 'Auto-fill completed.', details: result });
   } catch (error) {
     console.error('Error in autoFillInternationalAwards:', error);
     return res.status(500).json({ message: 'Internal server error.', details: error.message });
+  }
+}
+
+
+async function getAcceptanceStatusValues(req, res) {
+  const { templateId, sheetId, targetHeader } = req.body;
+
+  try {
+    if (!templateId || !sheetId || !targetHeader) {
+      return res.status(400).json({ message: 'templateId, sheetId, and targetHeader are required.' });
+    }
+
+    const result = await SheetData.findAll({
+      attributes: ['value'],
+      include: [{
+        model: Header,
+        attributes: [],
+        where: { templateId, name: targetHeader },
+        required: true
+      }],
+      where: { sheetId },
+      raw: true
+    });
+
+    if (!result || result.length === 0) {
+      return res.status(200).json({ statusValues: [] });
+    }
+
+    // Allowed values (case-insensitive)
+    const allowedValues = new Set(['Accepted', 'Accept', 'Pending', 'A', 'P', 'accepted', 'accept', 'pending', 'a', 'p']);
+
+    // Deduplicate and filter
+    const filtered = Array.from(
+      new Set(
+        result
+          .map(item => item.value?.toString().trim())
+          .filter(val => val && allowedValues.has(val))
+      )
+    );
+
+    return res.status(200).json({ statusValues: filtered });
+
+  } catch (error) {
+    console.error('Error in getAcceptanceStatusValues:', error);
+    return res.status(500).json({ message: 'Internal server error.' });
   }
 }
 
@@ -5775,5 +5820,6 @@ module.exports = {
   getHeaderValues,
   FacilityZipFiller,
   extractHeaderValues,
-  autoFillInternationalAwards
+  autoFillInternationalAwards,
+  getAcceptanceStatusValues,
 };

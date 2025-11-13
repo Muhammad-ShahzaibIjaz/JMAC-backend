@@ -3,11 +3,11 @@ const { PellRule } = require('../models');
 
 
 const createPellRule = async (req, res) => {
-    const { name, pellSource, criteria, targetHeader, templateId } = req.body;
+    const { name, pellSource, criteria, targetHeader, templateId, acceptanceStatus } = req.body;
 
     try {
 
-        if (!name || !pellSource || !criteria || !targetHeader || !templateId) {
+        if (!name || !pellSource || !criteria || !targetHeader || !templateId || !acceptanceStatus) {
             return res.status(400).json({ error: 'All fields are required' });
         }
 
@@ -21,7 +21,8 @@ const createPellRule = async (req, res) => {
             pellSource,
             criteria,
             targetHeader,
-            templateId
+            templateId,
+            acceptanceStatus
         });
         res.status(201).json({id: newPellRule.id, pellName: name, pellSource: pellSource, criteria, targetHeader: targetHeader});
     } catch (error) {
