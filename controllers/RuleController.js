@@ -307,6 +307,26 @@ const createBulkRule = async (req, res) => {
   }
 }
 
+const updateBulkRule = async (req, res) => {
+  const { id } = req.params;
+  const { headerName, value, name, templateId } = req.body;
+  try {
+    const rule = await CalculationRule.findByPk(id);
+    if (!rule) {
+      return res.status(404).json({ error: "Bulk rule not found" });
+    }
+    rule.templateId = templateId;
+    rule.name = name;
+    rule.header = headerName;
+    rule.assignments = value;
+    await rule.save();
+    return res.status(200).json({ id: rule.id, name: rule.name, headerName: rule.header, assignment: rule.assignments });
+  } catch (error) {
+    console.error("Error updating bulk rule:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+
 const applyBulkRule = async (req, res) => {
   const { id } = req.query;
   const { sheetId } = req.body;
@@ -600,5 +620,6 @@ module.exports = {
   deletePopulationRule,
   updatePopulationRule,
   autoPopulationRule,
-  updateConditionalRule
+  updateConditionalRule,
+  updateBulkRule
 };

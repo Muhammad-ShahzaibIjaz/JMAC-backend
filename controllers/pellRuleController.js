@@ -31,6 +31,29 @@ const createPellRule = async (req, res) => {
     }
 };
 
+const updatePellRule = async (req, res) => {
+    const { pellId } = req.params;
+    const { name, pellSource, criteria, targetHeader, acceptanceStatus, templateId } = req.body;
+    try {
+        const pellRule = await PellRule.findByPk(pellId);
+        if (!pellRule) {
+            return res.status(404).json({ error: 'PellRule not found' });
+        }
+        pellRule.templateId = templateId || pellRule.templateId;
+        pellRule.name = name || pellRule.name;
+        pellRule.pellSource = pellSource || pellRule.pellSource;
+        pellRule.criteria = criteria || pellRule.criteria;
+        pellRule.targetHeader = targetHeader || pellRule.targetHeader;
+        pellRule.acceptanceStatus = acceptanceStatus || pellRule.acceptanceStatus;
+        await pellRule.save();
+        res.status(200).json(pellRule);
+    }
+    catch (error) {
+        console.error('Error updating PellRule:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+};
+
 
 const getPellRules = async (req, res) => {
     const { templateId } = req.query;
@@ -79,5 +102,6 @@ module.exports = {
     createPellRule,
     getPellRules,
     getPellRuleById,
-    deletePellRule
+    deletePellRule,
+    updatePellRule
 }
