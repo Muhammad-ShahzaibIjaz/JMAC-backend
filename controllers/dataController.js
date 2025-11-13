@@ -2455,7 +2455,7 @@ const scoreConversion = async (req, res) => {
 
     // Find comparison header if provided
     let sourceCompHeaderID = null;
-    if (sourceCompHeader !== "optional" || sourceCompHeader !== null) {
+    if (sourceCompHeader !== "optional" && sourceCompHeader !== null) {
       sourceCompHeaderID = await Header.findOne({
         where: { templateId, name: sourceCompHeader },
         transaction,
