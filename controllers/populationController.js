@@ -80,7 +80,8 @@ const categorizer = async (req, res) => {
             sheetId,
             value: {
               [Op.ne]: '',
-              [Op.not]: null
+              [Op.not]: null,
+              [Op.notIn]: ['NULL', 'null', 'blanks', 'Blanks'],
             } 
           },
         attributes: [
