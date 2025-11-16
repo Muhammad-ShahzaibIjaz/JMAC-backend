@@ -13,7 +13,7 @@ const categorizer = async (req, res) => {
   const transaction = await sequelize.transaction();
 
   try {
-    const { templateId, sheetId, targetHeader } = req.query;
+    const { templateId, sheetId, targetHeader, nestedHeaders=[] } = req.body;
 
     if (!templateId || !sheetId || !targetHeader) {
       await transaction.rollback();
@@ -21,7 +21,6 @@ const categorizer = async (req, res) => {
         error: "Missing required fields: templateId, sheetId, targetHeader are required",
       });
     }
-
     const header = await Header.findOne({
       where: { templateId, name: targetHeader },
       transaction,
@@ -32,13 +31,12 @@ const categorizer = async (req, res) => {
       return res.status(404).json({ error: "Target header not found" });
     }
 
+    const workingData = await getStructuredData(templateId, sheetId);
+    const filteredData = handleNestedHeaders(nestedHeaders, workingData);
     // Stream values for memory efficiency
-    const stream = await SheetData.findAll({
-      where: { headerId: header.id, sheetId },
-      attributes: ["value"],
-      raw: true,
-      transaction,
-    });
+    const stream = filteredData.map(row => ({
+      value: row[targetHeader]
+    }));
 
     const cleaned = [];
     const uniqueSet = new Set();
@@ -73,25 +71,27 @@ const categorizer = async (req, res) => {
     if (["numeric", "integer", "decimal"].includes(type)) {
       const numericValues = cleaned.map(Number).filter(v => !isNaN(v));
       if (numericValues.length === 0) throw new Error("No valid numerical values found");
+      const min = Math.min(...numericValues);
+      const max = Math.max(...numericValues);
 
-      const [minMax] = await SheetData.findAll({
-        where: {
-            headerId: header.id,
-            sheetId,
-            value: {
-              [Op.ne]: '',
-              [Op.not]: null,
-              [Op.notIn]: ['NULL', 'null', 'blanks', 'Blanks'],
-            } 
-          },
-        attributes: [
-          [literal('MIN(CAST("value" AS DOUBLE PRECISION))'), 'min'],
-          [literal('MAX(CAST("value" AS DOUBLE PRECISION))'), 'max']
-        ],
-        raw: true,
-        transaction
-      });
-      result = { type: "numeric", ranges : [{ start: Number(minMax.min), end: Number(minMax.max) }]  };
+      // const [minMax] = await SheetData.findAll({
+      //   where: {
+      //       headerId: header.id,
+      //       sheetId,
+      //       value: {
+      //         [Op.ne]: '',
+      //         [Op.not]: null,
+      //         [Op.notIn]: ['NULL', 'null', 'blanks', 'Blanks'],
+      //       } 
+      //     },
+      //   attributes: [
+      //     [literal('MIN(CAST("value" AS DOUBLE PRECISION))'), 'min'],
+      //     [literal('MAX(CAST("value" AS DOUBLE PRECISION))'), 'max']
+      //   ],
+      //   raw: true,
+      //   transaction
+      // });
+      result = { type: "numeric", ranges : [{ start: Number(min), end: Number(max) }]  };
 
     } else if (type === "Date") {
       const dateValues = cleaned.map(val => new Date(val)).filter(d => !isNaN(d));
@@ -461,7 +461,6 @@ function handleNestedHeaders(nestedHeaders, data) {
     }
 
     const buckets = splitIntoBuckets(sorted, bucketNumber || ranges.length);
-    console.log(`Buckets for ${header}:`, buckets.length);
 
     const labelBuckets = new Map();
     for (const bucket of buckets) {
@@ -476,14 +475,12 @@ function handleNestedHeaders(nestedHeaders, data) {
 
       if (labels?.length) {
         const labelSet = new Set(labels.map(l => looselyNormalize(l)));
-        console.log(`Label set for ${header}:`, labelSet);
 
         for (let i = 0; i < buckets.length; i++) {
           const bucket = buckets[i];
           const matchingRows = bucket.filter(row =>
             labelSet.has(looselyNormalize(row[header]))
           );
-          console.log(`Bucket ${i + 1} — Matching count: ${matchingRows.length}`);
           combinedMatches.push(...matchingRows);
         }
       } else if (start != null && end != null) {
@@ -495,7 +492,6 @@ function handleNestedHeaders(nestedHeaders, data) {
               const val = row[header];
               return val === ''; // Match empty strings (blanks)
             });
-            console.log(`Bucket ${i + 1} — Blanks match count: ${matchingRows.length}`);
             combinedMatches.push(...matchingRows);
           }
         } 
@@ -507,7 +503,6 @@ function handleNestedHeaders(nestedHeaders, data) {
               const val = row[header];
               return val === null; // Match null values
             });
-            console.log(`Bucket ${i + 1} — NULL match count: ${matchingRows.length}`);
             combinedMatches.push(...matchingRows);
           }
         } else {
@@ -525,7 +520,6 @@ function handleNestedHeaders(nestedHeaders, data) {
               }
               return false;
             });
-            console.log(`Bucket ${i + 1} — Range match count: ${matchingRows.length}`);
             combinedMatches.push(...matchingRows);
           }
         }
