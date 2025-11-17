@@ -1334,7 +1334,7 @@ async function bulkUpdates(headerId, value, templateId, sheetId) {
           id: uuidv4(),
           headerId: headerId,
           sheetId: sheetId,
-          rowIndex: i,
+          rowIndex: i + 1,
           value: value
         });
 
@@ -1343,7 +1343,7 @@ async function bulkUpdates(headerId, value, templateId, sheetId) {
           operationLogId: operationLog.id,
           headerId,
           sheetId,
-          rowIndex: i,
+          rowIndex: i + 1,
           originalValue: null,
           newValue: value
         });
@@ -1980,11 +1980,11 @@ async function applyCalculations(req, res) {
 
     for (const header of dbHeaders) {
       const existingRows = headerRowMap.get(header.id) || new Set();
-      for (let i = 0; i <= maxRow - 1; i++) {
+      for (let i = 0; i <= maxRow; i++) {
         if (!existingRows.has(i)) {
           sheetData.push({
             headerId: header.id,
-            rowIndex: i,
+            rowIndex: i + 1,
             value: ''
           });
         }
