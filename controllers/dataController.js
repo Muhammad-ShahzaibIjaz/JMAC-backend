@@ -126,116 +126,6 @@ function validateAndConvertValue(value, columnType, criticalityLevel) {
   }
 }
 
-// async function getHeadersWithValidatedData(req, res) {
-//   try {
-//     const { templateId, currentPage, pageSize } = req.query;
-
-//     if (!templateId) {
-//       return res.status(400).json({ error: 'templateId is required' });
-//     }
-//     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(templateId)) {
-//       return res.status(400).json({ error: 'templateId must be a valid UUID' });
-//     }
-//     const page = parseInt(currentPage);
-//     const size = parseInt(pageSize);
-//     if (isNaN(page) || page < 1) {
-//       return res.status(400).json({ error: 'currentPage must be a positive integer' });
-//     }
-//     if (isNaN(size) || size < 1) {
-//       return res.status(400).json({ error: 'pageSize must be a positive integer' });
-//     }
-
-//     const headers = await Header.findAll({
-//       where: { templateId },
-//       attributes: ['id', 'name', 'criticalityLevel', 'columnType'],
-//       order: [['createdAt', 'ASC']],
-//     });
-
-//     if (!headers || headers.length === 0) {
-//       return res.status(404).json({ error: `No headers found for templateId ${templateId}` });
-//     }
-
-//     const allSheetData = await SheetData.findAll({
-//       include: [{
-//         model: Header,
-//         where: { templateId },
-//         attributes: [],
-//       }],
-//       attributes: ['id', 'rowIndex', 'value', 'headerId'],
-//       order: [['rowIndex', 'ASC']],
-//     });
-
-//     const errorRows = new Set();
-//     const errorPages = new Set();
-//     const validatedDataByHeader = {};
-
-//     headers.forEach(header => {
-//       validatedDataByHeader[header.id] = [];
-//     });
-
-//     allSheetData.forEach(data => {
-//       const header = headers.find(h => h.id === data.headerId);
-//       if (!header) return;
-
-//       const { value, valid } = validateAndConvertValue(
-//         data.value,
-//         header.columnType,
-//         header.criticalityLevel
-//       );
-
-//       validatedDataByHeader[header.id].push({
-//         id: data.id,
-//         rowIndex: data.rowIndex,
-//         value,
-//         valid,
-//       });
-
-//       if (!valid) {
-//         errorRows.add(data.rowIndex);
-//         const pageWithError = Math.floor(data.rowIndex / size) + 1;
-//         errorPages.add(pageWithError);
-//       }
-//     });
-
-//     const offset = (page - 1) * size;
-//     const paginatedDataByHeader = {};
-
-//     headers.forEach(header => {
-//       const headerData = validatedDataByHeader[header.id];
-//       const paginatedData = headerData.filter(
-//         data => data.rowIndex >= offset && data.rowIndex < offset + size
-//       );
-//       paginatedDataByHeader[header.id] = paginatedData;
-//     });
-
-//     const responseHeaders = headers.map(header => ({
-//       id: header.id,
-//       name: header.name,
-//       criticalityLevel: header.criticalityLevel,
-//       columnType: header.columnType,
-//       data: paginatedDataByHeader[header.id],
-//     }));
-
-//     const totalRows = Math.max(...allSheetData.map(data => data.rowIndex), 0);
-//     const totalPages = Math.ceil(totalRows / size);
-
-//     res.status(200).json({
-//       headers: responseHeaders,
-//       totalErrorRows: errorRows.size,
-//       errorPages: Array.from(errorPages).sort((a, b) => a - b),
-//       pagination: {
-//         currentPage: page,
-//         pageSize: size,
-//         totalRows,
-//         totalPages,
-//       },
-//     });
-//   } catch (error) {
-//     console.error('Error retrieving headers with validated data:', error.message, error.stack);
-//     res.status(500).json({ error: 'Failed to retrieve data' });
-//   }
-// }
-
 function normalize(str) {
   return str.toLowerCase().replace(/[_\s]/g, '');
 }
@@ -1601,13 +1491,6 @@ function createStringComparisonEvaluator(math) {
         (match, fn, left, right) => {
           return `${fn}(${left}, ${right})`;
         });
-      // Replace == with strEq and != with strNeq for text comparisons
-      // expr = expr.replace(/(lower\(@?\w+\))\s*(==|!=)\s*('[^']*')/g, 
-      //   (match, left, op, right) => {
-      //     return op === '==' 
-      //       ? `strEq(${left}, ${right})` 
-      //       : `strNeq(${left}, ${right})`;
-      //   });
 
       expr = expr.replace(/(lower\(data\[['"][^'"]+['"]\]\))\s*(==|!=)\s*('[^']*')/g, 
         (match, left, op, right) => {
@@ -1616,13 +1499,6 @@ function createStringComparisonEvaluator(math) {
             : `strNeq(${left}, ${right})`;
         });
       
-      // expr = expr
-      //   .replace(/contains\((\w+)\s*,\s*('[^']*')\)/g, 'contains($1, $2)')
-      //   .replace(/not\(contains\((\w+)\s*,\s*('[^']*')\)\)/g, 'notContains($1, $2)')
-      //   .replace(/isEmpty\((\w+)\)/g, 'isEmpty($1)')
-      //   .replace(/not\(isEmpty\((\w+)\)\)/g, 'isNotEmpty($1)')
-      //   .replace(/startsWith\((\w+)\s*,\s*('[^']*')\)/g, 'startsWith($1, $2)')
-      //   .replace(/endsWith\((\w+)\s*,\s*('[^']*')\)/g, 'endsWith($1, $2)');
 
       expr = expr
         .replace(/contains\((data\[['"][^'"]+['"]\])\s*,\s*('[^']*')\)/g, 'contains($1, $2)')
@@ -1638,255 +1514,6 @@ function createStringComparisonEvaluator(math) {
 
 mathInstance.evaluate = createStringComparisonEvaluator(mathInstance);
 
-// async function applyCalculations(req, res) {
-//   const { templateId, sheetId, conditions, assignments, headers } = req.body;
-//   const transaction = await sequelize.transaction();
-//   let snapshots = [];
-//   try {
-
-//     const operationLog = await OperationLog.create({
-//       id: uuidv4(),
-//       templateId,
-//       sheetId,
-//       operationType: 'CALCULATION',
-//     }, { transaction });
-
-//     // Fetch headers
-//     const dbHeaders = await Header.findAll({
-//       where: { templateId, name: { [Op.in]: headers } },
-//       attributes: ['id', 'name', 'columnType'],
-//       transaction
-//     });
-//     const headerMap = {};
-//     dbHeaders.forEach(h => {
-//       headerMap[h.name] = { id: h.id, columnType: h.columnType || 'text' };
-//     });
-//     const processedConditions = conditions.map(cond => {
-
-//       // Step 1: Clean up outer quotes and escaped quotes
-//       let normalizedCond = cond
-//         .replace(/^"|"$/g, '')
-//         .replace(/\\"/g, '"')
-//         .replace(/"/g, "'");
-
-//       // First pass: Add @ prefix to all header references
-//       normalizedCond = cond.replace(/\b([a-zA-Z_]\w*)\b/g, (match, header) => {
-//         if (headerMap[header] && !match.startsWith('@')) {
-//           return `@${header}`;
-//         }
-//         return match;
-//       });
-
-//       // Second pass: Handle case-insensitive comparison for text columns
-//       normalizedCond = normalizedCond.replace(/@(\w+)\s*(==|!=)\s*('[^']*')/g, 
-//         (match, header, op, value) => {
-//           if (!headerMap[header]) {
-//             throw new Error(`Header ${header} not found in condition: ${cond}`);
-//           }
-//           const columnType = headerMap[header].columnType;
-//           if (['text', 'character', 'Y/N'].includes(columnType)) {
-//             const cleanValue = value.slice(1, -1);
-//             return `lower(@${header}) ${op} '${cleanValue.toLowerCase()}'`;
-//           }
-//           return match;
-//         });
-      
-//       return normalizedCond;
-//     });
-
-//     // Fetch SheetData
-//     const sheetData = await SheetData.findAll({
-//       where: { 
-//         headerId: { [Op.in]: dbHeaders.map(h => h.id) },
-//         sheetId, 
-//       },
-//       attributes: ['headerId', 'rowIndex', 'value'],
-//       transaction
-//     });
-//     const maxRowIndex = await SheetData.findOne({
-//       where: { sheetId },
-//       include: [{
-//         model: Header,
-//         where: { templateId },
-//         attributes: [],
-//       }],
-//       order: [['rowIndex', 'DESC']],
-//       attributes: ['rowIndex'],
-//       transaction,
-//     });
-//     const maxRow = maxRowIndex?.rowIndex ?? 0;
-
-//     const headerRowMap = new Map();
-
-//     for (const entry of sheetData) {
-//       if (!headerRowMap.has(entry.headerId)) {
-//         headerRowMap.set(entry.headerId, new Set());
-//       }
-//       headerRowMap.get(entry.headerId).add(entry.rowIndex);
-//     }
-
-//     for (const header of dbHeaders) {
-//       const existingRows = headerRowMap.get(header.id) || new Set();
-//       for (let i = 0; i <= maxRow; i++) {
-//         if (!existingRows.has(i)) {
-//           sheetData.push({
-//             headerId: header.id,
-//             rowIndex: i,
-//             value: ''
-//           });
-//         }
-//       }
-//     }
-
-
-//     const rows = {};
-//     sheetData.forEach(entry => {
-//       if (!rows[entry.rowIndex]) rows[entry.rowIndex] = {};
-//       const headerName = dbHeaders.find(h => h.id === entry.headerId)?.name;
-//       rows[entry.rowIndex][headerName] = entry.value;
-//     });
-
-//     // Store original values for comparison
-//     const originalValues = {};
-//     sheetData.forEach(entry => {
-//       const headerName = dbHeaders.find(h => h.id === entry.headerId)?.name;
-//       originalValues[`${headerName}-${entry.rowIndex}`] = entry.value;
-//     })
-
-//     // Apply rules
-//     let updatedRows = 0;
-//     const upserts = [];
-//     for (const [rowIndex, rowData] of Object.entries(rows)) {
-//       const scope = {};
-//       dbHeaders.forEach(h => {
-//         const value = rowData[h.name]?.trim();
-//         if (value === '' || value === 'null' || value === undefined) {
-//           scope[h.name] = null;
-//         } else if (h.columnType === 'integer') {
-//           const parsed = parseInt(value, 10);
-//           scope[h.name] = isNaN(parsed) ? null : parsed;
-//         } else if (h.columnType === 'decimal') {
-//           const parsed = parseFloat(value);
-//           scope[h.name] = isNaN(parsed) ? null : parsed;
-//         } else if (h.columnType === 'Date') {
-//           const parsed = new Date(value);
-//           scope[h.name] = isNaN(parsed.getTime()) ? null : parsed;
-//         } else if (h.columnType === 'Y/N') {
-//           const upperValue = value.toUpperCase();
-//           scope[h.name] = ['Y', 'N'].includes(upperValue) ? upperValue : null;
-//         } else {
-//           scope[h.name] = String(value); // text, character
-//         }
-//       });
-
-//       for (let i = 0; i < processedConditions.length; i++) {
-//         let condition = processedConditions[i].replace(/@(\w+)/g, '$1');
-//         const assignment = assignments[i];
-
-//         // Skip evaluation if critical scope values are null
-//         let skipCondition = false;
-//         const headersInCondition = condition.match(/\b(\w+)\b/g) || [];
-//         for (const header of headersInCondition) {
-//           if (scope[header] === null && headerMap[header]?.columnType === 'integer') {
-//             console.log(`Skipping condition ${i} for row ${rowIndex} due to null value in ${header}`);
-//             skipCondition = true;
-//             break;
-//           }
-//         }
-//         if (skipCondition) continue;
-
-//         try {
-//           const conditionResult = mathInstance.evaluate(condition, scope);
-//           if (conditionResult) {
-//             let targetValue;
-//             if (assignment.value.match(/^'[^']*'$/)) {
-//               targetValue = assignment.value.slice(1, -1);
-//             } else if (assignment.value === 'true' || assignment.value === 'false') {
-//               targetValue = assignment.value === 'true';
-//             } else if (!isNaN(assignment.value)) {
-//               targetValue = parseFloat(assignment.value);
-//             } else {
-//               targetValue = mathInstance.evaluate(
-//                 assignment.value.replace(/(?:@)?(\w+)/g, (match, header) => {
-//                   if (headerMap[header]) {
-//                     const value = scope[header];
-//                     if (value === null) return 'null';
-//                     return ['integer', 'decimal'].includes(headerMap[header].columnType)
-//                       ? value
-//                       : `'${String(value)}'`;
-//                   }
-//                   return match;
-//                 }),
-//                 scope
-//               );
-//             }
-//             const targetType = headerMap[assignment.header].columnType;
-//             if (targetValue !== null && targetValue !== undefined) {
-//               if (targetType === 'integer') {
-//                 targetValue = Math.round(Number(targetValue));
-//               } else if (targetType === 'decimal') {
-//                 targetValue = Number(targetValue);
-//               } else if (targetType === 'Y/N') {
-//                 targetValue = String(targetValue).toUpperCase() === 'Y' || targetValue === true ? 'Y' : 'N';
-//               } else if (targetType === 'Date') {
-//                 targetValue = new Date(targetValue).toISOString();
-//               } else {
-//                 targetValue = String(targetValue);
-//               }
-
-
-//               // Only create snapshot if value is changing
-//               const originalValue = originalValues[`${assignment.header}-${rowIndex}`];
-//               if(String(originalValue) !== String(targetValue)) {
-//                 snapshots.push({
-//                   id: uuidv4(),
-//                   operationLogId: operationLog.id,
-//                   headerId: headerMap[assignment.header].id,
-//                   sheetId,
-//                   rowIndex: parseInt(rowIndex),
-//                   originalValue: String(originalValue),
-//                   newValue: String(targetValue)
-//                 });
-//               }
-
-//               upserts.push({
-//                 headerId: headerMap[assignment.header].id,
-//                 sheetId,
-//                 rowIndex: parseInt(rowIndex),
-//                 value: String(targetValue),
-//               });
-//               updatedRows++;
-//               break;
-//             }
-//           }
-//         } catch (condError) {
-//           console.error(`Error evaluating condition ${i} for row ${rowIndex}:`, condError);
-//         }
-//       }
-//     }
-
-//     // Perform batch upsert
-//     if (upserts.length > 0) {
-      
-//       await SheetDataSnapshot.bulkCreate(snapshots, { transaction });
-
-//       for (const upsert of upserts) {
-//         await SheetData.upsert(upsert, { transaction });
-//       }
-//     }
-
-//     await transaction.commit();
-
-//     return res.status(200).json({
-//       message: 'Rules applied successfully',
-//       updatedRows,
-//     });
-//   } catch (error) {
-//     await transaction.rollback();
-//     console.error('Error in applyCalculations:', error);
-//     return res.status(500).json({ error: `Server error: ${error.message}` });
-//   }
-// }
 
 async function applyCalculations(req, res) {
   const { templateId, sheetId, conditions, assignments, headers } = req.body;
@@ -3301,7 +2928,7 @@ async function evaluateSheetDataWithConditions(req, res) {
 
     // 🔹 Step 6: Evaluate conditions across all rows
 
-    for (let rowIndex = 0; rowIndex <= maxRowIndex; rowIndex++) {
+    for (let rowIndex = 1; rowIndex <= maxRowIndex; rowIndex++) {
       const rowData = evalRows.get(rowIndex) || {};
       const filteredRowData = {};
 
@@ -3456,7 +3083,7 @@ async function evaluateSheetDataAndAssign(req, res) {
     // 🔹 Step 5: Evaluate conditions
     const matchingRowIndices = [];
 
-    for (let rowIndex = 0; rowIndex <= maxRowIndex; rowIndex++) {
+    for (let rowIndex = 1; rowIndex <= maxRowIndex; rowIndex++) {
       const rowData = evalRows.get(rowIndex) || {};
 
       const filteredRowData = {};
