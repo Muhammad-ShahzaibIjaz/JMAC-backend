@@ -3460,7 +3460,7 @@ async function evaluateSheetDataAndAssign(req, res) {
       const filteredRowData = {};
       for (const name of headers) {
         const normalized = normalizeKey(name);
-        filteredRowData[normalized] = rowData[normalized] ?? { value: null };
+        filteredRowData[normalized] = rowData[normalized] ?? { value: '' };
       }
 
       const isValid = evaluateConditions(filteredRowData, conditions);
