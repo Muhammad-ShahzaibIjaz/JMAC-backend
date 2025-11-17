@@ -30,6 +30,7 @@ const referencesRoutes = require("./routes/crossReferenceRoutes");
 const sheetRoutes = require("./routes/sheetRoute");
 const pellRoutes = require("./routes/pellRoutes");
 const populationStatusRoutes = require("./routes/PopulationStatusRoutes");
+const treeRoutes = require("./routes/treeRoutes");
 
 
 
@@ -48,5 +49,6 @@ app.use("/api", referencesRoutes);
 app.use("/api", sheetRoutes);
 app.use("/api", pellRoutes);
 app.use("/api", populationStatusRoutes);
+app.use("/api", treeRoutes);
 
 module.exports = app;

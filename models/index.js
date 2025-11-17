@@ -17,6 +17,7 @@ const ConditionalRule = require('./ConditionalRule');
 const PopulationRule = require('./PopulationRule');
 const PopulationStatus = require('./PopulationStatus');
 const PopulationSubmission = require('./PopulationSubmission');
+const Tree = require('./Tree');
 const sequelize = require('../config/database');
 
 // Define associations
@@ -52,6 +53,9 @@ PopulationStatus.belongsTo(Template, { foreignKey: 'templateId' });
 
 Template.hasMany(PopulationSubmission, { foreignKey: 'templateId', onDelete: 'CASCADE' });
 PopulationSubmission.belongsTo(Template, { foreignKey: 'templateId' });
+
+Template.hasMany(Tree, { foreignKey: 'templateId', onDelete: 'CASCADE' });
+Tree.belongsTo(Template, { foreignKey: 'templateId' });
 
 Template.hasMany(MappingTemplate, { foreignKey: 'templateId', onDelete: 'CASCADE' });
 MappingTemplate.belongsTo(Template, { foreignKey: 'templateId' });
@@ -98,5 +102,6 @@ module.exports = {
   ConditionalRule,
   PopulationRule,
   PopulationStatus,
-  PopulationSubmission
+  PopulationSubmission,
+  Tree
 };
