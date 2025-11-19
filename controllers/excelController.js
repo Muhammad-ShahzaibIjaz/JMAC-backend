@@ -736,7 +736,7 @@ async function saveFileAndDataOptimized(processedFiles, templateId, mappingTempl
     }
   }
   if (bulkRows.length !== 0) {
-    await SheetData.bulkCreate(bulkRows, { transaction });
+    await SheetData.bulkCreate(bulkRows, { transaction, updateOnDuplicate: ["value", "updatedAt"] });
   }
   return { success: true };
 }
