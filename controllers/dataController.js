@@ -12,7 +12,7 @@ const math = require('mathjs');
 const { OperationLog, SheetDataSnapshot } = require('../models');
 const { convertScore } = require('../services/conversion');
 const { getCipTitle } = require('../services/cipService');
-const { desiredOrder, requiredHeadersName, awardTypePatterns } = require('../utils/headerOrderList');
+const { desiredOrder, requiredHeadersName, awardTypePatterns, ynFlags } = require('../utils/headerOrderList');
 const { buildZipCountyMap } = require('../services/countyService');
 const { calculateNACUBODiscountRate, calculateNetCharges, calculateGap, calculateNeedMet, calculateTotalDiscountRate, calculateNetTuition, calculateNeed, matchCriteria, calculateTotalNeedMet, calculateTotalDirectCost, calculateTotalInstitutionalMeritGift } = require('../utils/calculationHelper');
 const { evaluateConditions } = require('../services/evaluation');
@@ -779,6 +779,217 @@ async function getTemplateDataWithExcel(req, res) {
   } catch (error) {
     console.error('Error generating template data with Excel:', error.message, error.stack);
     res.status(500).json({ error: 'Failed to generate Excel file' });
+  }
+}
+
+
+async function exportDataWithConditions(req, res) {
+  const { templateId, sheetId, templateName, conditions = [], conditionHeaders = [], currentPage = 1, pageSize = 10000 } = req.body;
+  
+  try {
+    if (!templateId || !sheetId || !templateName) {
+      return res.status(400).json({ error: 'templateId, sheetId, and templateName are required' });
+    }
+
+    // 🔹 Step 1: Fetch headers from DB
+    const allHeaders = await Header.findAll({
+      where: { templateId },
+      raw: true,
+    });
+
+    if (allHeaders.length === 0) {
+      return res.status(404).json({ error: 'No headers found for the template' });
+    }
+
+    const sortedHeaders = sortHeadersFlexibleMatch(allHeaders);
+    const allHeaderIds = sortedHeaders.map(h => h.id);
+
+    // 🔹 Step 2: Get max row index
+    const [result] = await sequelize.query(`
+      SELECT MAX("rowIndex") AS "maxRow"
+      FROM "SheetData"
+      WHERE "sheetId" = :sheetId
+        AND "headerId" IN (
+          SELECT "id" FROM "Header" WHERE "templateId" = :templateId
+        )
+    `, {
+      replacements: { sheetId, templateId },
+      type: QueryTypes.SELECT
+    });
+
+    const maxRowIndex = result.maxRow ?? 0;
+
+    // 🔹 Step 3: If conditions provided, evaluate them to filter rows
+    let matchingRowIndices = [];
+    let errorRowIndices = [];
+
+    if (conditionHeaders.length > 0) {
+      // Fetch evaluation headers (only those used in conditions)
+      const evaluationHeaders = allHeaders.filter(h => conditionHeaders.includes(h.name));
+      const evaluationHeaderIds = evaluationHeaders.map(h => h.id);
+
+      // Fetch SheetData for condition evaluation
+      const sheetDataForEvaluation = await SheetData.findAll({
+        where: {
+          sheetId,
+          headerId: { [Op.in]: evaluationHeaderIds }
+        },
+        raw: true,
+      });
+
+      // Organize data row-wise for condition evaluation
+      const evalRows = new Map();
+      sheetDataForEvaluation.forEach(entry => {
+        const header = evaluationHeaders.find(h => h.id === entry.headerId);
+        const normalizedName = normalizeKey(header.name);
+        const row = evalRows.get(entry.rowIndex) || {};
+        row[normalizedName] = { value: entry.value, id: entry.id };
+        evalRows.set(entry.rowIndex, row);
+      });
+
+      // Evaluate conditions across all rows
+      for (let rowIndex = 1; rowIndex <= maxRowIndex; rowIndex++) {
+        const rowData = evalRows.get(rowIndex) || {};
+        const filteredRowData = {};
+
+        for (const name of conditionHeaders) {
+          const normalized = normalizeKey(name);
+          filteredRowData[normalized] = rowData[normalized] ?? { value: null };
+        }
+
+        try {
+          const isValid = evaluateConditions(filteredRowData, conditions);
+          if (isValid) matchingRowIndices.push(rowIndex);
+        } catch (error) {
+          errorRowIndices.push(rowIndex);
+        }
+      }
+    } else {
+      // If no conditions, include all rows
+      for (let rowIndex = 1; rowIndex <= maxRowIndex; rowIndex++) {
+        matchingRowIndices.push(rowIndex);
+      }
+    }
+
+    // 🔹 Step 4: Fetch complete data ONLY for matching rows
+    const sheetDataForExport = await SheetData.findAll({
+      where: {
+        sheetId,
+        headerId: { [Op.in]: allHeaderIds },
+        rowIndex: { [Op.in]: matchingRowIndices },
+      },
+      raw: true,
+    });
+
+    // 🔹 Step 5: Organize data for Excel generation - CRITICAL CHANGES HERE
+    const headerMap = new Map(sortedHeaders.map(h => [h.id, h]));
+    
+    // NEW: Create a clean rowBuckets with ONLY matching rows and sequential indexing
+    const sequentialRowBuckets = new Map();
+    const errorRows = new Map();
+
+    // Sort matching indices to maintain order
+    matchingRowIndices.sort((a, b) => a - b);
+
+    // Create sequential mapping: original rowIndex -> sequential row number
+    const rowIndexMapping = new Map();
+    matchingRowIndices.forEach((originalRowIndex, index) => {
+      rowIndexMapping.set(originalRowIndex, index + 1);
+    });
+
+    // Process data and organize by SEQUENTIAL row numbers
+    for (const data of sheetDataForExport) {
+      const header = headerMap.get(data.headerId);
+      if (!header) continue;
+
+      const { value, valid } = validateAndConvertValue(
+        data.value,
+        header.columnType,
+        header.criticalityLevel
+      );
+
+      // Get the sequential row number for this original rowIndex
+      const sequentialRowNumber = rowIndexMapping.get(data.rowIndex);
+      
+      // Add to sequential row buckets
+      if (!sequentialRowBuckets.has(sequentialRowNumber)) {
+        sequentialRowBuckets.set(sequentialRowNumber, new Map());
+      }
+      sequentialRowBuckets.get(sequentialRowNumber).set(data.headerId, { value, valid });
+
+      // Track error rows (using sequential row numbers)
+      if (!valid) {
+        if (!errorRows.has(sequentialRowNumber)) {
+          errorRows.set(sequentialRowNumber, []);
+        }
+        errorRows.get(sequentialRowNumber).push(header.name);
+      }
+    }
+
+    // 🔹 Step 6: Prepare data for existing generateExcelFile function
+    // We need to create the structure that generateExcelFile expects
+    const validatedDataByHeader = new Map();
+    sortedHeaders.forEach(header => {
+      validatedDataByHeader.set(header.id, []);
+    });
+
+    // Fill validatedDataByHeader with sequential row data
+    for (const [sequentialRowNumber, rowData] of sequentialRowBuckets) {
+      sortedHeaders.forEach(header => {
+        const cellData = rowData.get(header.id);
+        validatedDataByHeader.get(header.id).push({
+          id: `${header.id}-${sequentialRowNumber}`, // Create synthetic ID
+          rowIndex: sequentialRowNumber, // Use sequential row number
+          value: cellData?.value ?? '',
+          valid: cellData?.valid ?? true
+        });
+      });
+    }
+
+    // 🔹 Step 7: Prepare response headers structure
+    const responseHeaders = sortedHeaders.map(header => ({
+      id: header.id,
+      name: header.name,
+      criticalityLevel: header.criticalityLevel,
+      columnType: header.columnType,
+      data: validatedDataByHeader.get(header.id),
+    }));
+
+    // 🔹 Step 8: Generate Excel file using EXISTING function
+    const totalErrorRows = errorRows.size;
+    const filePath = await generateExcelFile({
+      headers: responseHeaders,
+      maxRowIndex: matchingRowIndices.length, // This is important - use filtered count
+      totalErrorRows,
+      errorRows,
+      rowBuckets: sequentialRowBuckets, // Pass the sequential row buckets
+      templateName
+    });
+
+    // 🔹 Step 9: Send file as download
+    res.download(filePath, `${templateName}_filtered_data.xlsx`, err => {
+      if (err) {
+        console.error('Download failed:', err);
+        res.status(500).json({ error: 'Failed to send file' });
+      } else {
+        console.log('File sent successfully.');
+        // Clean up temporary file
+        fs.unlink(filePath, unlinkErr => {
+          if (unlinkErr) {
+            console.error('Failed to delete file:', unlinkErr);
+          } else {
+            console.log('File deleted from disk.');
+          }
+        });
+      }
+    });
+
+  } catch (error) {
+    console.error('Error in exportDataWithConditions:', error);
+    res.status(500).json({
+      error: 'Internal server error',
+      details: error.message,
+    });
   }
 }
 
@@ -2084,7 +2295,7 @@ const scoreConversion = async (req, res) => {
 
     // Find comparison header if provided
     let sourceCompHeaderID = null;
-    if (sourceCompHeader !== "optional" && sourceCompHeader !== null) {
+    if (sourceCompHeader !== "optional" && sourceCompHeader !== null && sourceCompHeader !== "") {
       sourceCompHeaderID = await Header.findOne({
         where: { templateId, name: sourceCompHeader },
         transaction,
@@ -2099,7 +2310,6 @@ const scoreConversion = async (req, res) => {
       await transaction.rollback();
       return res.status(404).json({ error: 'One or more headers not found' });
     }
-
 
     // Get all relevant sheet data
     const headerIds = [sourceHeaderID.id, targetHeaderID.id];
@@ -2140,97 +2350,118 @@ const scoreConversion = async (req, res) => {
     const skippedRows = [];
     const errors = [];
 
-    // Process rows for conversion
+    // Process rows for conversion - NEW LOGIC
     for (const rowIndex in rows) {
       const row = rows[rowIndex];
       const sourceValueStr = row.sourceValue;
+      const compValueStr = row.compValue;
       
-      // Skip if source value is empty or not a number
-      if (!sourceValueStr || sourceValueStr.trim() === '') {
-        skippedRows.push(parseInt(rowIndex));
-        continue;
-      }
-
-      // Parse the string value to number
-      let sourceValue = parseFloat(sourceValueStr);
-      if (isNaN(sourceValue)) {
-        errors.push({
-          rowIndex: parseInt(rowIndex),
-          error: `Invalid number format: ${sourceValueStr}`
-        });
-        continue;
-      }
-
-      if (sourceCompHeader && row.compValue) {
-        const compValue = parseFloat(row.compValue);
-        if (isNaN(compValue)) {
+      // NEW: Handle cases where source value might be empty but comp value exists
+      let finalSourceValue = null;
+      
+      // Case 1: Both source and comp values exist
+      if (sourceValueStr && sourceValueStr.trim() !== '') {
+        const sourceValue = parseFloat(sourceValueStr);
+        if (isNaN(sourceValue)) {
           errors.push({
             rowIndex: parseInt(rowIndex),
-            error: `Invalid number format in comparison: ${row.compValue}`
+            error: `Invalid number format in source: ${sourceValueStr}`
           });
           continue;
         }
-        sourceValue = Math.max(sourceValue, compValue);
-      }
+        
+        // Only convert if source value meets minimum requirement (e.g., 9 for ACT)
+        if (sourceValue >= 9) {
+          try {
+            const conversionResult = convertScore(subject, testType, sourceValue);
+            
+            if (conversionResult && conversionResult.error) {
+              errors.push({
+                rowIndex: parseInt(rowIndex),
+                error: conversionResult.error
+              });
+              continue;
+            }
 
-      // Check if the parsed number meets minimum requirements
-      if (sourceValue < 9) {
+            if (conversionResult && conversionResult.single !== undefined) {
+              finalSourceValue = conversionResult.single;
+            }
+          } catch (error) {
+            errors.push({
+              rowIndex: parseInt(rowIndex),
+              error: `Conversion failed: ${error.message}`
+            });
+            continue;
+          }
+        }
+      }
+      
+      // Case 2: No valid converted value from source, but comp value exists
+      if (finalSourceValue === null && compValueStr && compValueStr.trim() !== '') {
+        const compValue = parseFloat(compValueStr);
+        if (isNaN(compValue)) {
+          errors.push({
+            rowIndex: parseInt(rowIndex),
+            error: `Invalid number format in comparison: ${compValueStr}`
+          });
+          continue;
+        }
+        finalSourceValue = compValue;
+      }
+      
+      // Case 3: No valid value at all
+      if (finalSourceValue === null) {
         skippedRows.push(parseInt(rowIndex));
         continue;
+      }
+
+      // NEW: Compare converted value with comp value and take the higher one
+      let finalTargetValue = finalSourceValue;
+      
+      if (compValueStr && compValueStr.trim() !== '') {
+        const compValue = parseFloat(compValueStr);
+        if (!isNaN(compValue)) {
+          finalTargetValue = Math.max(finalSourceValue, compValue);
+        }
       }
 
       validRows.push({
         rowIndex: parseInt(rowIndex),
-        sourceValue: sourceValue,
-        originalValue: originalValues.get(parseInt(rowIndex)) || null
+        finalTargetValue: finalTargetValue,
+        originalValue: originalValues.get(parseInt(rowIndex)) || null,
+        sourceConverted: finalSourceValue,
+        compValueUsed: compValueStr && !isNaN(parseFloat(compValueStr)) ? parseFloat(compValueStr) : null
       });
     }
 
     const updates = [];
     const snapshots = [];
 
-    // Perform conversions
+    // Perform updates
     for (const row of validRows) {
       try {
-        const conversionResult = convertScore(subject, testType, row.sourceValue);
-        
-        if (conversionResult && conversionResult.error) {
-          errors.push({
+        const newTargetValue = String(row.finalTargetValue);
+        const originalTargetValue = row.originalValue ? String(row.originalValue) : null;
+
+        // Only update if value has changed
+        if (newTargetValue !== originalTargetValue) {
+          updates.push({
+            id: uuidv4(),
+            headerId: targetHeaderID.id,
+            sheetId,
             rowIndex: row.rowIndex,
-            error: conversionResult.error
+            value: newTargetValue,
           });
-          continue;
-        }
 
-        if (conversionResult && conversionResult.single !== undefined) {
-          const newTargetValue = String(conversionResult.single);
-          const originalTargetValue = row.originalValue ? String(row.originalValue) : null;
-
-          // Only update if value has changed
-          if (newTargetValue !== originalTargetValue) {
-            updates.push({
-              id: uuidv4(),
-              headerId: targetHeaderID.id,
-              sheetId,
-              rowIndex: row.rowIndex,
-              value: newTargetValue,
-            });
-
-            snapshots.push({
-              id: uuidv4(),
-              operationLogId: operationLog.id,
-              headerId: targetHeaderID.id,
-              sheetId,
-              rowIndex: row.rowIndex,
-              originalValue: originalTargetValue,
-              newValue: newTargetValue,
-              changeType: originalTargetValue ? 'UPDATE' : 'INSERT'
-            });
-          }
-        } else {
-          errors.push({
+          snapshots.push({
+            id: uuidv4(),
+            operationLogId: operationLog.id,
+            headerId: targetHeaderID.id,
+            sheetId,
             rowIndex: row.rowIndex,
-            error: 'No conversion result returned'
+            originalValue: originalTargetValue,
+            newValue: newTargetValue,
+            changeType: originalTargetValue ? 'UPDATE' : 'INSERT',
           });
         }
       } catch (error) {
@@ -2255,6 +2486,11 @@ const scoreConversion = async (req, res) => {
     
     return res.status(200).json({ 
       message: 'Score Conversion Done',
+      stats: {
+        updated: updates.length,
+        skipped: skippedRows.length,
+        errors: errors.length
+      }
     });
 
   } catch(error) {
@@ -5417,6 +5653,175 @@ async function getAcceptanceStatusValues(req, res) {
   }
 }
 
+async function bulkUpdateYesNo(req, res) {
+  const { templateId, sheetId } = req.body;
+  const transaction = await sequelize.transaction();
+  try {
+    if (!templateId || !sheetId) {
+      return res.status(400).json({ error: 'templateId and sheetId are required' });
+    }
+
+    // 🔹 Step 1: Fetch headers from DB
+    const allHeaders = await Header.findAll({
+      where: { templateId },
+      raw: true,
+    });
+
+    if (allHeaders.length === 0) {
+      return res.status(404).json({ error: 'No headers found for the template' });
+    }
+
+    // Filter only requested headers that exist in DB
+    const evaluationHeaders = allHeaders.filter(h => ynFlags.includes(h.name));
+    const evaluationHeaderIds = evaluationHeaders.map(h => h.id);
+
+    if (evaluationHeaders.length === 0) {
+      await transaction.rollback();
+      return res.status(404).json({ error: 'No matching headers found for Yes/No flags' });
+    }
+
+    // 🔹 Step 2: Get max row index
+    const [result] = await sequelize.query(`
+      SELECT MAX("rowIndex") AS "maxRow"
+      FROM "SheetData"
+      WHERE "sheetId" = :sheetId
+        AND "headerId" IN (
+          SELECT "id" FROM "Header" WHERE "templateId" = :templateId
+        )
+    `, {
+      replacements: { sheetId, templateId },
+      type: QueryTypes.SELECT
+    });
+
+    const maxRowIndex = result.maxRow ?? 0;
+
+    // 🔹 Step 3: Fetch EXISTING data for relevant headers
+    const sheetData = await SheetData.findAll({
+      where: {
+        sheetId,
+        headerId: { [Op.in]: evaluationHeaderIds }
+      },
+      raw: true,
+    });
+
+    // 🔹 Step 4: Organize row-wise (ONLY EXISTING DATA)
+    const existingDataMap = new Map(); // rowIndex -> { headerName -> { value, id, headerId } }
+    sheetData.forEach(entry => {
+      const header = evaluationHeaders.find(h => h.id === entry.headerId);
+      const normalizedName = normalizeKey(header.name);
+      const row = existingDataMap.get(entry.rowIndex) || {};
+      row[normalizedName] = { 
+        value: entry.value, 
+        id: entry.id, 
+        headerId: entry.headerId,
+        exists: true 
+      };
+      existingDataMap.set(entry.rowIndex, row);
+    });
+
+    // 🔹 Step 5: Create operation log
+    const operationLog = await OperationLog.create({
+      templateId,
+      sheetId,
+      operationType: 'BULK_UPDATE',
+    }, { transaction });
+
+    const updates = [];
+    const inserts = [];
+    const snapshots = [];
+
+    // 🔹 Step 6: Iterate ALL rows (1 to maxRowIndex) and handle both existing and missing data
+    for (let rowIndex = 1; rowIndex <= maxRowIndex; rowIndex++) {
+      const rowData = existingDataMap.get(rowIndex) || {};
+
+      for (const headerObj of evaluationHeaders) {
+        const normalized = normalizeKey(headerObj.name);
+        const existingEntry = rowData[normalized];
+        
+        let currentValue = existingEntry?.value ?? null;
+        const newValue = (!currentValue || (currentValue !== "Yes" && currentValue !== "No")) ? "No" : currentValue;
+
+        // Skip if value is already correct
+        if (currentValue === newValue) continue;
+
+        // Prepare snapshot
+        snapshots.push({
+          operationLogId: operationLog.id,
+          headerId: headerObj.id,
+          sheetId,
+          rowIndex,
+          originalValue: currentValue,
+          newValue,
+          changeType: existingEntry ? 'UPDATE' : 'INSERT',
+        });
+
+        // Prepare data for bulk operation
+        if (existingEntry) {
+          // UPDATE existing record
+          updates.push({
+            id: existingEntry.id,
+            value: newValue
+          });
+        } else {
+          // INSERT new record
+          inserts.push({
+            id: uuidv4(), // Make sure to import uuidv4
+            headerId: headerObj.id,
+            sheetId,
+            rowIndex,
+            value: newValue
+          });
+        }
+      }
+    }
+
+    // 🔹 Step 7: Execute all database operations
+    if (updates.length > 0) {
+      // Bulk update existing records
+      await Promise.all(
+        updates.map(update =>
+          SheetData.update(
+            { value: update.value },
+            {
+              where: { id: update.id },
+              transaction
+            }
+          )
+        )
+      );
+    }
+
+    if (inserts.length > 0) {
+      // Bulk insert new records
+      await SheetData.bulkCreate(inserts, { transaction, updateOnDuplicate: ["value", "updatedAt"] });
+    }
+
+    if (snapshots.length > 0) {
+      // Bulk insert snapshots
+      await SheetDataSnapshot.bulkCreate(snapshots, { transaction });
+    }
+
+    await transaction.commit();
+    
+    return res.status(200).json({
+      message: 'Bulk update completed successfully',
+      stats: {
+        updated: updates.length,
+        inserted: inserts.length,
+        totalProcessed: maxRowIndex
+      }
+    });
+
+  } catch (error) {
+    await transaction.rollback();
+    console.error('Error in bulkUpdateYesNo:', error);
+    res.status(500).json({
+      error: 'Internal server error',
+      details: error.message,
+    });
+  }
+}
+
 module.exports = {
   deleteSheetData, 
   getMatrixPop, 
@@ -5451,4 +5856,6 @@ module.exports = {
   extractHeaderValues,
   autoFillInternationalAwards,
   getAcceptanceStatusValues,
+  exportDataWithConditions,
+  bulkUpdateYesNo
 };

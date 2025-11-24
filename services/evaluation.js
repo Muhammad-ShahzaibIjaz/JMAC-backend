@@ -12,6 +12,12 @@ function evaluateConditions(rowData, conditionBlock) {
       const val2 = getValue(cond.field2);
       return val1 === val2;
     }
+    if (cond.operator === 'isNotEqualTo') {
+      const val1 = getValue(cond.field1);
+      const val2 = getValue(cond.field2);
+      if ((val1 === null || val1 === '' || val1 === "NULL" || val1 === "null") && (val2 === null || val2 === '' || val2 === "NULL" || val2 === "null")) return false;
+      return val1 !== val2;
+    }
 
     const value = getValue(cond.field);
     const target = cond.value;
