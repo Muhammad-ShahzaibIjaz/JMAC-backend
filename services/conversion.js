@@ -73,30 +73,39 @@ function convertScore(subject, testType, score) {
     if(!['ACT', 'SAT'].includes(testType)) {
         return null;
     }
-    if(!Number.isInteger(score) || score < 9) {
-        return null;
-    }
 
     let result = null;
     try {
         if (subject === 'Composite') {
             if (testType === 'ACT') {
-                if (score < 9 || score > 36) throw new Error('ACT Composite score must be between 9 and 36.');
-                result = compositeACTtoSAT[score] || { error: 'No conversion available for this ACT Composite score.' };
+                if (score < 9 || score > 36) {
+                    result = { single: 590, range: [590, 610] };
+                } else {
+                    result = compositeACTtoSAT[score] || { error: 'No conversion available for this ACT Composite score.' };
+                }
             } else {
-                if (score < 590 || score > 1600) throw new Error('SAT Total score must be between 590 and 1600.');
-                result = { single: compositeSATtoACT[score], range: [score, score] };
-                if (!result.single) throw new Error('No conversion available for this SAT Total score.');
+                if (score < 590 || score > 1600) {
+                    result = { single: 9, range: [590, 590] };
+                } else {
+                    result = { single: compositeSATtoACT[score], range: [score, score] };
+                    if (!result.single) throw new Error('No conversion available for this SAT Total score.');
+                }
             }
         } else if (subject === 'Math') {
             if (testType === 'ACT') {
-                if (score < 10 || score > 36) throw new Error('ACT Math score must be between 10 and 36.');
-                result = { single: mathACTtoSAT[score], range: [mathACTtoSAT[score], mathACTtoSAT[score]] };
-                if (!result.single) throw new Error('No conversion available for this ACT Math score.');
+                if (score < 10 || score > 36) {
+                    result = { single: 260, range: [260, 260] };
+                } else {
+                    result = { single: mathACTtoSAT[score], range: [mathACTtoSAT[score], mathACTtoSAT[score]] };
+                    if (!result.single) throw new Error('No conversion available for this ACT Math score.');
+                }
             } else {
-                if (score < 260 || score > 800) throw new Error('SAT Math score must be between 260 and 800.');
-                result = { single: mathSATtoACT[score], range: [score, score] };
-                if (!result.single) throw new Error('No conversion available for this SAT Math score.');
+                if (score < 260 || score > 800) {
+                    result = { single: 10, range: [260, 260] };
+                } else {
+                    result = { single: mathSATtoACT[score], range: [score, score] };
+                    if (!result.single) throw new Error('No conversion available for this SAT Math score.');
+                }
             }
         } else if (subject === 'ERW' || subject === 'English+Reading') {
             if (testType === 'ACT' && subject !== 'English+Reading') {
@@ -106,13 +115,19 @@ function convertScore(subject, testType, score) {
                 throw new Error('Use "ERW" for SAT, not "English+Reading".');
             }
             if (testType === 'ACT') {
-                if (score < 14 || score > 72) throw new Error('ACT English+Reading score must be between 14 and 72.');
-                result = { single: englishReadingACTtoSAT[score], range: [englishReadingACTtoSAT[score], englishReadingACTtoSAT[score]] };
-                if (!result.single) throw new Error('No conversion available for this ACT English+Reading score.');
+                if (score < 14 || score > 72) {
+                    result = { single: 280, range: [280, 280] };
+                } else {
+                    result = { single: englishReadingACTtoSAT[score], range: [englishReadingACTtoSAT[score], englishReadingACTtoSAT[score]] };
+                    if (!result.single) throw new Error('No conversion available for this ACT English+Reading score.');
+                }
             } else {
-                if (score < 280 || score > 800) throw new Error('SAT ERW score must be between 280 and 800.');
-                result = { single: englishReadingSATtoACT[score], range: [score, score] };
-                if (!result.single) throw new Error('No conversion available for this SAT ERW score.');
+                if (score < 280 || score > 800) {
+                    result = { single: 14, range: [280, 280] };
+                } else {
+                    result = { single: englishReadingSATtoACT[score], range: [score, score] };
+                    if (!result.single) throw new Error('No conversion available for this SAT ERW score.');
+                }
             }
         }
     } catch (error) {

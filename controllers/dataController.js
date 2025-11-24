@@ -2371,28 +2371,26 @@ const scoreConversion = async (req, res) => {
         }
         
         // Only convert if source value meets minimum requirement (e.g., 9 for ACT)
-        if (sourceValue >= 9) {
-          try {
-            const conversionResult = convertScore(subject, testType, sourceValue);
-            
-            if (conversionResult && conversionResult.error) {
-              errors.push({
-                rowIndex: parseInt(rowIndex),
-                error: conversionResult.error
-              });
-              continue;
-            }
-
-            if (conversionResult && conversionResult.single !== undefined) {
-              finalSourceValue = conversionResult.single;
-            }
-          } catch (error) {
+        try {
+          const conversionResult = convertScore(subject, testType, sourceValue);
+          
+          if (conversionResult && conversionResult.error) {
             errors.push({
               rowIndex: parseInt(rowIndex),
-              error: `Conversion failed: ${error.message}`
+              error: conversionResult.error
             });
             continue;
           }
+
+          if (conversionResult && conversionResult.single !== undefined) {
+            finalSourceValue = conversionResult.single;
+          }
+        } catch (error) {
+          errors.push({
+            rowIndex: parseInt(rowIndex),
+            error: `Conversion failed: ${error.message}`
+          });
+          continue;
         }
       }
       
