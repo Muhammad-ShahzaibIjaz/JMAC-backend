@@ -5739,7 +5739,7 @@ async function bulkUpdateYesNo(req, res) {
         const existingEntry = rowData[normalized];
         
         let currentValue = existingEntry?.value ?? null;
-        const newValue = (!currentValue || (currentValue !== "Yes" && currentValue !== "No")) ? "No" : currentValue;
+        const newValue = "No";
 
         // Skip if value is already correct
         if (currentValue === newValue) continue;
