@@ -150,14 +150,18 @@ function sortByType(data, header, type) {
 
 // Utility: Split into buckets
 function splitIntoBuckets(data, count) {
+  if (count <= 0 || data.length === 0) return [];
+  if (count === 1) return [data];
+  
   const buckets = Array.from({ length: count }, () => []);
   const total = data.length;
-  const ratio = total / count;
-
+  
   for (let i = 0; i < total; i++) {
-    buckets[Math.floor(i / ratio)].push(data[i]);
+    const bucketIndex = Math.floor((i * count) / total);
+    buckets[bucketIndex].push(data[i]);
   }
-  return buckets;
+  
+  return buckets.filter(bucket => bucket.length > 0);
 }
 
 function splitByCount(data, bucketCount, targetHeader) {
@@ -225,4 +229,81 @@ function looselyNormalize(value) {
   return String(value).trim().toLowerCase();
 }
 
-module.exports = { buildRanges, countBaseHeaderValues, getAllBaseHeaderValues, sortByType, detectType, splitIntoBuckets, extractRange, looselyNormalize, splitByCount };
+// Helper function to get the last value in a bucket
+function getLastValue(bucket, targetHeader) {
+  if (bucket.length === 0) return null;
+  return +bucket[bucket.length - 1][targetHeader];
+}
+
+// Helper function to get the first value in a bucket
+function getFirstValue(bucket, targetHeader) {
+  if (bucket.length === 0) return null;
+  return +bucket[0][targetHeader];
+}
+
+
+function splitIntoValueAwareBuckets(sortedData, bucketCount, targetHeader) {
+  if (bucketCount <= 0) return [];
+  if (bucketCount === 1) return [sortedData];
+  
+  let buckets = splitIntoBuckets(sortedData, bucketCount);
+  let hasOverlap = true;
+  let maxIterations = 10; // Prevent infinite loops
+  
+  while (hasOverlap && maxIterations > 0) {
+    hasOverlap = false;
+    
+    for (let i = 0; i < buckets.length - 1; i++) {
+      const currentBucket = buckets[i];
+      const nextBucket = buckets[i + 1];
+      
+      if (currentBucket.length === 0 || nextBucket.length === 0) continue;
+      
+      const currentEnd = getLastValue(currentBucket, targetHeader);
+      const nextStart = getFirstValue(nextBucket, targetHeader);
+      
+      // Check if boundary values are the same
+      if (currentEnd === nextStart) {
+        hasOverlap = true;
+        
+        // Find all rows in nextBucket with the same boundary value
+        const boundaryValue = nextStart;
+        const moveRows = [];
+        const keepRows = [];
+        
+        for (const row of nextBucket) {
+          if (+row[targetHeader] === boundaryValue) {
+            moveRows.push(row);
+          } else {
+            keepRows.push(row);
+          }
+        }
+        
+        // Move rows to current bucket
+        buckets[i] = [...currentBucket, ...moveRows];
+        buckets[i + 1] = keepRows;
+        
+        // If next bucket becomes empty, remove it and redistribute
+        if (keepRows.length === 0) {
+          buckets.splice(i + 1, 1);
+          // Rebalance remaining data into remaining buckets
+          const allRemaining = buckets.flat();
+          const remainingBucketCount = Math.max(1, bucketCount - (buckets.length - i - 1));
+          buckets = [
+            ...buckets.slice(0, i + 1),
+            ...splitIntoBuckets(allRemaining.slice(buckets[i].length), remainingBucketCount)
+          ];
+        }
+        
+        break; // Restart checking from beginning after modification
+      }
+    }
+    
+    maxIterations--;
+  }
+  
+  // Remove any empty buckets
+  return buckets.filter(bucket => bucket.length > 0);
+}
+
+module.exports = { buildRanges, countBaseHeaderValues, getAllBaseHeaderValues, sortByType, detectType, splitIntoBuckets, extractRange, looselyNormalize, splitByCount, splitIntoValueAwareBuckets };

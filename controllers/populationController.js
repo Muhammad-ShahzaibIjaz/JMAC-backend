@@ -6,7 +6,7 @@ const { DataTypes, Op, where, cast, col, fn, literal} = require('sequelize');
 const { v4: uuidv4 } = require('uuid');
 const math = require('mathjs');
 const { OperationLog, SheetDataSnapshot } = require('../models');
-const { countBaseHeaderValues, getAllBaseHeaderValues, sortByType, detectType, splitIntoBuckets, extractRange, looselyNormalize, splitByCount} = require('../utils/rangeHelper');
+const { countBaseHeaderValues, getAllBaseHeaderValues, sortByType, detectType, splitIntoBuckets, extractRange, looselyNormalize, splitByCount, splitIntoValueAwareBuckets} = require('../utils/rangeHelper');
 
 
 const categorizer = async (req, res) => {
@@ -728,11 +728,12 @@ function autoDistributeSecond(data, baseHeader, targetHeader, categoryCount, nes
       });
     }
 
-    const adjustedCategoryCount = Math.max(1, categoryCount - (response.length > 0 ? 1 : 0));
+    const adjustedCategoryCount = Math.max(1, categoryCount - response.length);
     
     if (remaining.length > 0) {
       const sortedRemaining = sortByType(remaining, targetHeader, 'number');
-      const buckets = splitIntoBuckets(sortedRemaining, adjustedCategoryCount);
+      // Use the new value-aware bucket distribution
+      const buckets = splitIntoValueAwareBuckets(sortedRemaining, adjustedCategoryCount, targetHeader);
 
       for (const bucket of buckets) {
         const range = extractRange(bucket, targetHeader);

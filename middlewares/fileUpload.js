@@ -56,9 +56,29 @@ const upload = multer({
   },
   fileFilter: (req, file, cb) => {
     const allowedTypes = [
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      "application/vnd.ms-excel",
+      // Standard Excel formats
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", // .xlsx
+      "application/vnd.ms-excel", // .xls
+      
+      // Macro-enabled formats
+      "application/vnd.ms-excel.sheet.macroEnabled.12", // .xlsm
+      "application/vnd.ms-excel.template.macroEnabled.12", // .xltm
+      "application/vnd.ms-excel.addin.macroEnabled.12", // .xlam
+      
+      // Binary format
+      "application/vnd.ms-excel.sheet.binary.macroEnabled.12", // .xlsb
+      
+      // Template formats
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.template", // .xltx
+      
+      // CSV formats
       "text/csv",
+      "application/csv",
+      "text/x-csv",
+      "text/comma-separated-values",
+      
+      // Fallback for some Excel files
+      "application/octet-stream"
     ];
     if (allowedTypes.includes(file.mimetype)) {
       cb(null, true);
