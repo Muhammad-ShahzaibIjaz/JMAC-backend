@@ -243,67 +243,55 @@ function getFirstValue(bucket, targetHeader) {
 
 
 function splitIntoValueAwareBuckets(sortedData, bucketCount, targetHeader) {
-  if (bucketCount <= 0) return [];
+  if (bucketCount <= 0 || sortedData.length === 0) return [];
   if (bucketCount === 1) return [sortedData];
-  
-  let buckets = splitIntoBuckets(sortedData, bucketCount);
-  let hasOverlap = true;
-  let maxIterations = 10; // Prevent infinite loops
-  
-  while (hasOverlap && maxIterations > 0) {
-    hasOverlap = false;
-    
-    for (let i = 0; i < buckets.length - 1; i++) {
-      const currentBucket = buckets[i];
-      const nextBucket = buckets[i + 1];
-      
-      if (currentBucket.length === 0 || nextBucket.length === 0) continue;
-      
-      const currentEnd = getLastValue(currentBucket, targetHeader);
-      const nextStart = getFirstValue(nextBucket, targetHeader);
-      
-      // Check if boundary values are the same
-      if (currentEnd === nextStart) {
-        hasOverlap = true;
-        
-        // Find all rows in nextBucket with the same boundary value
-        const boundaryValue = nextStart;
-        const moveRows = [];
-        const keepRows = [];
-        
-        for (const row of nextBucket) {
-          if (+row[targetHeader] === boundaryValue) {
-            moveRows.push(row);
-          } else {
-            keepRows.push(row);
-          }
-        }
-        
-        // Move rows to current bucket
-        buckets[i] = [...currentBucket, ...moveRows];
-        buckets[i + 1] = keepRows;
-        
-        // If next bucket becomes empty, remove it and redistribute
-        if (keepRows.length === 0) {
-          buckets.splice(i + 1, 1);
-          // Rebalance remaining data into remaining buckets
-          const allRemaining = buckets.flat();
-          const remainingBucketCount = Math.max(1, bucketCount - (buckets.length - i - 1));
-          buckets = [
-            ...buckets.slice(0, i + 1),
-            ...splitIntoBuckets(allRemaining.slice(buckets[i].length), remainingBucketCount)
-          ];
-        }
-        
-        break; // Restart checking from beginning after modification
-      }
+
+  // Step 1: Get all unique values and their counts
+  const valueMap = new Map();
+  for (const row of sortedData) {
+    const value = +row[targetHeader];
+    if (!valueMap.has(value)) {
+      valueMap.set(value, []);
     }
-    
-    maxIterations--;
+    valueMap.get(value).push(row);
   }
+
+  const uniqueValues = Array.from(valueMap.keys()).sort((a, b) => a - b);
   
-  // Remove any empty buckets
-  return buckets.filter(bucket => bucket.length > 0);
+  // Step 2: Calculate total rows and target size per bucket
+  const totalRows = sortedData.length;
+  const targetSize = Math.ceil(totalRows / bucketCount);
+  
+  const buckets = [];
+  let currentBucket = [];
+  let currentSize = 0;
+
+  // Step 3: Distribute unique values into buckets
+  for (const value of uniqueValues) {
+    const valueRows = valueMap.get(value);
+    const valueCount = valueRows.length;
+
+    // If adding this value would make the bucket too large AND we already have some data
+    // OR if this is a new value and current bucket is already at/over target
+    if (currentSize + valueCount > targetSize && currentSize > 0) {
+      // Finalize current bucket
+      buckets.push(currentBucket);
+      // Start new bucket with current value
+      currentBucket = [...valueRows];
+      currentSize = valueCount;
+    } else {
+      // Add to current bucket
+      currentBucket.push(...valueRows);
+      currentSize += valueCount;
+    }
+  }
+
+  // Don't forget the last bucket
+  if (currentBucket.length > 0) {
+    buckets.push(currentBucket);
+  }
+
+  return buckets;
 }
 
 module.exports = { buildRanges, countBaseHeaderValues, getAllBaseHeaderValues, sortByType, detectType, splitIntoBuckets, extractRange, looselyNormalize, splitByCount, splitIntoValueAwareBuckets };

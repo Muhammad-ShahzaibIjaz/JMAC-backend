@@ -681,19 +681,23 @@ function autoDistributeSecond(data, baseHeader, targetHeader, categoryCount, nes
   }
 
   if (detectedType === 'number') {
-    const nullBucket = [];
-    const blankBucket = [];
-    const zeroBucket = [];
+
+    const specialBuckets = {
+      null: [],
+      blank: [], 
+      zero: []
+    };
+
     const remaining = [];
 
     for (const row of workingData) {
       const val = row[targetHeader];
-      if (val === null) {
-        nullBucket.push(row);
+      if (val === null || val === 'NULL' || val === 'null') {
+        specialBuckets.null.push(row);
       } else if (val === '') {
-        blankBucket.push(row);
+        specialBuckets.blank.push(row);
       } else if (+val === 0) {
-        zeroBucket.push(row);
+        specialBuckets.zero.push(row);
       } else {
         remaining.push(row);
       }
@@ -701,39 +705,40 @@ function autoDistributeSecond(data, baseHeader, targetHeader, categoryCount, nes
 
     const response = [];
 
-    if (nullBucket.length > 0) {
+    if (specialBuckets.null.length > 0) {
       response.push({
         targetHeader,
         targetRange: { start: null, end: null },
-        total: nullBucket.length,
-        baseHeaderCounts: countBaseHeaderValues(nullBucket, baseHeader, allBaseValues),
+        total: specialBuckets.null.length,
+        baseHeaderCounts: countBaseHeaderValues(specialBuckets.null, baseHeader, allBaseValues),
       });
     }
 
-    if (blankBucket.length > 0) {
+    if (specialBuckets.blank.length > 0) {
       response.push({
         targetHeader,
         targetRange: { start: 'blank', end: 'blank' },
-        total: blankBucket.length,
-        baseHeaderCounts: countBaseHeaderValues(blankBucket, baseHeader, allBaseValues),
+        total: specialBuckets.blank.length,
+        baseHeaderCounts: countBaseHeaderValues(specialBuckets.blank, baseHeader, allBaseValues),
       });
     }
 
-    if (zeroBucket.length > 0) {
+    if (specialBuckets.zero.length > 0) {
       response.push({
         targetHeader,
         targetRange: { start: 0, end: 0 },
-        total: zeroBucket.length,
-        baseHeaderCounts: countBaseHeaderValues(zeroBucket, baseHeader, allBaseValues),
+        total: specialBuckets.zero.length,
+        baseHeaderCounts: countBaseHeaderValues(specialBuckets.zero, baseHeader, allBaseValues),
       });
     }
 
-    const adjustedCategoryCount = Math.max(1, categoryCount - response.length);
+    // Calculate how many buckets we have left for remaining data
+    const bucketsForRemaining = Math.max(1, categoryCount - response.length);
     
     if (remaining.length > 0) {
       const sortedRemaining = sortByType(remaining, targetHeader, 'number');
       // Use the new value-aware bucket distribution
-      const buckets = splitIntoValueAwareBuckets(sortedRemaining, adjustedCategoryCount, targetHeader);
+      const buckets = splitIntoValueAwareBuckets(sortedRemaining, bucketsForRemaining, targetHeader);
 
       for (const bucket of buckets) {
         const range = extractRange(bucket, targetHeader);
