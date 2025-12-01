@@ -140,7 +140,7 @@ function sortHeadersFlexibleMatch(headers) {
 
 async function getHeadersWithValidatedData(req, res) {
   try {
-    const { templateId, sheetId, currentPage, pageSize } = req.query;
+    const { templateId, sheetId, currentPage, pageSize, sortHeader = null, sortOrder = 'ASC' } = req.query;
 
     // Validation checks
     if (!templateId) {
@@ -180,17 +180,66 @@ async function getHeadersWithValidatedData(req, res) {
 
     const sortedHeaders = sortHeadersFlexibleMatch(headers);
     const headerMap = new Map(sortedHeaders.map(h => [h.id, h]));
+    let distinctRowIndices;
+    if (!sortHeader) {
+      distinctRowIndices = await SheetData.findAll({
+        where: { sheetId },
+        include: [{ model: Header, where: { templateId }, attributes: [] }],
+        attributes: ['rowIndex'],
+        group: ['rowIndex'],
+        order: [['rowIndex', 'ASC']],
+        offset,
+        limit: size,
+        raw: true,
+      });
+    } else {
+      const query = `
+        WITH AllDistinctRows AS (
+          -- Get all distinct rowIndices for this sheet
+          SELECT DISTINCT sd."rowIndex"
+          FROM "SheetData" sd
+          INNER JOIN "Header" h ON sd."headerId" = h.id
+          WHERE sd."sheetId" = :sheetId 
+            AND h."templateId" = :templateId
+        ),
+        SortedRows AS (
+          -- Join with sort column values
+          SELECT 
+            adr."rowIndex",
+            sd.value,
+            CASE WHEN sd.value IS NULL THEN 1 ELSE 0 END as is_null
+          FROM AllDistinctRows adr
+          LEFT JOIN "SheetData" sd 
+            ON adr."rowIndex" = sd."rowIndex" 
+            AND sd."headerId" = :sortHeader
+            AND sd."sheetId" = :sheetId
+        )
+        SELECT "rowIndex"
+        FROM SortedRows
+        ORDER BY 
+          is_null ASC,  -- Non-null values first
+          CASE 
+            -- Try to cast as numeric for proper numeric sorting
+            WHEN value ~ '^-?[0-9]+\.?[0-9]*$' THEN value::NUMERIC
+            ELSE NULL 
+          END ${sortOrder} NULLS LAST,
+          value ${sortOrder} NULLS LAST  -- Alphanumeric sorting for non-numeric
+        LIMIT :limit OFFSET :offset
+      `;
 
-    const distinctRowIndices = await SheetData.findAll({
-      where: { sheetId },
-      include: [{ model: Header, where: { templateId }, attributes: [] }],
-      attributes: ['rowIndex'],
-      group: ['rowIndex'],
-      order: [['rowIndex', 'ASC']],
-      offset,
-      limit: size,
-      raw: true,
-    });
+      distinctRowIndices = await sequelize.query(query, {
+        replacements: { 
+          sheetId, 
+          templateId,
+          sortHeader, 
+          limit: size, 
+          offset 
+        },
+        type: sequelize.QueryTypes.SELECT,
+      });
+    }
+
+    
 
     const rowIndexList = distinctRowIndices.map(r => r.rowIndex);
 
@@ -200,8 +249,12 @@ async function getHeadersWithValidatedData(req, res) {
       where: { 
         rowIndex: rowIndexList,
         sheetId
-      },
-      order: [['rowIndex', 'ASC']],
+      }
+    });
+
+    const rowIndexOrder = new Map(rowIndexList.map((rowIndex, index) => [rowIndex, index]));
+    paginatedData.sort((a, b) => {
+      return rowIndexOrder.get(a.rowIndex) - rowIndexOrder.get(b.rowIndex);
     });
 
     // Count total rows efficiently
@@ -3096,7 +3149,7 @@ async function evaluateRulesAndReturnFilteredData(req, res) {
 const normalizeKey = key => key.replace(/[^a-zA-Z0-9_]/g, '_');
 
 async function evaluateSheetDataWithConditions(req, res) {
-  const { templateId, sheetId, headers = [], conditions = [], currentPage = 1, pageSize = 30 } = req.body;
+  const { templateId, sheetId, headers = [], conditions = [], currentPage = 1, pageSize = 30, sortHeader = null, sortOrder = 'asc' } = req.body;
   try {
     if (!templateId || !sheetId) {
       return res.status(400).json({ error: 'templateId and sheetId are required' });
@@ -3173,6 +3226,85 @@ async function evaluateSheetDataWithConditions(req, res) {
 
       const isValid = evaluateConditions(filteredRowData, conditions);
       if (isValid) matchingRowIndices.push(rowIndex);
+    }
+
+    // 🔹 Step 6: Sorting before pagination
+    if (sortHeader && sortOrder) {
+      // Fetch values for sortHeader for all matching rows
+      const sortData = await SheetData.findAll({
+        where: {
+          sheetId,
+          headerId: sortHeader,
+          rowIndex: { [Op.in]: matchingRowIndices }
+        },
+        raw: true,
+      });
+
+      const valueMap = new Map();
+      sortData.forEach(entry => {
+        valueMap.set(entry.rowIndex, entry.value);
+      });
+
+      // Helper: normalize values for type-aware comparison
+      const normalizeForSort = (val) => {
+        if (val == null || val == 'null' || val == 'NULL') return null;
+        const str = String(val).trim();
+
+        // Try numeric
+        if (!isNaN(str) && str !== '' && str !== 'Blanks' && str !== 'blank') {
+          return Number(str);
+        }
+
+        // Try date
+        const date = Date.parse(str);
+        if (!isNaN(date)) {
+          return new Date(date).getTime();
+        }
+
+        // Fallback: string
+        return str;
+      };
+
+      // Natural compare: splits into chunks of digits vs letters
+      const naturalCompare = (a, b) => {
+        const chunkify = (t) => t.toString().match(/(\d+|\D+)/g) || [];
+        const aa = chunkify(a.toLowerCase());
+        const bb = chunkify(b.toLowerCase());
+
+        for (let i = 0; i < Math.min(aa.length, bb.length); i++) {
+          const x = aa[i], y = bb[i];
+          if (x === y) continue;
+
+          // If both chunks are numbers, compare numerically
+          const nx = Number(x), ny = Number(y);
+          if (!isNaN(nx) && !isNaN(ny)) {
+            return nx - ny;
+          }
+          // Otherwise compare as strings
+          return x.localeCompare(y);
+        }
+        return aa.length - bb.length;
+      };
+
+      matchingRowIndices.sort((a, b) => {
+        const valA = normalizeForSort(valueMap.get(a));
+        const valB = normalizeForSort(valueMap.get(b));
+
+        if (valA == null && valB == null) return 0;
+        if (valA == null) return sortOrder.toLowerCase() === 'asc' ? 1 : -1;
+        if (valB == null) return sortOrder.toLowerCase() === 'asc' ? -1 : 1;
+
+        let cmp;
+        if (typeof valA === 'number' && typeof valB === 'number') {
+          cmp = valA - valB;
+        } else if (typeof valA === 'string' && typeof valB === 'string') {
+          cmp = naturalCompare(valA, valB);
+        } else {
+          cmp = valA > valB ? 1 : valA < valB ? -1 : 0;
+        }
+
+        return sortOrder.toLowerCase() === 'asc' ? cmp : -cmp;
+      });
     }
 
 

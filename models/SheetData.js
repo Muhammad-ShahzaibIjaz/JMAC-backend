@@ -34,6 +34,10 @@ const SheetData = sequelize.define(
         unique: true,
         fields: ['headerId', 'rowIndex', 'sheetId'],
       },
+      {
+        // Add this for sorting performance
+        fields: ['sheetId', 'headerId', 'value'],
+      },
     ],
   }
 );
