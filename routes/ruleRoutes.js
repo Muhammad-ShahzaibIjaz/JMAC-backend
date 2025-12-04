@@ -23,5 +23,9 @@ router.get('/population-rule', ruleController.getPopulationRuleById);
 router.delete('/population-rule', ruleController.deletePopulationRule);
 router.put('/population-rule', ruleController.updatePopulationRule);
 router.post('/auto-population-rule', ruleController.autoPopulationRule);
+router.post('/band-rule', ruleController.createBandRule);
+router.put('/band-rule/:id', ruleController.updateBandRule);
+router.get('/band-rules', ruleController.getBandRulesByTemplateId);
+router.delete('/band-rule', ruleController.deleteBandRule);
 
 module.exports = router;

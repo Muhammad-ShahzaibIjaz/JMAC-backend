@@ -51,4 +51,20 @@ function evaluateConditions(rowData, conditionBlock) {
   return evaluateSingle(conditionBlock);
 }
 
-module.exports = { evaluateConditions };
+function evaluateBound(value, bound) {
+  if (!bound || !bound.operator || bound.value === undefined || bound.value === null || bound.value === "") {
+    return false; // no restriction
+  }
+
+  const numBound = parseFloat(bound.value);
+  switch (bound.operator) {
+    case "greaterThan": return value > numBound;
+    case "greaterThanEqual": return value >= numBound;
+    case "lessThan": return value < numBound;
+    case "lessThanEqual": return value <= numBound;
+    default: return false; // unknown operator → ignore
+  }
+}
+
+
+module.exports = { evaluateConditions, evaluateBound };

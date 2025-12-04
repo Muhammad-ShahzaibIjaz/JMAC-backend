@@ -15,7 +15,7 @@ const { getCipTitle } = require('../services/cipService');
 const { desiredOrder, requiredHeadersName, awardTypePatterns, ynFlags } = require('../utils/headerOrderList');
 const { buildZipCountyMap } = require('../services/countyService');
 const { calculateNACUBODiscountRate, calculateNetCharges, calculateGap, calculateNeedMet, calculateTotalDiscountRate, calculateNetTuition, calculateNeed, matchCriteria, calculateTotalNeedMet, calculateTotalDirectCost, calculateTotalInstitutionalMeritGift } = require('../utils/calculationHelper');
-const { evaluateConditions } = require('../services/evaluation');
+const { evaluateConditions, evaluateBound } = require('../services/evaluation');
 const fs = require('fs');
 
 async function deleteSheetData(req, res) {
@@ -5952,6 +5952,149 @@ async function bulkUpdateYesNo(req, res) {
   }
 }
 
+
+async function evaluateBandsAndAssign(req, res) {
+  const transaction = await sequelize.transaction();
+  try{
+    const { templateId, sheetId, inputHeader, outputHeader, bandConditions } = req.body;
+
+    if (!templateId || !sheetId || !inputHeader || !outputHeader || !Array.isArray(bandConditions) || bandConditions.length === 0) {
+      await transaction.rollback();
+      return res.status(400).json({ message: 'Invalid input. templateId, sheetId, inputHeader, outputHeader, and bandConditions are required.' });
+    }
+
+    const inputHeaderId = await Header.findOne({ where: { templateId, name: inputHeader } });
+    const outputHeaderId = await Header.findOne({ where: { templateId, name: outputHeader } });
+
+    if (!inputHeaderId || !outputHeaderId) {
+      await transaction.rollback();
+      return res.status(404).json({ message: "Input or output header not found for the given templateId." });
+    }
+
+    const inputData = await SheetData.findAll({
+      where: { headerId: inputHeaderId.id, sheetId },
+      attributes: ["rowIndex", "value"],
+      raw: true,
+      order: [["rowIndex", "ASC"]],
+    });
+
+    if (inputData.length === 0) {
+      await transaction.rollback();
+      return res.status(200).json({ message: "No data found for the input header." });
+    }
+
+    const existingOutput = await SheetData.findAll({
+      where: { headerId: outputHeaderId.id, sheetId },
+      attributes: ["rowIndex", "id", "value"],
+      raw: true,
+    });
+    const outputMap = new Map(existingOutput.map(r => [r.rowIndex, r]));
+
+    const toInsert = [];
+    const toUpdate = [];
+    const snapshots = [];
+
+    const operationLog = await OperationLog.create({
+      templateId,
+      sheetId,
+      operationType: 'CALCULATION',
+    }, { transaction });
+
+
+    for (const row of inputData) {
+      const inputValue = parseFloat(row.value);
+      if (isNaN(inputValue)) continue;
+      let assignedValue = null;
+
+      for (const band of bandConditions) {
+        if (band.upperBound !== "" && band.upperBound !== null && band.upperBound !== undefined) {
+          const lowerOk = evaluateBound(inputValue, band.lowerBound);
+          const upperOk = evaluateBound(inputValue, band.upperBound);
+          if (lowerOk && upperOk) {
+            assignedValue = band.assignValue;
+            break;
+          }
+        } else {
+          const lowerOk = evaluateBound(inputValue, band.lowerBound);
+          if (lowerOk) {
+            assignedValue = band.assignValue;
+            break;
+          }
+        }
+
+      }
+
+      if (assignedValue !== null) {
+        const existing = outputMap.get(row.rowIndex);
+        if (existing) {
+          if (existing.value !== assignedValue) {
+            toUpdate.push({ id: existing.id, value: assignedValue });
+            // Snapshot for update
+            snapshots.push({
+              operationLogId: operationLog.id,
+              headerId: outputHeaderId.id,
+              sheetId,
+              rowIndex: row.rowIndex,
+              originalValue: existing.value,
+              newValue: assignedValue,
+              changeType: 'UPDATE',
+            });
+          }
+        } else {
+          toInsert.push({
+            headerId: outputHeaderId.id,
+            sheetId,
+            rowIndex: row.rowIndex,
+            value: assignedValue,
+          });
+          snapshots.push({
+            operationLogId: operationLog.id,
+            headerId: outputHeaderId.id,
+            sheetId,
+            rowIndex: row.rowIndex,
+            originalValue: null,
+            newValue: assignedValue,
+            changeType: 'INSERT',
+          });
+
+        }
+      }
+    }
+
+    // Bulk commit
+    if (toInsert.length > 0) {
+      await SheetData.bulkCreate(toInsert, { transaction });
+    }
+    if (toUpdate.length > 0) {
+      // Batch updates for performance
+      const batchSize = 10000;
+      for (let i = 0; i < toUpdate.length; i += batchSize) {
+        const batch = toUpdate.slice(i, i + batchSize);
+        await Promise.all(
+          batch.map(upd =>
+            SheetData.update({ value: upd.value }, { where: { id: upd.id }, transaction })
+          )
+        );
+      }
+    }
+    if (snapshots.length > 0) {
+      await SheetDataSnapshot.bulkCreate(snapshots, { transaction });
+    }
+    await transaction.commit();
+
+    return res.status(200).json({
+      message: "Band evaluation completed successfully.",
+      inserted: toInsert.length,
+      updated: toUpdate.length,
+    });
+
+  } catch(error){
+    await transaction.rollback();
+    console.error('Error in evaluateBandsAndAssign:', error);
+    return res.status(500).json({ message: 'Internal server error.', details: error.message });
+  }
+}
+
 module.exports = {
   deleteSheetData, 
   getMatrixPop, 
@@ -5987,5 +6130,6 @@ module.exports = {
   autoFillInternationalAwards,
   getAcceptanceStatusValues,
   exportDataWithConditions,
-  bulkUpdateYesNo
+  bulkUpdateYesNo,
+  evaluateBandsAndAssign
 };

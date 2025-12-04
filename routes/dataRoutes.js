@@ -31,6 +31,7 @@ router.put('/auto-fill-award', dataController.autoFillInternationalAwards);
 router.post('/acceptance-status-values', dataController.getAcceptanceStatusValues);
 router.post('/export-data-conditions', dataController.exportDataWithConditions);
 router.put('/bulk-update-yn', dataController.bulkUpdateYesNo);
+router.put('/evaluate-bands', dataController.evaluateBandsAndAssign)
 
 
 module.exports = router;

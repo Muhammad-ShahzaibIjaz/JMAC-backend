@@ -1,7 +1,7 @@
 const Rule = require("../models/Rule");
 const CalculationRule = require("../models/CalculationRule");
 const { v4: uuidv4 } = require("uuid");
-const { Header, ConditionalRule, PopulationRule } = require("../models");
+const { Header, ConditionalRule, PopulationRule, BandRule } = require("../models");
 const {extractHeaderValues} = require("./dataController");
 const { bulkUpdates } = require("./dataController");
 const { Op } = require('sequelize');
@@ -600,6 +600,91 @@ const autoPopulationRule = async (req, res) => {
   }
 };
 
+const createBandRule = async (req, res) => {
+  try {
+    const { name, conditions, inputHeader, outputHeader, templateId } = req.body;
+    if (!name || !conditions || !inputHeader || !outputHeader || !templateId) {
+      return res.status(400).json({ error: "All fields (name, conditions, inputHeader, outputHeader, templateId) are required" });
+    }
+    const isBandRuleExist = await BandRule.findOne({
+      where: { name, templateId }
+    });
+
+    if (isBandRuleExist) {
+      return res.status(409).json({ error: "Band rule with the same name already exists for this template" });
+    }
+    const rule = await BandRule.create({
+      id: uuidv4(),
+      name,
+      conditions,
+      inputHeader,
+      outputHeader,
+      templateId
+    });
+    return res.status(201).json(rule);
+  } catch (error) {
+    console.error("Error creating band rule:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+
+const updateBandRule = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, conditions, inputHeader, outputHeader } = req.body;
+    if (!name || !conditions || !inputHeader || !outputHeader) {
+      return res.status(400).json({ error: "All fields (name, conditions, inputHeader, outputHeader) are required" });
+    }
+    const rule = await BandRule.findByPk(id);
+    if (!rule) {
+      return res.status(404).json({ error: "Band rule not found" });
+    }
+    await rule.update({
+      name,
+      conditions,
+      inputHeader,
+      outputHeader
+    });
+    return res.status(200).json({ name: rule.name, conditions: rule.conditions, inputHeader: rule.inputHeader, outputHeader: rule.outputHeader });
+  } catch (error) {
+    console.error("Error updating band rule:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+
+const getBandRulesByTemplateId = async (req, res) => {
+  try {
+    const { templateId } = req.query;
+    const rules = await BandRule.findAll({
+      where: { templateId },
+      attributes: ['id', 'name', 'conditions', 'inputHeader', 'outputHeader'],
+      order: [['createdAt', 'DESC']]
+    });
+    return res.status(200).json(rules);
+  } catch (error) {
+    console.error("Error fetching band rules:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+const deleteBandRule = async (req, res) => {
+  try {
+    const { id } = req.query;
+    const rule = await BandRule.findByPk(id);
+    if (!rule) {
+      return res.status(404).json({ error: "Band rule not found" });
+    }
+    await rule.destroy();
+    return res.status(200).json({ message: "Band rule deleted successfully" });
+  }
+  catch (error) {
+    console.error("Error deleting band rule:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  } 
+};
+
 module.exports = {
   createRule,
   updateRule,
@@ -621,5 +706,9 @@ module.exports = {
   updatePopulationRule,
   autoPopulationRule,
   updateConditionalRule,
-  updateBulkRule
+  updateBulkRule,
+  createBandRule,
+  updateBandRule,
+  getBandRulesByTemplateId,
+  deleteBandRule
 };
