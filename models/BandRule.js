@@ -33,6 +33,16 @@ const BandRule = sequelize.define(
         type: DataTypes.STRING,
         allowNull: false,
     },
+    targetHeader: {
+      type: DataTypes.STRING,
+      allowNull: false,
+      defaultValue: 'First_Year/Transfer/Continuing/Readmit/Online'
+    },
+    selectedValues: {
+        type: DataTypes.ARRAY(DataTypes.STRING),
+        allowNull: false,
+        defaultValue: [],
+    },
 },
   {
     tableName: 'BandRule',

@@ -602,7 +602,7 @@ const autoPopulationRule = async (req, res) => {
 
 const createBandRule = async (req, res) => {
   try {
-    const { name, conditions, inputHeader, outputHeader, templateId } = req.body;
+    const { name, conditions, inputHeader, outputHeader, templateId, targetHeader, selectedValues } = req.body;
     if (!name || !conditions || !inputHeader || !outputHeader || !templateId) {
       return res.status(400).json({ error: "All fields (name, conditions, inputHeader, outputHeader, templateId) are required" });
     }
@@ -619,7 +619,9 @@ const createBandRule = async (req, res) => {
       conditions,
       inputHeader,
       outputHeader,
-      templateId
+      templateId,
+      targetHeader,
+      selectedValues
     });
     return res.status(201).json(rule);
   } catch (error) {
@@ -632,9 +634,9 @@ const createBandRule = async (req, res) => {
 const updateBandRule = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, conditions, inputHeader, outputHeader } = req.body;
-    if (!name || !conditions || !inputHeader || !outputHeader) {
-      return res.status(400).json({ error: "All fields (name, conditions, inputHeader, outputHeader) are required" });
+    const { name, conditions, inputHeader, outputHeader, targetHeader, selectedValues } = req.body;
+    if (!name || !conditions || !inputHeader || !outputHeader || !targetHeader || !selectedValues) {
+      return res.status(400).json({ error: "All fields (name, conditions, inputHeader, outputHeader, targetHeader, studentTypes) are required" });
     }
     const rule = await BandRule.findByPk(id);
     if (!rule) {
@@ -644,9 +646,11 @@ const updateBandRule = async (req, res) => {
       name,
       conditions,
       inputHeader,
-      outputHeader
+      outputHeader,
+      targetHeader,
+      selectedValues
     });
-    return res.status(200).json({ name: rule.name, conditions: rule.conditions, inputHeader: rule.inputHeader, outputHeader: rule.outputHeader });
+    return res.status(200).json({ name: rule.name, conditions: rule.conditions, inputHeader: rule.inputHeader, outputHeader: rule.outputHeader, targetHeader: rule.targetHeader, selectedValues: rule.selectedValues });
   } catch (error) {
     console.error("Error updating band rule:", error);
     return res.status(500).json({ error: "Internal server error" });
@@ -659,7 +663,7 @@ const getBandRulesByTemplateId = async (req, res) => {
     const { templateId } = req.query;
     const rules = await BandRule.findAll({
       where: { templateId },
-      attributes: ['id', 'name', 'conditions', 'inputHeader', 'outputHeader'],
+      attributes: ['id', 'name', 'conditions', 'inputHeader', 'outputHeader', 'targetHeader', 'selectedValues'],
       order: [['createdAt', 'DESC']]
     });
     return res.status(200).json(rules);

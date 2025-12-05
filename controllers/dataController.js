@@ -5956,27 +5956,50 @@ async function bulkUpdateYesNo(req, res) {
 async function evaluateBandsAndAssign(req, res) {
   const transaction = await sequelize.transaction();
   try{
-    const { templateId, sheetId, inputHeader, outputHeader, bandConditions } = req.body;
+    const { templateId, sheetId, inputHeader, outputHeader, bandConditions, targetHeader, selectedValues } = req.body;
 
-    if (!templateId || !sheetId || !inputHeader || !outputHeader || !Array.isArray(bandConditions) || bandConditions.length === 0) {
+    if (!templateId || !sheetId || !inputHeader || !outputHeader || !Array.isArray(bandConditions) || bandConditions.length === 0 || !targetHeader || !Array.isArray(selectedValues) || selectedValues.length === 0) {
       await transaction.rollback();
-      return res.status(400).json({ message: 'Invalid input. templateId, sheetId, inputHeader, outputHeader, and bandConditions are required.' });
+      return res.status(400).json({ message: 'Invalid input. templateId, sheetId, inputHeader, outputHeader, targetHeader, selectedValue, and bandConditions are required.' });
     }
 
     const inputHeaderId = await Header.findOne({ where: { templateId, name: inputHeader } });
     const outputHeaderId = await Header.findOne({ where: { templateId, name: outputHeader } });
+    const targetHeaderId = await Header.findOne({ where: { templateId, name: targetHeader } });
+
+    if (!targetHeaderId) {
+      await transaction.rollback();
+      return res.status(404).json({ message: `Target header "${targetHeader}" not found for the given templateId.` });
+    }
 
     if (!inputHeaderId || !outputHeaderId) {
       await transaction.rollback();
       return res.status(404).json({ message: "Input or output header not found for the given templateId." });
     }
 
-    const inputData = await SheetData.findAll({
-      where: { headerId: inputHeaderId.id, sheetId },
-      attributes: ["rowIndex", "value"],
-      raw: true,
-      order: [["rowIndex", "ASC"]],
-    });
+    const inputData = await sequelize.query(
+      `
+      SELECT i."rowIndex", i."value"
+      FROM "SheetData" AS i
+      INNER JOIN "SheetData" AS t
+        ON i."rowIndex" = t."rowIndex"
+      AND i."sheetId" = t."sheetId"
+      WHERE i."headerId" = :inputHeaderId
+        AND i."sheetId" = :sheetId
+        AND t."headerId" = :targetHeaderId
+        AND t."value" IN (:selectedValues)
+      ORDER BY i."rowIndex" ASC
+      `,
+      {
+        replacements: {
+          inputHeaderId: inputHeaderId.id,
+          targetHeaderId: targetHeaderId.id,
+          sheetId,
+          selectedValues,
+        },
+        type: sequelize.QueryTypes.SELECT,
+      }
+    );
 
     if (inputData.length === 0) {
       await transaction.rollback();
