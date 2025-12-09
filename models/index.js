@@ -19,9 +19,15 @@ const PopulationStatus = require('./PopulationStatus');
 const PopulationSubmission = require('./PopulationSubmission');
 const Tree = require('./Tree');
 const BandRule = require('./BandRule');
+const User = require('./User');
 const sequelize = require('../config/database');
 
 // Define associations
+
+User.hasMany(Template, { foreignKey: 'userId', onDelete: 'CASCADE' });
+Template.belongsTo(User, { foreignKey: 'userId' });
+
+
 Template.hasMany(File, { foreignKey: 'templateId', onDelete: 'CASCADE' });
 File.belongsTo(Template, { foreignKey: 'templateId' });
 
@@ -109,4 +115,5 @@ module.exports = {
   PopulationSubmission,
   Tree,
   BandRule,
+  User,
 };

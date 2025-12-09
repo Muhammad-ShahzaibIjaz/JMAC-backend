@@ -12,4 +12,5 @@ module.exports = {
   USER_ID: "default-user",
   FOLDER_NAME: "uploads",
   GEO_API_KEY: process.env.GEO_API_KEY || "",
+  SECRET_KEY: process.env.SECRET_KEY
 };

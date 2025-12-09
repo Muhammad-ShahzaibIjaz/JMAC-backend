@@ -10,6 +10,7 @@ const fs = require('fs');
 
 async function createTemplate(req, res) {
   try {
+    const { userId } = req;
     const { name } = req.body;
 
     if (!name || typeof name !== 'string' || name.trim().length === 0) {
@@ -34,6 +35,7 @@ async function createTemplate(req, res) {
         {
           id: uuidv4(),
           name: name.trim(),
+          userId: userId
         },
         { transaction: t }
       );
@@ -114,7 +116,8 @@ async function deleteTemplate(req, res) {
 
 async function getTemplates(req, res) {
   try {
-    const templates = await Template.findAll();
+    const {userId} = req;
+    const templates = await Template.findAll({ where: {userId} });
 
     const formattedTemplates = templates.map((template) => ({
       id: template.id,
