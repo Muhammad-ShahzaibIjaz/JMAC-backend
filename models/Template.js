@@ -14,6 +14,11 @@ const Template = sequelize.define(
       type: DataTypes.STRING(255),
       allowNull: false,
     },
+    userId: {
+      type: DataTypes.UUID,
+      defaultValue: DataTypes.UUIDV4,
+      allowNull: true,
+    }
   },
   {
     tableName: 'Template',
