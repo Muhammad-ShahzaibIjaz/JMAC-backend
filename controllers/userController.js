@@ -16,14 +16,16 @@ const generateToken = async (userId) => {
 
 
 const createUser = async (req, res) => {
+    const transaction = await sequelize.transaction();
     const { username, password, role} = req.body;
-
     try {
         if (!username || !password || !role) {
+            await transaction.rollback();
             return res.status(400).json({ message: "Username, password, and role are required." });
         }
         const existingUser = await User.findOne({ where: { username, role } });
         if (existingUser) {
+            await transaction.rollback();
             return res.status(409).json({ message: "User with this username already exists." });
         }
         const passwordHash = await hashPassword(password);
@@ -32,10 +34,12 @@ const createUser = async (req, res) => {
             username,
             passwordHash,
             role,
-        });
+        }, { transaction });
         const token = await generateToken(newUser.id);
+        await transaction.commit();
         res.status(201).json({ userId: newUser.id, id: token, username: newUser.username, role: newUser.role });
     } catch (error) {
+        await transaction.rollback();
         console.error("Error creating user:", error);
         res.status(500).json({ message: "Internal server error" });
     }
