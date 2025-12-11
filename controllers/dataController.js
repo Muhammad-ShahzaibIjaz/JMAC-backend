@@ -6118,6 +6118,113 @@ async function evaluateBandsAndAssign(req, res) {
   }
 }
 
+async function evaluateMatrixAndAssignElement(req, res) {
+  const { templateId, sheetId, matrix } = req.body;
+
+  const t = await sequelize.transaction();
+  try {
+    if (!templateId || !sheetId || !matrix) {
+      await t.rollback();
+      return res.status(400).json({ message: "Invalid input. templateId, sheetId, and matrix are required." });
+    }
+
+    const operationLog = await OperationLog.create({
+      templateId,
+      sheetId,
+      operationType: "CALCULATION",
+    }, { transaction: t });
+
+
+    const requiredHeadersName = ["Financial_Band", "Element_Number", "Academic_Band"];
+    const headers = await Header.findAll({
+      where: { name: { [Op.in]: requiredHeadersName }, templateId },
+      raw: true,
+      transaction: t,
+    });
+
+    if (!headers || headers.length !== requiredHeadersName.length) {
+      await t.rollback();
+      return res.status(404).json({ message: "Required headers not found for the given templateId." });
+    }
+
+    const headerMap = headers.reduce((acc, h) => {
+      acc[h.name] = h.id;
+      return acc;
+    }, {});
+
+
+    const [academicRows, financialRows, elementRows] = await Promise.all([
+      SheetData.findAll({ where: { headerId: headerMap["Academic_Band"], sheetId }, raw: true, transaction: t }),
+      SheetData.findAll({ where: { headerId: headerMap["Financial_Band"], sheetId }, raw: true, transaction: t }),
+      SheetData.findAll({ where: { headerId: headerMap["Element_Number"], sheetId }, raw: true, transaction: t }),
+    ]);
+
+
+    const bandMap = new Map();
+    for (const r of academicRows) {
+      bandMap.set(r.rowIndex, { academicBand: parseInt(r.value, 10) });
+    }
+    for (const r of financialRows) {
+      const entry = bandMap.get(r.rowIndex);
+      if (entry) entry.financialBand = parseInt(r.value, 10);
+    }
+    for (const r of elementRows) {
+      const entry = bandMap.get(r.rowIndex);
+      if (entry) entry.oldElement = r.value;
+    }
+
+
+    const updates = [];
+    const snapshots = [];
+
+    for (const [rowIndex, { academicBand, financialBand, oldElement }] of bandMap.entries()) {
+      if (academicBand && financialBand) {
+        const elementValue = matrix.values[academicBand - 1]?.[financialBand - 1];
+        if (elementValue !== undefined && elementValue !== oldElement) {
+          updates.push({
+            rowIndex,
+            sheetId,
+            headerId: headerMap["Element_Number"],
+            value: elementValue,
+          });
+
+          snapshots.push({
+            operationLogId: operationLog.id,
+            headerId: headerMap["Element_Number"],
+            sheetId,
+            rowIndex,
+            originalValue: oldElement || null,
+            newValue: elementValue,
+            changeType: oldElement ? "UPDATE" : "INSERT",
+          });
+        }
+      }
+    }
+
+    if (updates.length > 0) {
+      await SheetData.bulkCreate(updates, {
+        updateOnDuplicate: ["value"],
+        transaction: t,
+      });
+    }
+
+    if (snapshots.length > 0) {
+      await SheetDataSnapshot.bulkCreate(snapshots, { transaction: t });
+    }
+
+    await t.commit();
+    return res.status(200).json({ 
+      message: "Matrix applied successfully.", 
+      updatedRows: updates.length, 
+      loggedChanges: snapshots.length 
+    });
+  } catch (error) {
+    await t.rollback();
+    console.error("Error in evaluateMatrixAndAssignElement:", error);
+    return res.status(500).json({ message: "Internal server error.", details: error.message });
+  }
+}
+
 module.exports = {
   deleteSheetData, 
   getMatrixPop, 
@@ -6154,5 +6261,6 @@ module.exports = {
   getAcceptanceStatusValues,
   exportDataWithConditions,
   bulkUpdateYesNo,
-  evaluateBandsAndAssign
+  evaluateBandsAndAssign,
+  evaluateMatrixAndAssignElement
 };

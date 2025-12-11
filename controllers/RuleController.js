@@ -1,10 +1,11 @@
 const Rule = require("../models/Rule");
 const CalculationRule = require("../models/CalculationRule");
 const { v4: uuidv4 } = require("uuid");
-const { Header, ConditionalRule, PopulationRule, BandRule } = require("../models");
+const { Header, ConditionalRule, PopulationRule, BandRule, ElementMatrix } = require("../models");
 const {extractHeaderValues} = require("./dataController");
 const { bulkUpdates } = require("./dataController");
 const { Op } = require('sequelize');
+const sequelize = require('../config/database');
 
 const createRule = async (req, res) => {
   try {
@@ -689,6 +690,99 @@ const deleteBandRule = async (req, res) => {
   } 
 };
 
+const createElementMatrix = async (req, res) => {
+  const transaction = await sequelize.transaction();
+  try {
+    const { name, academicBands, financialBands, values, templateId } = req.body;
+    if (!name || !academicBands || !financialBands || !values || !templateId) {
+      await transaction.rollback();
+      return res.status(400).json({ error: "All fields (name, academicBands, financialBands, values, templateId) are required" });
+    }
+    const isMatrixExist = await ElementMatrix.findOne({
+      where: { name, templateId }
+    });
+
+    if (isMatrixExist) {
+      await transaction.rollback();
+      return res.status(409).json({ error: "Element matrix with the same name already exists for this template" });
+    }
+
+    const matrix = await ElementMatrix.create({
+      id: uuidv4(),
+      name,
+      academicBands,
+      financialBands,
+      values,
+      templateId
+    }, {transaction});
+    await transaction.commit();
+    return res.status(201).json(matrix);
+  } catch (error) {
+    console.error("Error creating element matrix:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+
+const updateElementMatrix = async (req, res) => {
+  const transaction = await sequelize.transaction();
+  try {
+    const { id } = req.params;
+    const { name, academicBands, financialBands, values } = req.body;
+    if (!name || !academicBands || !financialBands || !values) {
+      await transaction.rollback();
+      return res.status(400).json({ error: "All fields (name, academicBands, financialBands, values) are required" });
+    }
+    const matrix = await ElementMatrix.findByPk(id);
+    if (!matrix) {
+      await transaction.rollback();
+      return res.status(404).json({ error: "Element matrix not found" });
+    }
+    await matrix.update({
+      name,
+      academicBands,
+      financialBands,
+      values
+    }, {transaction});
+    await transaction.commit();
+    return res.status(200).json(matrix);
+  } catch (error) {
+    console.error("Error updating element matrix:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+const deleteElementMatrix = async (req, res) => {
+  try {
+    const { id } = req.query;
+    const matrix = await ElementMatrix.findByPk(id);
+    if (!matrix) {
+      return res.status(404).json({ error: "Element matrix not found" });
+    }
+    await matrix.destroy();
+    return res.status(200).json({ message: "Element matrix deleted successfully" });
+  } catch(error) {
+    console.error("Error deleting element matrix:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+const getElementMatricesByTemplateId = async (req, res) => {
+  try {
+    const { templateId } = req.query;
+    const matrices = await ElementMatrix.findAll({
+      where: { templateId },
+      attributes: ['id', 'name', 'academicBands', 'financialBands', 'values'],
+      order: [['createdAt', 'DESC']]
+    });
+    return res.status(200).json(matrices);
+  }
+  catch (error) {
+    console.error("Error fetching element matrices:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+
 module.exports = {
   createRule,
   updateRule,
@@ -714,5 +808,9 @@ module.exports = {
   createBandRule,
   updateBandRule,
   getBandRulesByTemplateId,
-  deleteBandRule
+  deleteBandRule,
+  createElementMatrix,
+  updateElementMatrix,
+  deleteElementMatrix,
+  getElementMatricesByTemplateId
 };

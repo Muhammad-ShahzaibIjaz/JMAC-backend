@@ -27,5 +27,9 @@ router.post('/band-rule', ruleController.createBandRule);
 router.put('/band-rule/:id', ruleController.updateBandRule);
 router.get('/band-rules', ruleController.getBandRulesByTemplateId);
 router.delete('/band-rule', ruleController.deleteBandRule);
+router.post('/element-matrix', ruleController.createElementMatrix);
+router.put('/element-matrix/:id', ruleController.updateElementMatrix);
+router.delete('/element-matrix', ruleController.deleteElementMatrix);
+router.get('/element-matrices', ruleController.getElementMatricesByTemplateId);
 
 module.exports = router;

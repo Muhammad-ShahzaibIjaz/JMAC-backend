@@ -20,16 +20,15 @@ const PopulationSubmission = require('./PopulationSubmission');
 const Tree = require('./Tree');
 const BandRule = require('./BandRule');
 const User = require('./User');
+const ElementMatrix = require('./ElementMatrix');
 const sequelize = require('../config/database');
 
 // Define associations
-
-User.hasMany(Template, { foreignKey: 'userId', onDelete: 'CASCADE' });
-Template.belongsTo(User, { foreignKey: 'userId' });
-
-
 Template.hasMany(File, { foreignKey: 'templateId', onDelete: 'CASCADE' });
 File.belongsTo(Template, { foreignKey: 'templateId' });
+
+Template.hasMany(ElementMatrix, { foreignKey: 'templateId', onDelete: 'CASCADE' });
+ElementMatrix.belongsTo(Template, { foreignKey: 'templateId' });
 
 Template.hasMany(CrossReference, { foreignKey: 'templateId', onDelete: 'CASCADE' });
 CrossReference.belongsTo(Template, { foreignKey: 'templateId' });
@@ -116,4 +115,5 @@ module.exports = {
   Tree,
   BandRule,
   User,
+  ElementMatrix
 };

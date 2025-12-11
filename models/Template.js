@@ -13,11 +13,6 @@ const Template = sequelize.define(
     name: {
       type: DataTypes.STRING(255),
       allowNull: false,
-    },
-    userId: {
-      type: DataTypes.UUID,
-      defaultValue: DataTypes.UUIDV4,
-      allowNull: false,
     }
   },
   {
