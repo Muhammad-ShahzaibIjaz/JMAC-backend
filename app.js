@@ -32,6 +32,8 @@ const pellRoutes = require("./routes/pellRoutes");
 const populationStatusRoutes = require("./routes/PopulationStatusRoutes");
 const treeRoutes = require("./routes/treeRoutes");
 const userRoutes = require("./routes/userRoutes");
+const projectionRoutes = require("./routes/projectionRoutes");
+
 
 
 
@@ -51,5 +53,6 @@ app.use("/api", pellRoutes);
 app.use("/api", populationStatusRoutes);
 app.use("/api", treeRoutes);
 app.use("/api", userRoutes);
+app.use("/api", projectionRoutes);
 
 module.exports = app;
