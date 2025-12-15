@@ -5977,6 +5977,12 @@ async function evaluateBandsAndAssign(req, res) {
       return res.status(404).json({ message: "Input or output header not found for the given templateId." });
     }
 
+    const [{ maxRowIndex }] = await sequelize.query(
+      `SELECT MAX("rowIndex") as "maxRowIndex" FROM "SheetData" WHERE "sheetId" = :sheetId`,
+      { replacements: { sheetId }, type: sequelize.QueryTypes.SELECT }
+    );
+
+
     const inputData = await sequelize.query(
       `
       SELECT i."rowIndex", i."value"
@@ -6024,31 +6030,41 @@ async function evaluateBandsAndAssign(req, res) {
     }, { transaction });
 
 
-    for (const row of inputData) {
-      const inputValue = parseFloat(row.value);
-      if (isNaN(inputValue)) continue;
+    // Build input map for quick lookup
+    const inputMap = new Map(inputData.map(r => [r.rowIndex, r.value]));
+
+
+    for (let rowIndex = 1; rowIndex <= maxRowIndex; rowIndex++) {
+      const rawValue = inputMap.has(rowIndex) ? inputMap.get(rowIndex) : null;
+      const inputValue = rawValue === null || rawValue === "" || rawValue === "null" || rawValue === "NULL" ? null : parseFloat(rawValue);
       let assignedValue = null;
 
       for (const band of bandConditions) {
-        if (band.upperBound !== "" && band.upperBound !== null && band.upperBound !== undefined) {
-          const lowerOk = evaluateBound(inputValue, band.lowerBound);
-          const upperOk = evaluateBound(inputValue, band.upperBound);
-          if (lowerOk && upperOk) {
-            assignedValue = band.assignValue;
-            break;
-          }
+        let lowerOk = false, upperOk = false;
+        // Lower bound check
+        if (band.lowerBound?.operator === 'isNull') {
+          lowerOk = (inputValue === null);
+        } else if (band.lowerBound?.operator === 'isNotNull') {
+          lowerOk = (inputValue !== null);
         } else {
-          const lowerOk = evaluateBound(inputValue, band.lowerBound);
-          if (lowerOk) {
-            assignedValue = band.assignValue;
-            break;
-          }
+          lowerOk = evaluateBound(inputValue, band.lowerBound);
         }
 
+        // Upper bound check
+        if (band.upperBound !== "" && band.upperBound !== null && band.upperBound !== undefined) {
+          upperOk = evaluateBound(inputValue, band.upperBound);
+        } else {
+          upperOk = true; // no upper bound
+        }
+
+        if (lowerOk && upperOk) {
+          assignedValue = band.assignValue;
+          break;
+        }
       }
 
       if (assignedValue !== null) {
-        const existing = outputMap.get(row.rowIndex);
+        const existing = outputMap.get(rowIndex);
         if (existing) {
           if (existing.value !== assignedValue) {
             toUpdate.push({ id: existing.id, value: assignedValue });
@@ -6057,7 +6073,7 @@ async function evaluateBandsAndAssign(req, res) {
               operationLogId: operationLog.id,
               headerId: outputHeaderId.id,
               sheetId,
-              rowIndex: row.rowIndex,
+              rowIndex,
               originalValue: existing.value,
               newValue: assignedValue,
               changeType: 'UPDATE',
@@ -6067,14 +6083,14 @@ async function evaluateBandsAndAssign(req, res) {
           toInsert.push({
             headerId: outputHeaderId.id,
             sheetId,
-            rowIndex: row.rowIndex,
+            rowIndex,
             value: assignedValue,
           });
           snapshots.push({
             operationLogId: operationLog.id,
             headerId: outputHeaderId.id,
             sheetId,
-            rowIndex: row.rowIndex,
+            rowIndex,
             originalValue: null,
             newValue: assignedValue,
             changeType: 'INSERT',
