@@ -20,6 +20,7 @@ const PopulationSubmission = require('./PopulationSubmission');
 const Tree = require('./Tree');
 const BandRule = require('./BandRule');
 const User = require('./User');
+const Permission = require('./Permission');
 const ElementMatrix = require('./ElementMatrix');
 const sequelize = require('../config/database');
 
@@ -93,6 +94,9 @@ Sheet.belongsTo(Template, { foreignKey: 'templateId' });
 MappingTemplate.hasMany(Sheet, { foreignKey: 'mappingTemplateId', onDelete: 'CASCADE' });
 Sheet.belongsTo(MappingTemplate, { foreignKey: 'mappingTemplateId' });
 
+User.hasMany(Permission, { foreignKey: 'userId', onDelete: 'CASCADE' });
+Permission.belongsTo(User, { foreignKey: 'userId' });
+
 module.exports = {
   Template,
   File,
@@ -115,5 +119,6 @@ module.exports = {
   Tree,
   BandRule,
   User,
-  ElementMatrix
+  ElementMatrix,
+  Permission,
 };
