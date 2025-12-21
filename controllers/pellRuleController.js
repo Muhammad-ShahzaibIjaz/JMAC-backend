@@ -1,9 +1,11 @@
 const sequelize = require('../config/database');
 const { PellRule } = require('../models');
-
+const { createLog } = require("../utils/auditLogger");
+const { getUserName } = require('./userController');
 
 const createPellRule = async (req, res) => {
     const { name, pellSource, criteria, targetHeader, templateId, acceptanceStatus } = req.body;
+    const username = await getUserName(req.userId);
 
     try {
 
@@ -24,8 +26,10 @@ const createPellRule = async (req, res) => {
             templateId,
             acceptanceStatus
         });
+        await createLog({ action: 'CREATE_PELL_RULE', username, performedBy: req.userId, details: `Created PellRule '${name}' with ID: ${newPellRule.id}` });
         res.status(201).json({id: newPellRule.id, pellName: name, pellSource: pellSource, criteria, targetHeader: targetHeader});
     } catch (error) {
+        await createLog({ action: 'CREATE_PELL_RULE_FAILED', username, performedBy: req.userId, details: `Failed to create PellRule '${name}': ${error.message}` });
         console.error('Error creating PellRule:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
@@ -34,6 +38,7 @@ const createPellRule = async (req, res) => {
 const updatePellRule = async (req, res) => {
     const { pellId } = req.params;
     const { name, pellSource, criteria, targetHeader, acceptanceStatus, templateId } = req.body;
+    const username = await getUserName(req.userId);
     try {
         const pellRule = await PellRule.findByPk(pellId);
         if (!pellRule) {
@@ -46,9 +51,11 @@ const updatePellRule = async (req, res) => {
         pellRule.targetHeader = targetHeader || pellRule.targetHeader;
         pellRule.acceptanceStatus = acceptanceStatus || pellRule.acceptanceStatus;
         await pellRule.save();
+        await createLog({ action: 'UPDATE_PELL_RULE', username, performedBy: req.userId, details: `Updated PellRule with ID: ${pellId}` });
         res.status(200).json(pellRule);
     }
     catch (error) {
+        await createLog({ action: 'UPDATE_PELL_RULE_FAILED', username, performedBy: req.userId, details: `Failed to update PellRule with ID: ${pellId}: ${error.message}` });
         console.error('Error updating PellRule:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
@@ -85,14 +92,17 @@ const getPellRuleById = async (req, res) => {
 
 const deletePellRule = async (req, res) => {
     const { id } = req.query;
+    const username = await getUserName(req.userId);
     try {
         const pellRule = await PellRule.findByPk(id);
         if (!pellRule) {
             return res.status(404).json({ error: 'PellRule not found' });
         }
         await pellRule.destroy();
+        await createLog({ action: 'DELETE_PELL_RULE', username, performedBy: req.userId, details: `Deleted PellRule with ID: ${id}` });
         res.status(200).json({ message: 'PellRule deleted successfully' });
     } catch (error) {
+        await createLog({ action: 'DELETE_PELL_RULE_FAILED', username, performedBy: req.userId, details: `Failed to delete PellRule with ID: ${id}: ${error.message}` });
         console.error('Error deleting PellRule:', error);
         res.status(500).json({ error: 'Internal server error' });
     }

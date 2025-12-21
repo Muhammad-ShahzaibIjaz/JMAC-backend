@@ -4,9 +4,12 @@ const CrossReferenceMapping = require('../models/CrossReferenceMappingAttributes
 const Template = require('../models/Template');
 const sequelize = require('../config/database');
 const { DataTypes, Op } = require('sequelize');
+const { createLog } = require("../utils/auditLogger");
+const { getUserName } = require('./userController');
 
 
 const addReferenceMapping = async (req, res) => {
+    const username = await getUserName(req.userId);
     const { crossReferenceId, mappings } = req.body;
     try {
         if (!crossReferenceId || !mappings || !Array.isArray(mappings)) {
@@ -36,8 +39,10 @@ const addReferenceMapping = async (req, res) => {
             })),
             { returning: true }
         );
+        await createLog({ action: 'ADD_REFERENCE_MAPPINGS', username, performedBy: req.userId, details: `Added ${createdMappings.length} mappings to Cross-Reference ID: ${crossReferenceId}` });
         return res.status(201).json("success");
     } catch (error) {
+        await createLog({ action: 'ADD_REFERENCE_MAPPINGS_FAILED', username, performedBy: req.userId, details: `Failed to add mappings to Cross-Reference ID: ${crossReferenceId}: ${error.message}` });
         console.error('Error adding cross-reference mappings:', error);
         return res.status(500).json({ error: 'Internal server error' });
     }
@@ -45,6 +50,7 @@ const addReferenceMapping = async (req, res) => {
 
 
 const updateReferenceMappings = async (crossReferenceId, mappings) => {
+    const username = await getUserName(req.userId);
     try {
         await sequelize.transaction(async (t) => {
             await CrossReferenceMapping.destroy({
@@ -60,7 +66,9 @@ const updateReferenceMappings = async (crossReferenceId, mappings) => {
                 { transaction: t }
             );
         });
+        await createLog({ action: 'UPDATE_REFERENCE_MAPPINGS', username, performedBy: req.userId, details: `Updated mappings for Cross-Reference ID: ${crossReferenceId}` });
     } catch (error) {
+        await createLog({ action: 'UPDATE_REFERENCE_MAPPINGS_FAILED', username, performedBy: req.userId, details: `Failed to update mappings for Cross-Reference ID: ${crossReferenceId}: ${error.message}` });
         console.error('Error updating reference mappings:', error);
         throw error;
     }

@@ -3,9 +3,11 @@ const { v4: uuidv4 } = require('uuid');
 const { Op } = require('sequelize');
 const Mapping_Template = require('../models/MappingTemplate');
 const Template = require('../models/Template');
-
+const { createLog } = require("../utils/auditLogger");
+const { getUserName } = require('./userController');
 
 async function createMappingTemplate(req, res) {
+  const username = await getUserName(req.userId);
   try {
     const { templateId } = req.params;
     const { name } = req.body;
@@ -45,13 +47,14 @@ async function createMappingTemplate(req, res) {
         { transaction: t }
       );
     });
-
+    await createLog({ action: 'CREATE_MAPPING_TEMPLATE', username, performedBy: req.userId, details: `Mapping Template '${template.name}' created with ID: ${template.id} for Template ID: ${templateId}` });
     res.status(201).json({
       id: template.id,
       name: template.name,
       templateId: template.templateId
     });
   } catch (error) {
+    await createLog({ action: 'CREATE_MAPPING_TEMPLATE_FAILED', username, performedBy: req.userId, details: `Failed to create Mapping Template '${name}' for Template ID: ${templateId}: ${error.message}` });
     res.status(500).json({ error: error.message });
   }
 }
@@ -69,6 +72,7 @@ async function validateTemplate(templateId) {
 
 
 async function deleteMappingTemplate(req, res) {
+  const username = await getUserName(req.userId);
   try {
     const { id } = req.params;
 
@@ -83,7 +87,7 @@ async function deleteMappingTemplate(req, res) {
       }
 
       await template.destroy({ transaction: t });
-
+      await createLog({ action: 'DELETE_MAPPING_TEMPLATE', username, performedBy: req.userId, details: `Mapping Template '${template.name}' with ID: ${template.id} deleted` });
       return {
         deleted: true,
         message: "Successfully deleted template and all associated data",
@@ -96,6 +100,7 @@ async function deleteMappingTemplate(req, res) {
 
     return res.status(200).json(result);
   } catch (error) {
+    await createLog({ action: 'DELETE_MAPPING_TEMPLATE_FAILED', username, performedBy: req.userId, details: `Failed to delete Mapping Template with ID: ${id}: ${error.message}` });
     console.error("Error deleting template:", error);
     return res.status(500).json({ error: error.message || "Internal server error" });
   }
@@ -129,6 +134,7 @@ async function getMappingTemplates(req, res) {
 
 
 async function updateMappingTemplate(req, res) {
+  const username = await getUserName(req.userId);
   try {
     const { id, name } = req.query;
 
@@ -147,10 +153,12 @@ async function updateMappingTemplate(req, res) {
     if (updatedCount === 0) {
       return res.status(404).json({ error: "No template found with the provided templateId" });
     }
+    await createLog({ action: 'UPDATE_MAPPING_TEMPLATE', username, performedBy: req.userId, details: `Mapping Template with ID: ${id} updated to name: '${name}'` });
     res.status(200).json({
       message: "ok"
     });
   } catch (error) {
+    await createLog({ action: 'UPDATE_MAPPING_TEMPLATE_FAILED', username, performedBy: req.userId, details: `Failed to update Mapping Template with ID: ${id}: ${error.message}` });
     res.status(500).json({ error: error.message });
   }
 }

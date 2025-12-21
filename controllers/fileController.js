@@ -3,8 +3,11 @@ const { headerProcessor } = require('../services/excelService');
 const sequelize = require('../config/database');
 const fs = require('fs');
 const path = require('path');
+const { createLog } = require("../utils/auditLogger");
+const { getUserName } = require('./userController');
 
 async function deleteFile(req, res) {
+  const username = await getUserName(req.userId);
   try {
     const { templateId, fileName, sheetId=null } = req.query;
 
@@ -44,9 +47,10 @@ async function deleteFile(req, res) {
         console.warn(`Physical file not found: ${filePath}`);
       }
     });
-
+    await createLog({ action: 'DELETE_FILE', username, performedBy: req.userId, details: `Deleted file '${fileName}' for Template ID: ${templateId}` });
     res.status(200).json({ message: `File ${fileName} deleted successfully` });
   } catch (error) {
+    await createLog({ action: 'DELETE_FILE_FAILED', username, performedBy: req.userId, details: `Failed to delete file '${req.query.fileName}' for Template ID: ${req.query.templateId}: ${error.message}` });
     console.error(`Error deleting file: ${error.message}`);
     if (error.message.includes('not found')) {
       res.status(404).json({ error: error.message });
@@ -58,6 +62,7 @@ async function deleteFile(req, res) {
 
 
 async function deleteFiles(req, res) {
+  const username = await getUserName(req.userId);
   try {
     const { templateId, fileNames } = req.body;
 
@@ -104,12 +109,13 @@ async function deleteFiles(req, res) {
         throw new Error(`Some files not found: ${notFoundFiles.join(', ')}`);
       }
     });
-
+    await createLog({ action: 'DELETE_FILES', username, performedBy: req.userId, details: `Deleted files [${fileNames.join(', ')}] for Template ID: ${templateId}` });
     res.status(200).json({ 
       message: `Files deleted successfully`,
       deletedCount: fileNames.length
     });
   } catch (error) {
+    await createLog({ action: 'DELETE_FILES_FAILED', username, performedBy: req.userId, details: `Failed to delete files [${req.body.fileNames ? req.body.fileNames.join(', ') : ''}] for Template ID: ${req.body.templateId}: ${error.message}` });
     console.error(`Error deleting files: ${error.message}`);
     if (error.message.includes('not found')) {
       res.status(404).json({ error: error.message });

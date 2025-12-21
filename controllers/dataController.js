@@ -16,9 +16,12 @@ const { desiredOrder, requiredHeadersName, awardTypePatterns, ynFlags } = requir
 const { buildZipCountyMap } = require('../services/countyService');
 const { calculateNACUBODiscountRate, calculateNetCharges, calculateGap, calculateNeedMet, calculateTotalDiscountRate, calculateNetTuition, calculateNeed, matchCriteria, calculateTotalNeedMet, calculateTotalDirectCost, calculateTotalInstitutionalMeritGift } = require('../utils/calculationHelper');
 const { evaluateConditions, evaluateBound } = require('../services/evaluation');
+const { createLog } = require("../utils/auditLogger");
+const { getUserName } = require('./userController');
 const fs = require('fs');
 
 async function deleteSheetData(req, res) {
+  const username = await getUserName(req.userId);
   try {
     const { templateId } = req.query;
 
@@ -45,11 +48,13 @@ async function deleteSheetData(req, res) {
     if (deletedCount === 0) {
       console.warn(`No SheetData records found for templateId ${templateId}`);
     }
+    await createLog({ action: 'DELETE_SHEET_DATA', username, performedBy: req.userId, details: `Deleted ${deletedCount} SheetData records for Template ID: ${templateId}` });
     res.status(200).json({ 
       message: 'SheetData deleted successfully',
       deletedCount
     });
   } catch (error) {
+    await createLog({ action: 'DELETE_SHEET_DATA_FAILED', username, performedBy: req.userId, details: `Failed to delete SheetData for Template ID: ${req.query.templateId}: ${error.message}` });
     console.error(`Error deleting SheetData: ${error.message}`);
     res.status(500).json({ error: error.message });
   }
@@ -837,6 +842,7 @@ async function getTemplateDataWithExcel(req, res) {
 
 
 async function exportDataWithConditions(req, res) {
+  const username = await getUserName(req.userId);
   const { templateId, sheetId, templateName, conditions = [], conditionHeaders = [], currentPage = 1, pageSize = 10000 } = req.body;
   
   try {
@@ -1018,7 +1024,12 @@ async function exportDataWithConditions(req, res) {
       rowBuckets: sequentialRowBuckets, // Pass the sequential row buckets
       templateName
     });
-
+    await createLog({
+      action: 'EXPORT_DATA_WITH_CONDITIONS',
+      username: username,
+      performedBy: req.userRole,
+      details: `Exported data for templateId: ${templateId} with conditions. Total rows exported: ${matchingRowIndices.length}, Errors: ${totalErrorRows}`
+    });
     // 🔹 Step 9: Send file as download
     res.download(filePath, `${templateName}_filtered_data.xlsx`, err => {
       if (err) {
@@ -1038,6 +1049,12 @@ async function exportDataWithConditions(req, res) {
     });
 
   } catch (error) {
+    await createLog({
+      action: 'EXPORT_DATA_WITH_CONDITIONS_FAILED',
+      username: username,
+      performedBy: req.userRole,
+      details: `Failed to export data for templateId: ${templateId}. Error: ${error.message}`
+    });
     console.error('Error in exportDataWithConditions:', error);
     res.status(500).json({
       error: 'Internal server error',
@@ -1110,6 +1127,7 @@ async function saveProcessedData({ processedFiles, headerMap, currentPage, pageS
 
 
 async function processAndSaveTemplateData(req, res) {
+  const username = await getUserName(req.userId);
   try {
     const { templateId, mappingTemplateId, currentPage = 1, pageSize = 30 } = req.query;
     const files = req.files;
@@ -1166,7 +1184,12 @@ async function processAndSaveTemplateData(req, res) {
       currentPage: page,
       pageSize: size,
     });
-
+    await createLog({
+      action: 'PROCESS_AND_SAVE_TEMPLATE_DATA',
+      username: username,
+      performedBy: req.userRole,
+      details: `Processed and saved data for templateId: ${templateId}. Total processed rows: ${totalProcessedRows}, Total records: ${totalRecords}`
+    });
     // Return success response
     res.status(200).json({
       message: 'Files processed and data saved successfully',
@@ -1185,6 +1208,12 @@ async function processAndSaveTemplateData(req, res) {
       })),
     });
   } catch (error) {
+    await createLog({
+      action: 'PROCESS_AND_SAVE_TEMPLATE_DATA_FAILED',
+      username: username,
+      performedBy: req.userRole,
+      details: `Failed to process and save data for templateId: ${req.query.templateId}. Error: ${error.message}`
+    });
     console.error('Error processing and saving template data:', error.message, error.stack);
     res.status(error.message.includes('No headers found') ? 404 : 500).json({ error: error.message });
   }
@@ -1414,6 +1443,7 @@ async function updateData(updates, templateId, sheetId) {
 }
 
 async function updateRows(req, res) {
+  const username = await getUserName(req.userId);
   try{
     const {updates, templateId, sheetId} = req.body;
     if(!templateId || !sheetId) {
@@ -1424,9 +1454,15 @@ async function updateRows(req, res) {
     }
 
     const result = await updateData(updates, templateId, sheetId);
-    
+    await createLog({
+      action: 'UPDATE_ROWS',
+      username: username,
+      performedBy: req.userRole,
+      details: `Updated rows for templateId: ${templateId}, sheetId: ${sheetId}. Total updated rows: ${result.updatedCount}`
+    });
     res.status(200).json({ message: "OK" });
   } catch(error) {
+    await createLog({ action: 'UPDATE_ROWS_FAILED', username: username, performedBy: req.userRole, details: `Failed to update rows for templateId: ${req.body.templateId}, sheetId: ${req.body.sheetId}. Error: ${error.message}` });
     res.status(500).json({ error: error.message });
   }
 }
@@ -1524,12 +1560,15 @@ async function bulkUpdates(headerId, value, templateId, sheetId) {
 
 
 async function bulkUpdateData(req, res) {
+  const username = await getUserName(req.userId);
   try{
     const {headerId, value, templateId, sheetId} = req.body;
 
     const result = await bulkUpdates(headerId, value, templateId, sheetId);
+    await createLog({ action: 'BULK_UPDATE', username: username, performedBy: req.userRole, details: `Bulk updated headerId: ${headerId} for templateId: ${templateId}, sheetId: ${sheetId}. Total affected rows: ${result.affectedRows}` });
     res.status(200).json({ message: "OK" });
   } catch(error) {
+    await createLog({ action: 'BULK_UPDATE_FAILED', username: username, performedBy: req.userRole, details: `Failed to bulk update headerId: ${req.body.headerId} for templateId: ${req.body.templateId}, sheetId: ${req.body.sheetId}. Error: ${error.message}` });
     res.status(500).json({ error: error.message });
   }
 }
@@ -1624,6 +1663,7 @@ async function addPaddingInData(headerId, templateId, sheetId, padValue, padLeng
 }
 
 async function addPadding(req,res) {
+  const username = await getUserName(req.userId);
   try{
     const {headerId, templateId, sheetId, padValue, padLength} = req.body;
 
@@ -1632,9 +1672,10 @@ async function addPadding(req,res) {
     }
 
     const result = await addPaddingInData(headerId, templateId, sheetId, padValue, padLength);
-
+    await createLog({ action: 'PADDING_UPDATE', username: username, performedBy: req.userRole, details: `Applied padding to headerId: ${headerId} for templateId: ${templateId}, sheetId: ${sheetId}. Total affected rows: ${result.affectedRows}` });
     res.status(200).json({ message: "OK" });
   } catch(error) {
+    await createLog({ action: 'PADDING_UPDATE_FAILED', username: username, performedBy: req.userRole, details: `Failed to apply padding to headerId: ${req.body.headerId} for templateId: ${req.body.templateId}, sheetId: ${req.body.sheetId}. Error: ${error.message}` });
     res.status(500).json({ error: error.message });
   }
 }
@@ -1780,6 +1821,7 @@ mathInstance.evaluate = createStringComparisonEvaluator(mathInstance);
 
 
 async function applyCalculations(req, res) {
+  const username = await getUserName(req.userId);
   const { templateId, sheetId, conditions, assignments, headers } = req.body;
   const transaction = await sequelize.transaction();
   let snapshots = [];
@@ -2036,13 +2078,14 @@ async function applyCalculations(req, res) {
     }
 
     await transaction.commit();
-
+    await createLog({ action: 'CALCULATION', username: username, performedBy: req.userRole, details: `Applied calculations for templateId: ${templateId}, sheetId: ${sheetId}. Total updated rows: ${updatedRows}` });
     return res.status(200).json({
       message: 'Rules applied successfully',
       updatedRows,
     });
   } catch (error) {
     await transaction.rollback();
+    await createLog({ action: 'CALCULATION_FAILED', username: username, performedBy: req.userRole, details: `Failed to apply calculations for templateId: ${templateId}, sheetId: ${sheetId}. Error: ${error.message}` });
     console.error('Error in applyCalculations:', error);
     return res.status(500).json({ error: `Server error: ${error.message}` });
   }
@@ -2052,6 +2095,7 @@ async function applyCalculations(req, res) {
 
 
 const addRow = async (req, res) => {
+  const username = await getUserName(req.userId);
   const { templateId, sheetId } = req.params;
 
   try {
@@ -2102,8 +2146,10 @@ const addRow = async (req, res) => {
 
       await OperationLog.create({ id: uuidv4(), templateId, sheetId, operationType: 'ADD_ROW' }, { transaction: t });
     });
+    await createLog({ action: 'ADD_ROW', username: username, performedBy: req.userRole, details: `Added new row to templateId: ${templateId}, sheetId: ${sheetId}` });
     return res.status(201).json({ message: "Row Added"});
   } catch (error) {
+    await createLog({ action: 'ADD_ROW_FAILED', username: username, performedBy: req.userRole, details: `Failed to add row to templateId: ${templateId}, sheetId: ${sheetId}. Error: ${error.message}` });
     console.error('Error adding row:', error);
     return res.status(500).json({ error: 'Failed to add row' });
   }
@@ -2155,6 +2201,7 @@ const processBatch = async (batch, maxRetries = 3) => {
 };
 
 const findZipCodes = async (req, res) => {
+  const username = await getUserName(req.userId);
   const transaction = await sequelize.transaction();
   try {
     const { templateId, sheetId, streetAddress, city, state, zipcode } = req.body;
@@ -2303,7 +2350,7 @@ const findZipCodes = async (req, res) => {
     }
 
     await transaction.commit();
-
+    await createLog({ action: 'ZIPCODE', username: username, performedBy: req.userRole, details: `Processed zip codes for templateId: ${templateId}, sheetId: ${sheetId}. Total updated rows: ${updates.length}, skipped rows: ${skippedRows.length}` });
     return res.status(200).json({
       message: 'Zip codes processed successfully',
       updatedRows: updates.length,
@@ -2313,12 +2360,14 @@ const findZipCodes = async (req, res) => {
     });
   } catch (error) {
     await transaction.rollback();
+    await createLog({ action: 'ZIPCODE_FAILED', username: username, performedBy: req.userRole, details: `Failed to process zip codes for templateId: ${req.body.templateId}, sheetId: ${req.body.sheetId}. Error: ${error.message}` });
     console.error('Error finding zip codes:', error);
     return res.status(500).json({ error: 'Failed to find zip codes' });
   }
 };
 
 const scoreConversion = async (req, res) => {
+  const username = await getUserName(req.userId);
   const transaction = await sequelize.transaction();
   try {
     const { templateId, sheetId, subject, testType, sourceHeader, sourceCompHeader, targetHeader } = req.body;
@@ -2534,7 +2583,7 @@ const scoreConversion = async (req, res) => {
     }
 
     await transaction.commit();
-    
+    await createLog({ action: 'SCORE_CONVERSION', username: username, performedBy: req.userRole, details: `Processed score conversion for templateId: ${templateId}, sheetId: ${sheetId}. Total updated rows: ${updates.length}, skipped rows: ${skippedRows.length}` });
     return res.status(200).json({ 
       message: 'Score Conversion Done',
       stats: {
@@ -2546,6 +2595,7 @@ const scoreConversion = async (req, res) => {
 
   } catch(error) {
     await transaction.rollback();
+    await createLog({ action: 'SCORE_CONVERSION_FAILED', username: username, performedBy: req.userRole, details: `Failed to process score conversion for templateId: ${req.body.templateId}, sheetId: ${req.body.sheetId}. Error: ${error.message}` });
     console.error('Score conversion error:', error);
     return res.status(500).json({ 
       error: 'Failed to Convert Score',
@@ -2557,6 +2607,7 @@ const scoreConversion = async (req, res) => {
 
 
 const cipConversion = async (req, res) => {
+  const username = await getUserName(req.userId);
   const transaction = await sequelize.transaction();
   try {
     const { templateId, sheetId, sourceHeader, targetHeader } = req.body;
@@ -2703,13 +2754,14 @@ const cipConversion = async (req, res) => {
     }
 
     await transaction.commit();
-    
+    await createLog({ action: 'CIP_CONVERSION', username: username, performedBy: req.userRole, details: `Processed CIP conversion for templateId: ${templateId}, sheetId: ${sheetId}. Total updated rows: ${updates.length}, skipped rows: ${skippedRows.length}` });
     return res.status(200).json({ 
       message: 'CIP Conversion Done',
     });
 
   } catch(error) {
     await transaction.rollback();
+    await createLog({ action: 'CIP_CONVERSION_FAILED', username: username, performedBy: req.userRole, details: `Failed to process CIP conversion for templateId: ${req.body.templateId}, sheetId: ${req.body.sheetId}. Error: ${error.message}` });
     console.error('CIP conversion error:', error);
     return res.status(500).json({ 
       error: 'Failed to Convert CIP',
@@ -2719,6 +2771,7 @@ const cipConversion = async (req, res) => {
 };
 
 const FacilityZipFiller = async (req, res) => {
+  const username = await getUserName(req.userId);
   const transaction = await sequelize.transaction();
   try {
     const { templateId, sheetId, sourceHeader, targetHeader } = req.body;
@@ -2807,6 +2860,7 @@ const FacilityZipFiller = async (req, res) => {
     }
 
     await transaction.commit();
+    await createLog({ action: 'FACILITY_ZIP_FILL', username: username, performedBy: req.userRole, details: `Filled facility ZIP prefixes for templateId: ${templateId}, sheetId: ${sheetId}. Total updated rows: ${updates.length}, skipped rows: ${skippedRows.length}` });
     return res.status(200).json({
       message: 'ZIP prefix fill complete',
       updated: updates.length,
@@ -2815,6 +2869,7 @@ const FacilityZipFiller = async (req, res) => {
     });
   } catch (error) {
     await transaction.rollback();
+    await createLog({ action: 'FACILITY_ZIP_FILL_FAILED', username: username, performedBy: req.userRole, details: `Failed to fill facility ZIP prefixes for templateId: ${req.body.templateId}, sheetId: ${req.body.sheetId}. Error: ${error.message}` });
     console.error('Facility ZIP fill error:', error);
     return res.status(500).json({
       error: 'Failed to fill ZIP prefixes',
@@ -2825,6 +2880,7 @@ const FacilityZipFiller = async (req, res) => {
 
 
 const zipCountyConversion = async (req, res) => {
+  const username = await getUserName(req.userId);
   const transaction = await sequelize.transaction();
   try {
     const { templateId, sheetId, sourceHeader, targetHeader } = req.body;
@@ -2941,6 +2997,7 @@ const zipCountyConversion = async (req, res) => {
     }
 
     await transaction.commit();
+    await createLog({ action: 'ZIP_COUNTY_CONVERSION', username: username, performedBy: req.userRole, details: `Processed ZIP to County conversion for templateId: ${templateId}, sheetId: ${sheetId}. Total updated rows: ${updates.length}, skipped rows: ${skippedRows.length}` });
     return res.status(200).json({
       message: 'ZIP to County Conversion Done',
       updated: updates.length,
@@ -2950,6 +3007,7 @@ const zipCountyConversion = async (req, res) => {
 
   } catch (error) {
     await transaction.rollback();
+    await createLog({ action: 'ZIP_COUNTY_CONVERSION_FAILED', username: username, performedBy: req.userRole, details: `Failed to process ZIP to County conversion for templateId: ${req.body.templateId}, sheetId: ${req.body.sheetId}. Error: ${error.message}` });
     console.error('ZIP to County conversion error:', error);
     return res.status(500).json({
       error: 'Failed to Convert ZIP to County',
@@ -3390,6 +3448,7 @@ async function evaluateSheetDataWithConditions(req, res) {
 
 
 async function evaluateSheetDataAndAssign(req, res) {
+  const username = await getUserName(req.userId);
   const { templateId, sheetId, headers = [], conditions = [], targetHeaderName, targetValue } = req.body;
   try {
     if (!templateId || !sheetId) {
@@ -3530,11 +3589,13 @@ async function evaluateSheetDataAndAssign(req, res) {
         await SheetDataSnapshot.bulkCreate(snapshots);
       }
     }
+    await createLog({ action: 'EVALUATE_AND_ASSIGN', username: username, performedBy: req.userRole, details: `Evaluated and assigned values for templateId: ${templateId}, sheetId: ${sheetId}. Total assigned rows: ${matchingRowIndices.length}` });
     return res.status(200).json({
       message: 'Assignment completed',
       assignedRows: matchingRowIndices.length
     });
   } catch (error) {
+    await createLog({ action: 'EVALUATE_AND_ASSIGN_FAILED', username: username, performedBy: req.userRole, details: `Failed to evaluate and assign for templateId: ${req.body.templateId}, sheetId: ${req.body.sheetId}. Error: ${error.message}` });
     console.error('Error in evaluateSheetDataAndAssign:', error);
     res.status(500).json({
       error: 'Internal server error',
@@ -3653,7 +3714,7 @@ async function applyReferenceOnData(inputHeaderId, outputHeaderId, mappings, she
 async function deleteRow(req, res) {
   const { templateId, sheetId, rowIndex } = req.params;
   const transaction = await sequelize.transaction();
-
+  const username = await getUserName(req.userId);
   try {
     const parsedRowIndex = parseInt(rowIndex);
     if (isNaN(parsedRowIndex)) {
@@ -3712,13 +3773,14 @@ async function deleteRow(req, res) {
     );
 
     await transaction.commit();
-
+    await createLog({ action: 'DELETE_ROW', username: username, performedBy: req.userRole, details: `Deleted row ${parsedRowIndex} for templateId: ${templateId}, sheetId: ${sheetId}` });
     return res.status(200).json({
       message: `Row ${parsedRowIndex} deleted successfully for template ${templateId}.`
     });
   } catch (error) {
     await transaction.rollback();
     console.error('❌ Error deleting row:', error);
+    await createLog({ action: 'DELETE_ROW_FAILED', username: username, performedBy: req.userRole, details: `Failed to delete row ${rowIndex} for templateId: ${req.body.templateId}, sheetId: ${req.body.sheetId}. Error: ${error.message}` });
     return res.status(500).json({ message: 'Internal server error.', details: error.message });
   }
 }
@@ -5230,6 +5292,7 @@ async function calculateFurtherMetrics(templateId, sheetId, maxRowIndex) {
 }
 
 async function calculateAwardInfo(req, res) {
+  const username = await getUserName(req.userId);
   const transaction = await sequelize.transaction();
   try{
     const { templateId, sheetId, acceptedStatuses } = req.body;
@@ -5251,9 +5314,12 @@ async function calculateAwardInfo(req, res) {
     const maxRow = maxRowIndex?.rowIndex ?? 0;
 
     await calculateFurtherMetrics(templateId, sheetId, maxRow);
+    await transaction.commit();
+    await createLog({ action: 'CALCULATE_AWARD_INFO', username, performedBy: req.userRole, details: `Calculated award info for templateId: ${templateId}, sheetId: ${sheetId}` });
     res.status(200).json({ message: 'Award information calculated successfully.' });
   } catch(error){
     await transaction.rollback();
+    await createLog({ action: 'CALCULATE_AWARD_INFO_FAILED', username, performedBy: req.userRole, details: `Failed to calculate award info for templateId: ${req.body.templateId}, sheetId: ${req.body.sheetId}. Error: ${error.message}` });
     console.error('Error calculating award info:', error);
     return res.status(500).json({ message: 'Internal server error.', details: error.message });
   }
@@ -5367,14 +5433,17 @@ async function evaluatePellRowsSmart({ templateId, sheetId, pellSource, criteria
 }
 
 async function calculatePellFlag(req, res) {
+  const username = await getUserName(req.userId);
   try{
     const { templateId, sheetId, pellSource, criteria, targetHeader, acceptanceStatus } = req.body;
     if (!templateId || !sheetId || !pellSource || !criteria || !targetHeader || !acceptanceStatus) {
       return res.status(400).json({ message: 'Invalid input. templateId, sheetId, pellSource, criteria, targetHeader, and acceptanceStatus are required.' });
     }
     const result = await evaluatePellRowsSmart({ templateId, sheetId, pellSource, criteria, targetHeader, acceptanceStatus });
+    await createLog({ action: 'CALCULATE_PELL_FLAG', username, performedBy: req.userRole, details: `Calculated Pell flag for templateId: ${templateId}, sheetId: ${sheetId}` });
     return res.status(200).json({ message: 'Pell flag calculation completed.', details: result });
   } catch(error){
+    await createLog({ action: 'CALCULATE_PELL_FLAG_FAILED', username, performedBy: req.userRole, details: `Failed to calculate Pell flag for templateId: ${req.body.templateId}, sheetId: ${req.body.sheetId}. Error: ${error.message}` });
     console.error('Error in calculatePellFlag:', error);
     return res.status(500).json({ message: 'Internal server error.', details: error.message });
   }
@@ -5453,6 +5522,7 @@ async function replaceSheetValues(templateId, sheetId, originalValue, replaceVal
 }
 
 async function bulkReplaceValues(req, res) {
+  const username = await getUserName(req.userId);
   try {
     const { templateId, sheetId, originalValue, replaceValue } = req.body;
     if (templateId === undefined || originalValue === undefined || replaceValue === undefined || sheetId === undefined) {
@@ -5460,8 +5530,10 @@ async function bulkReplaceValues(req, res) {
     }
 
     const result = await replaceSheetValues(templateId, sheetId, originalValue, replaceValue);
+    await createLog({ action: 'BULK_REPLACE_VALUES', username, performedBy: req.userRole, details: `Bulk replaced values for templateId: ${templateId}, sheetId: ${sheetId}` });
     return res.status(200).json({ message: 'Bulk replace completed.', details: result });
   } catch (error) {
+    await createLog({ action: 'BULK_REPLACE_VALUES_FAILED', username, performedBy: req.userRole, details: `Failed to bulk replace values for templateId: ${req.body.templateId}, sheetId: ${req.body.sheetId}. Error: ${error.message}` });
     console.error('Error in bulkReplaceValues:', error);
     return res.status(500).json({ message: 'Internal server error.', details: error.message });
   }
@@ -5717,6 +5789,7 @@ async function populateAward20Fields(templateId, targetHeaderId, sheetId, target
 
 async function autoFillInternationalAwards(req, res) {
   const { templateId, sheetId, targetHeader, awardStatusName } = req.body;
+  const username = await getUserName(req.userId);
   try {
     if (!templateId || !sheetId || !targetHeader || !awardStatusName) {
       return res.status(400).json({ message: 'templateId, sheetId, targetHeader, and awardStatusName are required.' });
@@ -5731,8 +5804,10 @@ async function autoFillInternationalAwards(req, res) {
       return res.status(404).json({ message: `Header "${targetHeader}" not found for the given templateId.` });
     }
     const result = await populateAward20Fields(templateId, header.id, sheetId, targetRows, awardStatusName);
+    await createLog({ action: 'AUTO_FILL_INTERNATIONAL_AWARDS', username, performedBy: req.userRole, details: `Auto-filled international awards for templateId: ${templateId}, sheetId: ${sheetId}` });
     return res.status(200).json({ message: 'Auto-fill completed.', details: result });
   } catch (error) {
+    await createLog({ action: 'AUTO_FILL_INTERNATIONAL_AWARDS_FAILED', username, performedBy: req.userRole, details: `Failed to auto-fill international awards for templateId: ${req.body.templateId}, sheetId: ${req.body.sheetId}. Error: ${error.message}` });
     console.error('Error in autoFillInternationalAwards:', error);
     return res.status(500).json({ message: 'Internal server error.', details: error.message });
   }
@@ -5785,6 +5860,7 @@ async function getAcceptanceStatusValues(req, res) {
 
 async function bulkUpdateYesNo(req, res) {
   const { templateId, sheetId } = req.body;
+  const username = await getUserName(req.userId);
   const transaction = await sequelize.transaction();
   try {
     if (!templateId || !sheetId) {
@@ -5932,7 +6008,7 @@ async function bulkUpdateYesNo(req, res) {
     }
 
     await transaction.commit();
-    
+    await createLog({ action: 'BULK_UPDATE_YES_NO', username, performedBy: req.userRole, details: `Bulk updated Yes/No flags for templateId: ${templateId}, sheetId: ${sheetId}` });
     return res.status(200).json({
       message: 'Bulk update completed successfully',
       stats: {
@@ -5944,6 +6020,7 @@ async function bulkUpdateYesNo(req, res) {
 
   } catch (error) {
     await transaction.rollback();
+    await createLog({ action: 'BULK_UPDATE_YES_NO_FAILED', username, performedBy: req.userRole, details: `Failed to bulk update Yes/No flags for templateId: ${req.body.templateId}, sheetId: ${req.body.sheetId}. Error: ${error.message}` });
     console.error('Error in bulkUpdateYesNo:', error);
     res.status(500).json({
       error: 'Internal server error',
@@ -5954,6 +6031,7 @@ async function bulkUpdateYesNo(req, res) {
 
 
 async function evaluateBandsAndAssign(req, res) {
+  const username = await getUserName(req.userId);
   const transaction = await sequelize.transaction();
   try{
     const { templateId, sheetId, inputHeader, outputHeader, bandConditions, targetHeader, selectedValues } = req.body;
@@ -6120,7 +6198,7 @@ async function evaluateBandsAndAssign(req, res) {
       await SheetDataSnapshot.bulkCreate(snapshots, { transaction });
     }
     await transaction.commit();
-
+    await createLog({ action: 'EVALUATE_BANDS_AND_ASSIGN', username, performedBy: req.userRole, details: `Evaluated bands and assigned values for templateId: ${templateId}, sheetId: ${sheetId}` });
     return res.status(200).json({
       message: "Band evaluation completed successfully.",
       inserted: toInsert.length,
@@ -6129,6 +6207,7 @@ async function evaluateBandsAndAssign(req, res) {
 
   } catch(error){
     await transaction.rollback();
+    await createLog({ action: 'EVALUATE_BANDS_AND_ASSIGN_FAILED', username, performedBy: req.userRole, details: `Failed to evaluate bands and assign values for templateId: ${req.body.templateId}, sheetId: ${req.body.sheetId}. Error: ${error.message}` });
     console.error('Error in evaluateBandsAndAssign:', error);
     return res.status(500).json({ message: 'Internal server error.', details: error.message });
   }
@@ -6136,7 +6215,7 @@ async function evaluateBandsAndAssign(req, res) {
 
 async function evaluateMatrixAndAssignElement(req, res) {
   const { templateId, sheetId, matrix } = req.body;
-
+  const username = await getUserName(req.userId);
   const t = await sequelize.transaction();
   try {
     if (!templateId || !sheetId || !matrix) {
@@ -6229,6 +6308,7 @@ async function evaluateMatrixAndAssignElement(req, res) {
     }
 
     await t.commit();
+    await createLog({ action: 'EVALUATE_MATRIX_AND_ASSIGN_ELEMENT', username, performedBy: req.userRole, details: `Evaluated matrix and assigned elements for templateId: ${templateId}, sheetId: ${sheetId}` });
     return res.status(200).json({ 
       message: "Matrix applied successfully.", 
       updatedRows: updates.length, 
@@ -6236,6 +6316,7 @@ async function evaluateMatrixAndAssignElement(req, res) {
     });
   } catch (error) {
     await t.rollback();
+    await createLog({ action: 'EVALUATE_MATRIX_AND_ASSIGN_ELEMENT_FAILED', username, performedBy: req.userRole, details: `Failed to evaluate matrix and assign elements for templateId: ${req.body.templateId}, sheetId: ${req.body.sheetId}. Error: ${error.message}` });
     console.error("Error in evaluateMatrixAndAssignElement:", error);
     return res.status(500).json({ message: "Internal server error.", details: error.message });
   }

@@ -8,8 +8,11 @@ const { exportHeader } = require('../services/excelService');
 const { DataTypes } = require('sequelize');
 const { desiredOrderType } = require('../utils/headerOrderList');
 const desiredOrder = require('../utils/headerOrderList').desiredOrder;
+const { createLog } = require("../utils/auditLogger");
+const { getUserName } = require('./userController');
 
 async function createHeader(req, res) {
+  const username = await getUserName(req.userId);
   try {
     const { id, name, criticalityLevel, columnType } = req.body;
 
@@ -40,7 +43,7 @@ async function createHeader(req, res) {
         { transaction: t }
       );
     });
-
+    await createLog({ action: 'CREATE_HEADER', username, performedBy: req.userId, details: `Header '${name}' created with ID: ${header.id} for Template ID: ${id}` });
     res.status(201).json({
       id: header.id,
       name: header.name,
@@ -54,6 +57,7 @@ async function createHeader(req, res) {
 }
 
 async function createBaseHeader(req, res) {
+  const username = await getUserName(req.userId);
   try {
     const { templateId } = req.query;
 
@@ -72,7 +76,7 @@ async function createBaseHeader(req, res) {
     const createdHeaders = await sequelize.transaction(async (t) => {
       return await Header.bulkCreate(headersToCreate, { transaction: t, returning: true, validate: true });
     });
-
+    await createLog({ action: 'CREATE_BASE_HEADERS', username, performedBy: req.userId, details: `Created base headers for Template ID: ${templateId}. Total headers created: ${createdHeaders.length}` });
     return res.status(201).json({
       headers: createdHeaders.map((h) => ({
         id: h.id,
@@ -82,12 +86,14 @@ async function createBaseHeader(req, res) {
       })),
     });
   } catch (error) {
+    await createLog({ action: 'CREATE_BASE_HEADERS_FAILED', username, performedBy: req.userId, details: `Failed to create base headers for Template ID: ${req.query.templateId}: ${error.message}` });
     console.error('Error creating base headers:', error);
     res.status(500).json({ error: error.message });
   }
 }
 
 async function updateHeader(req, res) {
+  const username = await getUserName(req.userId);
   try {
     const { id } = req.params;
     const { name, criticalityLevel, columnType } = req.body;
@@ -121,7 +127,7 @@ async function updateHeader(req, res) {
       await header.save({ transaction: t });
       return header;
     });
-
+    await createLog({ action: 'UPDATE_HEADER', username, performedBy: req.userId, details: `Updated Header with ID: ${id}` });
     res.status(200).json({
       id: updatedHeader.id,
       name: updatedHeader.name,
@@ -129,12 +135,14 @@ async function updateHeader(req, res) {
       columnType: updatedHeader.columnType,
     });
   } catch (error) {
+    await createLog({ action: 'UPDATE_HEADER_FAILED', username, performedBy: req.userId, details: `Failed to update Header with ID: ${req.params.id}: ${error.message}` });
     console.error('Error updating header:', error);
     res.status(500).json({ error: error.message });
   }
 }
 
 async function deleteHeader(req, res) {
+  const username = await getUserName(req.userId);
   try {
     const { id } = req.params;
 
@@ -157,9 +165,10 @@ async function deleteHeader(req, res) {
     if (!result.deleted) {
       return res.status(404).json({ error: result.message });
     }
-
+    await createLog({ action: 'DELETE_HEADER', username, performedBy: req.userId, details: `Deleted Header with ID: ${id}` });
     res.status(200).json(result);
   } catch (error) {
+    await createLog({ action: 'DELETE_HEADER_FAILED', username, performedBy: req.userId, details: `Failed to delete Header with ID: ${req.params.id}: ${error.message}` });
     console.error('Error deleting header:', error);
     res.status(500).json({ error: error.message });
   }

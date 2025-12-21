@@ -9,9 +9,12 @@ const { applyReferenceOnData } = require('./dataController');
 const { updateReferenceMappings } = require('./referenceMappingController');
 const path = require("path");
 const { headerProcessor }  = require('../services/excelService');
+const { createLog } = require("../utils/auditLogger");
+const { getUserName } = require('./userController');
 
 
 const addCrossReference = async (req, res) => {
+  const username = await getUserName(req.userId);
     const { name, templateId, inputHeaderIds, outputHeaderIds, dependentReferenceId = null } = req.body;
     try {
         if (!name || !templateId || !inputHeaderIds || !outputHeaderIds) {
@@ -41,9 +44,10 @@ const addCrossReference = async (req, res) => {
             outputHeaderIds,
             dependentReferenceId
         });
-
+        await createLog({ action: 'ADD_CROSS_REFERENCE', username, performedBy: req.userId, details: `Added Cross-Reference '${name}' with ID: ${newReference.id} for Template ID: ${templateId}` });
         return res.status(201).json(newReference.id);
     } catch (error) {
+        await createLog({ action: 'ADD_CROSS_REFERENCE_FAILED', username, performedBy: req.userId, details: `Failed to add Cross-Reference '${name}' for Template ID: ${templateId}: ${error.message}` });
         console.error('Error adding cross-reference:', error);
         return res.status(500).json({ error: 'Internal server error' });
     }
@@ -155,6 +159,7 @@ const getCrossReferencesWithoutMapping = async (req, res) => {
 
 
 const deleteCrossReference = async (req, res) => {
+  const username = await getUserName(req.userId);
   const { id } = req.query;
   try {
     const crossReference = await CrossReference.findByPk(id);
@@ -166,8 +171,10 @@ const deleteCrossReference = async (req, res) => {
       { where: { dependentReferenceId: id } }
     );
     await crossReference.destroy();
+    await createLog({ action: 'DELETE_CROSS_REFERENCE', username, performedBy: req.userId, details: `Deleted Cross-Reference with ID: ${id}` });
     return res.status(204).send();
   } catch (error) {
+    await createLog({ action: 'DELETE_CROSS_REFERENCE_FAILED', username, performedBy: req.userId, details: `Failed to delete Cross-Reference with ID: ${id}: ${error.message}` });
     console.error('Error deleting cross-reference:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -175,6 +182,7 @@ const deleteCrossReference = async (req, res) => {
 
 
 const applyReference = async (req, res) => {
+  const username = await getUserName(req.userId);
   const { id } = req.query;
   const { sheetId } = req.body;
   try {
@@ -223,14 +231,17 @@ const applyReference = async (req, res) => {
         });
       }
     }
+    await createLog({ action: 'APPLY_CROSS_REFERENCE', username, performedBy: req.userId, details: `Applied Cross-Reference with ID: ${id} on Sheet ID: ${sheetId}` });
     return res.status(200).json(allUnmapped);
   } catch (error) {
+    await createLog({ action: 'APPLY_CROSS_REFERENCE_FAILED', username, performedBy: req.userId, details: `Failed to apply Cross-Reference with ID: ${id} on Sheet ID: ${sheetId}: ${error.message}` });
     console.error('Error cross-references:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
 }
 
 const updateCrossReferenceWithMapping = async (req, res) => {
+  const username = await getUserName(req.userId);
   const { id, name, inputHeaderIds, outputHeaderIds, mappings, dependentReferenceId = null } = req.body;
   try{
     if (!id || !name || !inputHeaderIds || !outputHeaderIds || !mappings || !Array.isArray(mappings)) {
@@ -247,9 +258,11 @@ const updateCrossReferenceWithMapping = async (req, res) => {
       crossReference.dependentReferenceId = dependentReferenceId;
     }
     await crossReference.save();
+    await createLog({ action: 'UPDATE_CROSS_REFERENCE', username, performedBy: req.userId, details: `Updated Cross-Reference '${name}' with ID: ${id}` });
     await updateReferenceMappings(crossReference.id, mappings);
     return res.status(200).json({ message: 'Cross-reference updated successfully' });
   } catch (error) {
+    await createLog({ action: 'UPDATE_CROSS_REFERENCE_FAILED', username, performedBy: req.userId, details: `Failed to update Cross-Reference with ID: ${id}: ${error.message}` });
     console.error('Error updating cross-reference:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }

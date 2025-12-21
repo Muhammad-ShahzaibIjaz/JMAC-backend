@@ -6,6 +6,8 @@ const { v4: uuidv4 } = require('uuid');
 const { Op } = require('sequelize');
 const { Template } = require('../models');
 const { generateHeaderMappingExcel } = require('../services/SheetService');
+const { createLog } = require("../utils/auditLogger");
+const { getUserName } = require('./userController');
 
 
 
@@ -24,6 +26,7 @@ async function validateMappedTemplate(id) {
 
 
 async function updateMapHeader(req, res) {
+  const username = await getUserName(req.userId);
   try {
     const { maptemplateId } = req.params;
     const mapHeaders = req.body;
@@ -70,8 +73,10 @@ async function updateMapHeader(req, res) {
         transaction: t,
       });
     });
+    await createLog({ action: 'UPDATE_MAP_HEADERS', username, performedBy: req.userId, details: `Updated MapHeaders for Mapping Template ID: ${maptemplateId}. Total headers updated: ${createdMapHeaders.length}` });
     res.status(201).json({ message: "Ok" });
   } catch (error) {
+    await createLog({ action: 'UPDATE_MAP_HEADERS_FAILED', username, performedBy: req.userId, details: `Failed to update MapHeaders for Mapping Template ID: ${req.params.maptemplateId}: ${error.message}` });
     console.error('Error updating MapHeaders:', error);
     res.status(500).json({ error: error.message });
   }
@@ -151,6 +156,7 @@ const getHeaderMappingTable = async (templateId, mappingTemplateId) => {
 };
 
 const exportHeaderMapping = async (req, res) => {
+  const username = await getUserName(req.userId);
   try {
     const { templateId, mappingTemplateId } = req.query;
 
@@ -172,11 +178,12 @@ const exportHeaderMapping = async (req, res) => {
 
     const mappingTable = await getHeaderMappingTable(templateId, mappingTemplateId);
     const buffer = await generateHeaderMappingExcel(mappingTable);
-
+    await createLog({ action: 'EXPORT_HEADER_MAPPING', username, performedBy: req.userId, details: `Exported header mapping for Template ID: ${templateId} and Mapping Template ID: ${mappingTemplateId}` });
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename=${template.name}_${mappingTemplate.name}.xlsx`);
     res.status(200).send(buffer);
   } catch (error) {
+    await createLog({ action: 'EXPORT_HEADER_MAPPING_FAILED', username, performedBy: req.userId, details: `Failed to export header mapping for Template ID: ${req.query.templateId} and Mapping Template ID: ${req.query.mappingTemplateId}: ${error.message}` });
     console.error("Error exporting header mapping:", error);
     res.status(500).json({ error: 'Failed to export header mapping' });
   }
