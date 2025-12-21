@@ -3,10 +3,13 @@ const Template = require('../models/Template');
 const sequelize = require('../config/database');
 const { DataTypes, Op, where, cast, col, fn, literal} = require('sequelize');
 const { v4: uuidv4 } = require('uuid');
+const { createLog } = require("../utils/auditLogger");
+const { getUserName } = require('./userController');
 
 
 const createDecisionTree = async (req, res) => {
-  const { templateId, name, treeData, baseHeader, sheetId, totalDataCount } = req.body;
+    const { templateId, name, treeData, baseHeader, sheetId, totalDataCount } = req.body;
+    const username = await getUserName(req.userId);
     try {
         if (!templateId || !name || !treeData || !baseHeader || !sheetId) {
             return res.status(400).json({ error: 'Missing required fields' });
@@ -31,9 +34,10 @@ const createDecisionTree = async (req, res) => {
             sheetId,
             totalDataCount: totalDataCount || 0
         });
-
+        await createLog({ action: 'CREATE_DECISION_TREE', username: username, performedBy: req.userRole, details: `Created decision tree '${name}' for template ID '${templateId}'` });
         res.status(201).json({name: decisionTree.name, id: decisionTree.id, templateId: decisionTree.templateId, sheetId: decisionTree.sheetId});
     } catch (error) {
+        await createLog({ action: 'CREATE_DECISION_TREE_FAILED', username: username, performedBy: req.userRole, details: `Failed to create decision tree '${name}' for template ID '${templateId}': ${error.message}` });
         console.error('Error creating decision tree:', error);
         res.status(500).json({ error: 'Failed to create decision tree' });
     }
@@ -70,7 +74,8 @@ const getDecisionTreeById = async (req, res) => {
 };
 
 const deleteDecisionTree = async (req, res) => {
-  const { treeId } = req.params;
+    const { treeId } = req.params;
+    const username = await getUserName(req.userId);
     try {
         const deletedCount = await Tree.destroy({
             where: { id: treeId }
@@ -78,9 +83,11 @@ const deleteDecisionTree = async (req, res) => {
         if (deletedCount === 0) {
             return res.status(404).json({ error: 'Decision tree not found' });
         }
+        await createLog({ action: 'DELETE_DECISION_TREE', username: username, performedBy: req.userRole, details: `Deleted decision tree with ID '${treeId}'` });
         res.status(200).json({ message: 'Decision tree deleted successfully' });
     }
     catch (error) {
+        await createLog({ action: 'DELETE_DECISION_TREE_FAILED', username: username, performedBy: req.userRole, details: `Failed to delete decision tree with ID '${treeId}': ${error.message}` });
         console.error('Error deleting decision tree:', error);
         res.status(500).json({ error: 'Failed to delete decision tree' });
     }
@@ -89,6 +96,7 @@ const deleteDecisionTree = async (req, res) => {
 const updateDecisionTree = async (req, res) => {
     const { treeId } = req.params;
     const { name, treeData, baseHeader, sheetId, totalDataCount, isActive } = req.body;
+    const username = await getUserName(req.userId);
     try {
         const decisionTree = await Tree.findByPk(treeId);
         if (!decisionTree) {
@@ -103,8 +111,10 @@ const updateDecisionTree = async (req, res) => {
             decisionTree.isActive = isActive;
         }
         await decisionTree.save();
+        await createLog({ action: 'UPDATE_DECISION_TREE', username: username, performedBy: req.userRole, details: `Updated decision tree with ID '${treeId}'` });
         res.status(200).json(decisionTree);
     } catch (error) {
+        await createLog({ action: 'UPDATE_DECISION_TREE_FAILED', username: username, performedBy: req.userRole, details: `Failed to update decision tree with ID '${treeId}': ${error.message}` });
         console.error('Error updating decision tree:', error);
         res.status(500).json({ error: 'Failed to update decision tree' });
     }

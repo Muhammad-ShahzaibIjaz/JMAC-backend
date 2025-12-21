@@ -2,15 +2,18 @@ const sequelize  = require('../config/database');
 const Template = require('../models/Template');
 const Header = require('../models/Header');
 const MapHeader = require('../models/MapHeader');
+const TemplatePermission = require('../models/TemplatePermission');
 const { v4: uuidv4 } = require('uuid');
 const { Op } = require('sequelize');
 const path = require('path');
 const fs = require('fs');
-
+const { createLog } = require("../utils/auditLogger");
+const { getUserName } = require('./userController');
 
 async function createTemplate(req, res) {
+  const { name } = req.body;
+  const username = await getUserName(req.userId);
   try {
-    const { name } = req.body;
 
     if (!name || typeof name !== 'string' || name.trim().length === 0) {
       return res.status(400).json({ error: 'Template name is required and must be a non-empty string' });
@@ -38,20 +41,27 @@ async function createTemplate(req, res) {
         { transaction: t }
       );
     });
-
+    await createLog({
+      action: 'CREATE_TEMPLATE',
+      username,
+      performedBy: req.userId,
+      details: `Template '${template.name}' created with ID: ${template.id}`,
+    });
     res.status(201).json({
       id: template.id,
       name: template.name
     });
   } catch (error) {
+    await createLog({ action: 'CREATE_TEMPLATE_FAILED', username, performedBy: req.userId, details: `Failed to create template '${name}': ${error.message}` });
     console.error('Error creating template:', error);
     res.status(500).json({ error: error.message });
   }
 }
 
 async function deleteTemplate(req, res) {
+  const { id } = req.params;
+  const username = await getUserName(req.userId);
   try {
-    const { id } = req.params;
 
     // Validate input
     if (!id || typeof id !== "string" || id.trim().length === 0) {
@@ -79,7 +89,6 @@ async function deleteTemplate(req, res) {
 
       // Delete the Template (cascading deletes handle associated data)
       await template.destroy({ transaction: t });
-
       return {
         deleted: true,
         message: "Successfully deleted template and all associated data",
@@ -88,7 +97,7 @@ async function deleteTemplate(req, res) {
     if (!result.deleted) {
       return res.status(404).json({ error: result.message });
     }
-  
+    
     const dirPath = path.join(__dirname, '..', 'uploads', id);
     if (fs.existsSync(dirPath)) {
       const files = fs.readdirSync(dirPath);
@@ -103,18 +112,38 @@ async function deleteTemplate(req, res) {
       console.warn(`Directory not found: ${dirPath}`);
     }
     
+    await createLog({ action: 'DELETE_TEMPLATE', username, performedBy: req.userId, details: `Template '${template.name}' with ID: ${template.id} deleted` });
     return res.status(200).json(result);
   } catch (error) {
+    await createLog({ action: 'DELETE_TEMPLATE_FAILED', username, performedBy: req.userId, details: `Failed to delete template ID '${id}': ${error.message}` });
     console.error("Error deleting template:", error);
     return res.status(500).json({ error: error.message || "Internal server error" });
   }
 }
 
 
-
 async function getTemplates(req, res) {
+  const { userId, userRole } = req;
   try {
-    const templates = await Template.findAll();
+    let templates;
+
+    if (userRole === "Admin" || userRole === "Creator") {
+      // full access
+      templates = await Template.findAll();
+    } else if (userRole === "Consultant" || userRole === "Campus") {
+      templates = await Template.findAll({
+        include: [
+          {
+            model: TemplatePermission,
+            as: "permissions",
+            where: { userId },
+            attributes: [],
+          },
+        ],
+      });
+    } else {
+      templates = [];
+    }
 
     const formattedTemplates = templates.map((template) => ({
       id: template.id,
@@ -123,7 +152,7 @@ async function getTemplates(req, res) {
 
     res.json(formattedTemplates);
   } catch (error) {
-    console.error('Error fetching templates:', error);
+    console.error("Error fetching templates:", error);
     res.status(500).json({ error: error.message });
   }
 }
@@ -143,9 +172,33 @@ async function getTemplateByID(req, res) {
   }
 }
 
+async function getTemplatePermissionStatus(req, res) {
+  const { templateId } = req.query;
+  const { userId } = req;
+  try {
+    if (!templateId) {
+      return res.status(400).json({ error: 'Template ID is required' });
+    }
+    const permission = await TemplatePermission.findOne({
+      where: {
+        templateId,
+        userId,
+      },
+    });
+    if (!permission) {
+      return res.status(200).json({ access: false });
+    }
+    res.status(200).json({ access: permission.accessLevel ===  'write' ? true : false });
+  } catch (error) {
+    console.error('Error fetching template permission status:', error);
+    res.status(500).json({ error: error.message });
+  }
+}
+
 module.exports = {
   createTemplate,
   deleteTemplate,
   getTemplates,
-  getTemplateByID
+  getTemplateByID,
+  getTemplatePermissionStatus,
 };

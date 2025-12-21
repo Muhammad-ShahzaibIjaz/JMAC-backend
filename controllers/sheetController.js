@@ -1,9 +1,11 @@
 const sequelize = require('../config/database');
 const { Sheet } = require('../models');
+const { createLog } = require("../utils/auditLogger");
+const { getUserName } = require('./userController');
 
 async function createSheet(req, res) {
   const { templateId, mappingTemplateId, sheetName } = req.body;
-
+  const username = await getUserName(req.userId);
   try {
     if (!templateId || !mappingTemplateId || !sheetName) {
       return res.status(400).json({ error: 'All fields are required' });
@@ -19,8 +21,10 @@ async function createSheet(req, res) {
       mappingTemplateId,
       sheetName,
     });
+    await createLog({ action: 'CREATE_SHEET', username, performedBy: req.userId, details: `Sheet '${sheetName}' created with ID: ${sheet.id}` });
     res.status(201).json({ id: sheet.id, templateId, mappingTemplateId, sheetName });
   } catch (error) {
+    await createLog({ action: 'CREATE_SHEET_FAILED', username, performedBy: req.userId, details: `Failed to create sheet '${sheetName}': ${error.message}` });
     console.error('Error creating sheet:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -60,7 +64,7 @@ async function getSheetsByTemplateId(req, res) {
 
 async function deleteSheet(req, res) {
     const { id } = req.params;
-
+    const username = await getUserName(req.userId);
     try {
         const sheet = await Sheet.findByPk(id);
         if (!sheet) {
@@ -68,8 +72,10 @@ async function deleteSheet(req, res) {
         }
 
         await sheet.destroy();
+        await createLog({ action: 'DELETE_SHEET', username, performedBy: req.userId, details: `Sheet '${sheet.sheetName}' with ID: ${sheet.id} deleted` });
         res.status(204).send();
     } catch (error) {
+        await createLog({ action: 'DELETE_SHEET_FAILED', username, performedBy: req.userId, details: `Failed to delete sheet ID '${id}': ${error.message}` });
         console.error('Error deleting sheet:', error);
         res.status(500).json({ error: 'Internal server error' });
     }

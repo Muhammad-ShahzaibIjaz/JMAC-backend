@@ -36,10 +36,13 @@ const populationStatusRoutes = require("./routes/PopulationStatusRoutes");
 const treeRoutes = require("./routes/treeRoutes");
 const userRoutes = require("./routes/userRoutes");
 const projectionRoutes = require("./routes/projectionRoutes");
+const logRoutes = require("./routes/logRoutes");
 
 
 
 
+
+app.use("/api", logRoutes);
 app.use("/api", excelRoutes);
 app.use("/api", templateRoutes);
 app.use("/api", headerRoutes);

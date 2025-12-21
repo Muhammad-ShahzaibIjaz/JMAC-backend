@@ -6,10 +6,13 @@ const {extractHeaderValues} = require("./dataController");
 const { bulkUpdates } = require("./dataController");
 const { Op } = require('sequelize');
 const sequelize = require('../config/database');
+const { createLog } = require("../utils/auditLogger");
+const { getUserName } = require('./userController');
 
 const createRule = async (req, res) => {
+  const { name, conditions, assignments, headers, templateId } = req.body;
+  const username = await getUserName(req.userId);
   try {
-    const { name, conditions, assignments, headers, templateId } = req.body;
 
     // Validate input
     if (!name || !conditions || !assignments || !headers || !templateId) {
@@ -26,7 +29,7 @@ const createRule = async (req, res) => {
       headers: uniqueHeaders,
       templateId
     });
-
+    await createLog({ action: 'CREATE_RULE', username, performedBy: req.userId, details: `Rule '${name}' created with ID: ${rule.id}` });
     return res.status(201).json({ message: "Rule created successfully", rule });
   } catch (error) {
     console.error("Error creating rule:", error);
@@ -36,8 +39,9 @@ const createRule = async (req, res) => {
 
 
 const createConditionalRule = async (req, res) => {
+  const { ruleName, conditions, headers, targetHeaderName, targetValue, templateId } = req.body;
+  const username = await getUserName(req.userId);
   try {
-    const { ruleName, conditions, headers, targetHeaderName, targetValue, templateId } = req.body;
 
     // Validate input
     if (!ruleName || !conditions || !headers || !targetHeaderName || !targetValue || !templateId) {
@@ -55,21 +59,23 @@ const createConditionalRule = async (req, res) => {
       headers: uniqueHeaders,
       templateId
     });
-
+    await createLog({ action: 'CREATE_CONDITIONAL_RULE', username, performedBy: req.userId, details: `Conditional Rule '${ruleName}' created with ID: ${rule.id}` });
     return res.status(201).json({ id: rule.id, ruleName: rule.ruleName, conditions: Array.isArray(conditions.all)
   ? conditions.all.length
   : Array.isArray(conditions.any)
     ? conditions.any.length
     : 0, targetHeaderName: rule.targetHeaderName, targetValue: rule.targetValue });
   } catch (error) {
+    await createLog({ action: 'CREATE_CONDITIONAL_RULE_FAILED', username, performedBy: req.userId, details: `Failed to create conditional rule '${ruleName}': ${error.message}` });
     console.error("Error creating rule:", error);
     return res.status(500).json({ error: "Internal server error" });
   }
 };
 
 const updateConditionalRule = async (req, res) => {
+  const { id, ruleName, conditions, headers, targetHeaderName, targetValue, templateId } = req.body;
+  const username = await getUserName(req.userId);
   try {
-    const { id, ruleName, conditions, headers, targetHeaderName, targetValue, templateId } = req.body;
 
     // Validate input
     if (!id || !ruleName || !conditions || !headers || !targetHeaderName || !targetValue || !templateId) {
@@ -108,15 +114,17 @@ const updateConditionalRule = async (req, res) => {
       targetHeaderName: rule.targetHeaderName,
       targetValue: rule.targetValue
     };
-
+    await createLog({ action: 'UPDATE_CONDITIONAL_RULE', username, performedBy: req.userId, details: `Conditional Rule '${ruleName}' with ID: ${id} updated` });
     return res.status(200).json(transformedRule);
   } catch (error) {
+    await createLog({ action: 'UPDATE_CONDITIONAL_RULE_FAILED', username, performedBy: req.userId, details: `Failed to update conditional rule ID '${id}': ${error.message}` });
     console.error("Error updating rule:", error);
     return res.status(500).json({ error: "Internal server error" });
   }
 };
 
 const updateRule = async (req, res) => {
+  const username = await getUserName(req.userId);
   try {
     const { id } = req.params;
     const { name, conditions, assignments, headers } = req.body;
@@ -139,15 +147,17 @@ const updateRule = async (req, res) => {
       assignments,
       headers: uniqueHeaders,
     });
-
+    await createLog({ action: 'UPDATE_RULE', username, performedBy: req.userId, details: `Rule '${name}' with ID: ${id} updated` });
     return res.status(200).json({ message: "Rule updated successfully", rule });
   } catch (error) {
+    await createLog({ action: 'UPDATE_RULE_FAILED', username, performedBy: req.userId, details: `Failed to update rule ID '${req.params.id}': ${error.message}` });
     console.error("Error updating rule:", error);
     return res.status(500).json({ error: "Internal server error" });
   }
 };
 
 const deleteRule = async (req, res) => {
+  const username = await getUserName(req.userId);
   try {
     const { id } = req.params;
 
@@ -157,8 +167,10 @@ const deleteRule = async (req, res) => {
     }
 
     await rule.destroy();
+    await createLog({ action: 'DELETE_RULE', username, performedBy: req.userId, details: `Rule with ID: ${id} deleted` });
     return res.status(200).json({ message: "Rule deleted successfully" });
   } catch (error) {
+    await createLog({ action: 'DELETE_RULE_FAILED', username, performedBy: req.userId, details: `Failed to delete rule ID '${req.params.id}': ${error.message}` });
     console.error("Error deleting rule:", error);
     return res.status(500).json({ error: "Internal server error" });
   }
@@ -283,6 +295,7 @@ const getBulkRulesByTemplateId = async (req, res) => {
 
 const createBulkRule = async (req, res) => {
   const { headerName, value, name, templateId } = req.body;
+  const username = await getUserName(req.userId);
   try{
     // Validate input
     if (!headerName || !name || !templateId) {
@@ -301,8 +314,10 @@ const createBulkRule = async (req, res) => {
       isGlobal: true,
       templateId
     });
+    await createLog({ action: 'CREATE_BULK_RULE', username, performedBy: req.userId, details: `Bulk Rule '${name}' created with ID: ${rule.id}` });
     return res.status(201).json({ id: rule.id, name: rule.name, headerName, assignment: value });
   } catch (error) {
+    await createLog({ action: 'CREATE_BULK_RULE_FAILED', username, performedBy: req.userId, details: `Failed to create bulk rule '${name}': ${error.message}` });
     console.error("Error creating bulk rule:", error);
     return res.status(500).json({ error: "Internal server error" });
   }
@@ -311,6 +326,7 @@ const createBulkRule = async (req, res) => {
 const updateBulkRule = async (req, res) => {
   const { id } = req.params;
   const { headerName, value, name, templateId } = req.body;
+  const username = await getUserName(req.userId);
   try {
     const rule = await CalculationRule.findByPk(id);
     if (!rule) {
@@ -321,8 +337,10 @@ const updateBulkRule = async (req, res) => {
     rule.header = headerName;
     rule.assignments = value;
     await rule.save();
+    await createLog({ action: 'UPDATE_BULK_RULE', username, performedBy: req.userId, details: `Bulk Rule '${name}' with ID: ${id} updated` });
     return res.status(200).json({ id: rule.id, name: rule.name, headerName: rule.header, assignment: rule.assignments });
   } catch (error) {
+    await createLog({ action: 'UPDATE_BULK_RULE_FAILED', username, performedBy: req.userId, details: `Failed to update bulk rule ID '${id}': ${error.message}` });
     console.error("Error updating bulk rule:", error);
     return res.status(500).json({ error: "Internal server error" });
   }
@@ -331,6 +349,7 @@ const updateBulkRule = async (req, res) => {
 const applyBulkRule = async (req, res) => {
   const { id } = req.query;
   const { sheetId } = req.body;
+  const username = await getUserName(req.userId);
   try {
     const isBulkRuleExist = await CalculationRule.findByPk(id);
     if (!isBulkRuleExist) {
@@ -343,8 +362,10 @@ const applyBulkRule = async (req, res) => {
     }
 
     await bulkUpdates(headerId.id, isBulkRuleExist.assignments, isBulkRuleExist.templateId, sheetId);
+    await createLog({ action: 'APPLY_BULK_RULE', username, performedBy: req.userId, details: `Bulk Rule with ID: ${id} applied to sheet ID: ${sheetId}` });
     return res.status(200).json({ message: "Bulk rule applied successfully" });
   } catch (error) {
+    await createLog({ action: 'APPLY_BULK_RULE_FAILED', username, performedBy: req.userId, details: `Failed to apply bulk rule ID '${id}': ${error.message}` });
     console.error("Error applying bulk rule:", error);
     return res.status(500).json({ error: "Internal server error" });
   }
@@ -352,20 +373,24 @@ const applyBulkRule = async (req, res) => {
 
 const deleteBulkRule = async (req, res) => {
   const { id } = req.query;
+  const username = await getUserName(req.userId);
   try{
     const isBulkRuleExist = await CalculationRule.findByPk(id);
     if (!isBulkRuleExist) {
       return res.status(404).json({ error: "Bulk rule not found" });
     }
     await isBulkRuleExist.destroy();
+    await createLog({ action: 'DELETE_BULK_RULE', username, performedBy: req.userId, details: `Bulk Rule with ID: ${id} deleted` });
     return res.status(200).json({ message: "Bulk rule deleted successfully" });
   } catch(error) {
+    await createLog({ action: 'DELETE_BULK_RULE_FAILED', username, performedBy: req.userId, details: `Failed to delete bulk rule ID '${id}': ${error.message}` });
     console.error("Error deleting bulk rule:", error);
     return res.status(500).json({ error: "Internal server error" });
   }
 }
 
 const deleteConditionalRule = async (req, res) => {
+  const username = await getUserName(req.userId);
   try {
     const { id } = req.query;
 
@@ -375,8 +400,10 @@ const deleteConditionalRule = async (req, res) => {
     }
 
     await rule.destroy();
+    await createLog({ action: 'DELETE_CONDITIONAL_RULE', username, performedBy: req.userId, details: `Conditional Rule with ID: ${id} deleted` });
     return res.status(200).json({ message: "Rule deleted successfully" });
   } catch (error) {
+    await createLog({ action: 'DELETE_CONDITIONAL_RULE_FAILED', username, performedBy: req.userId, details: `Failed to delete conditional rule ID '${req.params.id}': ${error.message}` });
     console.error("Error deleting rule:", error);
     return res.status(500).json({ error: "Internal server error" });
   }
@@ -384,6 +411,7 @@ const deleteConditionalRule = async (req, res) => {
 
 
 const createPopulationRule = async (req, res) => {
+  const username = await getUserName(req.userId);
   try {
     const { ruleName, conditions, headers, templateId, ruleType = 'population' } = req.body;
 
@@ -405,13 +433,14 @@ const createPopulationRule = async (req, res) => {
       templateId,
       ruleType
     });
-
+    await createLog({ action: 'CREATE_POPULATION_RULE', username, performedBy: req.userId, details: `Population Rule '${ruleName}' created with ID: ${rule.id}` });
     return res.status(201).json({ id: rule.id, ruleName: rule.ruleName, ruleType: rule.ruleType, conditions: Array.isArray(conditions.all)
   ? conditions.all.length
   : Array.isArray(conditions.any)
     ? conditions.any.length
     : 0 });
   } catch (error) {
+    await createLog({ action: 'CREATE_POPULATION_RULE_FAILED', username, performedBy: req.userId, details: `Failed to create population rule '${req.body.ruleName}': ${error.message}` });
     console.error("Error creating population rule:", error);
     return res.status(500).json({ error: "Internal server error" });
   }
@@ -419,7 +448,7 @@ const createPopulationRule = async (req, res) => {
 
 const updatePopulationRule = async (req, res) => {
   const { id, ruleName, conditions, headers, ruleType } = req.body;
-
+  const username = await getUserName(req.userId);
   try {
     if (!id || !ruleName || !conditions || !headers || !ruleType) {
       return res.status(400).json({
@@ -440,7 +469,7 @@ const updatePopulationRule = async (req, res) => {
       headers: uniqueHeaders,
       ruleType
     });
-
+    await createLog({ action: 'UPDATE_POPULATION_RULE', username, performedBy: req.userId, details: `Population Rule '${ruleName}' with ID: ${id} updated` });
     // ✅ Match createPopulationRule response format
     return res.status(200).json({
       id: rule.id,
@@ -453,6 +482,7 @@ const updatePopulationRule = async (req, res) => {
         : 0
     });
   } catch (error) {
+    await createLog({ action: 'UPDATE_POPULATION_RULE_FAILED', username, performedBy: req.userId, details: `Failed to update population rule ID '${id}': ${error.message}` });
     console.error("Error updating population rule:", error);
     return res.status(500).json({ error: "Internal server error" });
   }
@@ -507,6 +537,7 @@ const getPopulationRuleById = async (req, res) => {
 };
 
 const deletePopulationRule = async (req, res) => {
+  const username = await getUserName(req.userId);
   try {
     const { id } = req.query;
 
@@ -516,8 +547,10 @@ const deletePopulationRule = async (req, res) => {
     }
 
     await rule.destroy();
+    await createLog({ action: 'DELETE_POPULATION_RULE', username, performedBy: req.userId, details: `Population Rule with ID: ${id} deleted` });
     return res.status(200).json({ message: "Rule deleted successfully" });
   } catch (error) {
+    await createLog({ action: 'DELETE_POPULATION_RULE_FAILED', username, performedBy: req.userId, details: `Failed to delete population rule ID '${req.params.id}': ${error.message}` });
     console.error("Error deleting rule:", error);
     return res.status(500).json({ error: "Internal server error" });
   }
@@ -525,7 +558,7 @@ const deletePopulationRule = async (req, res) => {
 
 const autoPopulationRule = async (req, res) => {
   const { templateId, sheetId, targetHeader } = req.body;
-
+  const username = await getUserName(req.userId);
   try {
     if (!templateId || !sheetId || !targetHeader) {
       return res.status(400).json({ error: "All fields (templateId, sheetId, targetHeader) are required" });
@@ -592,16 +625,18 @@ const autoPopulationRule = async (req, res) => {
         conditions: conditionCount,
       };
     });
-
+    await createLog({ action: 'AUTO_POPULATION_RULE', username, performedBy: req.userId, details: `Auto population rules created for template ID: ${templateId} and header: ${targetHeader}` });
     return res.status(200).json(transformedRules);
 
   } catch (error) {
+    await createLog({ action: 'AUTO_POPULATION_RULE_FAILED', username, performedBy: req.userId, details: `Failed to auto populate rules for template ID '${req.body.templateId}': ${error.message}` });
     console.error("Error in auto population rule:", error);
     return res.status(500).json({ error: "Internal server error" });
   }
 };
 
 const createBandRule = async (req, res) => {
+  const username = await getUserName(req.userId);
   try {
     const { name, conditions, inputHeader, outputHeader, templateId, targetHeader, selectedValues } = req.body;
     if (!name || !conditions || !inputHeader || !outputHeader || !templateId) {
@@ -624,8 +659,10 @@ const createBandRule = async (req, res) => {
       targetHeader,
       selectedValues
     });
+    await createLog({ action: 'CREATE_BAND_RULE', username, performedBy: req.userId, details: `Band Rule '${name}' created with ID: ${rule.id}` });
     return res.status(201).json(rule);
   } catch (error) {
+    await createLog({ action: 'CREATE_BAND_RULE_FAILED', username, performedBy: req.userId, details: `Failed to create band rule '${req.body.name}': ${error.message}` });
     console.error("Error creating band rule:", error);
     return res.status(500).json({ error: "Internal server error" });
   }
@@ -633,6 +670,7 @@ const createBandRule = async (req, res) => {
 
 
 const updateBandRule = async (req, res) => {
+  const username = await getUserName(req.userId);
   try {
     const { id } = req.params;
     const { name, conditions, inputHeader, outputHeader, targetHeader, selectedValues } = req.body;
@@ -651,8 +689,10 @@ const updateBandRule = async (req, res) => {
       targetHeader,
       selectedValues
     });
+    await createLog({ action: 'UPDATE_BAND_RULE', username, performedBy: req.userId, details: `Band Rule '${name}' with ID: ${id} updated` });
     return res.status(200).json({ name: rule.name, conditions: rule.conditions, inputHeader: rule.inputHeader, outputHeader: rule.outputHeader, targetHeader: rule.targetHeader, selectedValues: rule.selectedValues });
   } catch (error) {
+    await createLog({ action: 'UPDATE_BAND_RULE_FAILED', username, performedBy: req.userId, details: `Failed to update band rule ID '${req.body.id}': ${error.message}` });
     console.error("Error updating band rule:", error);
     return res.status(500).json({ error: "Internal server error" });
   }
@@ -675,6 +715,7 @@ const getBandRulesByTemplateId = async (req, res) => {
 };
 
 const deleteBandRule = async (req, res) => {
+  const username = await getUserName(req.userId);
   try {
     const { id } = req.query;
     const rule = await BandRule.findByPk(id);
@@ -682,15 +723,18 @@ const deleteBandRule = async (req, res) => {
       return res.status(404).json({ error: "Band rule not found" });
     }
     await rule.destroy();
+    await createLog({ action: 'DELETE_BAND_RULE', username, performedBy: req.userId, details: `Band Rule with ID: ${id} deleted` });
     return res.status(200).json({ message: "Band rule deleted successfully" });
   }
   catch (error) {
+    await createLog({ action: 'DELETE_BAND_RULE_FAILED', username, performedBy: req.userId, details: `Failed to delete band rule ID '${id}': ${error.message}` });
     console.error("Error deleting band rule:", error);
     return res.status(500).json({ error: "Internal server error" });
   } 
 };
 
 const createElementMatrix = async (req, res) => {
+  const username = await getUserName(req.userId);
   const transaction = await sequelize.transaction();
   try {
     const { name, academicBands, financialBands, values, templateId } = req.body;
@@ -716,8 +760,11 @@ const createElementMatrix = async (req, res) => {
       templateId
     }, {transaction});
     await transaction.commit();
+    await createLog({ action: 'CREATE_ELEMENT_MATRIX', username, performedBy: req.userId, details: `Element Matrix '${name}' created with ID: ${matrix.id}` });
     return res.status(201).json(matrix);
   } catch (error) {
+    await transaction.rollback();
+    await createLog({ action: 'CREATE_ELEMENT_MATRIX_FAILED', username, performedBy: req.userId, details: `Failed to create element matrix '${req.body.name}': ${error.message}` });
     console.error("Error creating element matrix:", error);
     return res.status(500).json({ error: "Internal server error" });
   }
@@ -725,6 +772,7 @@ const createElementMatrix = async (req, res) => {
 
 
 const updateElementMatrix = async (req, res) => {
+  const username = await getUserName(req.userId);
   const transaction = await sequelize.transaction();
   try {
     const { id } = req.params;
@@ -745,14 +793,18 @@ const updateElementMatrix = async (req, res) => {
       values
     }, {transaction});
     await transaction.commit();
+    await createLog({ action: 'UPDATE_ELEMENT_MATRIX', username, performedBy: req.userId, details: `Element Matrix '${name}' with ID: ${id} updated` });
     return res.status(200).json(matrix);
   } catch (error) {
+    await transaction.rollback();
+    await createLog({ action: 'UPDATE_ELEMENT_MATRIX_FAILED', username, performedBy: req.userId, details: `Failed to update element matrix ID '${req.params.id}': ${error.message}` });
     console.error("Error updating element matrix:", error);
     return res.status(500).json({ error: "Internal server error" });
   }
 };
 
 const deleteElementMatrix = async (req, res) => {
+  const username = await getUserName(req.userId);
   try {
     const { id } = req.query;
     const matrix = await ElementMatrix.findByPk(id);
@@ -760,8 +812,10 @@ const deleteElementMatrix = async (req, res) => {
       return res.status(404).json({ error: "Element matrix not found" });
     }
     await matrix.destroy();
+    await createLog({ action: 'DELETE_ELEMENT_MATRIX', username, performedBy: req.userId, details: `Element Matrix with ID: ${id} deleted` });
     return res.status(200).json({ message: "Element matrix deleted successfully" });
   } catch(error) {
+    await createLog({ action: 'DELETE_ELEMENT_MATRIX_FAILED', username, performedBy: req.userId, details: `Failed to delete element matrix ID '${id}': ${error.message}` });
     console.error("Error deleting element matrix:", error);
     return res.status(500).json({ error: "Internal server error" });
   }

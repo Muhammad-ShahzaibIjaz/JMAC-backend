@@ -20,6 +20,11 @@ const User = sequelize.define("User", {
     type: DataTypes.ENUM("Admin", "Creator", "Consultant", "Campus"),
     allowNull: false,
     defaultValue: "Creator",
+  },
+  isActive: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: true,
   }
 }, {
   tableName: "User",
