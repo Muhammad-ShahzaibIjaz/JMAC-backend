@@ -3,8 +3,7 @@ const router = express.Router();
 const userController = require('../controllers/userController');
 const { verifyToken, verifyAdmin, verifyUserActive } = require('../middlewares/authMiddleware');
 
-// router.post('/user', verifyToken, verifyUserActive, verifyAdmin,  userController.createUser);
-router.post('/user',  userController.createUser);
+router.post('/user', verifyToken, verifyUserActive, verifyAdmin,  userController.createUser);
 router.put('/user', verifyToken, verifyUserActive, verifyAdmin, userController.updateUser);
 router.put('/user/password', verifyToken, verifyUserActive, verifyAdmin, userController.updatePassword);
 router.delete('/user', verifyToken, verifyUserActive, verifyAdmin, userController.deleteUser);

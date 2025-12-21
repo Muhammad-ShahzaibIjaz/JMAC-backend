@@ -53,10 +53,10 @@ const createUser = async (req, res) => {
             await TemplatePermission.bulkCreate(permissionRecords, { transaction });
         }
         await transaction.commit();
-        // await createLog({ action: "USER_CREATED", username: newUser.username, performedBy: req.userRole, details: `User ${newUser.username} was created.` });
+        await createLog({ action: "USER_CREATED", username: newUser.username, performedBy: req.userRole, details: `User ${newUser.username} was created.` });
         res.status(201).json({ userId: newUser.id.toString() });
     } catch (error) {
-        // await createLog({ action: "USER_CREATION_FAILED", username: username || "Unknown", performedBy: req.userRole || "Unknown", details: `Failed to create user. Error: ${error.message}` });
+        await createLog({ action: "USER_CREATION_FAILED", username: username || "Unknown", performedBy: req.userRole || "Unknown", details: `Failed to create user. Error: ${error.message}` });
         await transaction.rollback();
         console.error("Error creating user:", error);
         res.status(500).json({ message: "Internal server error" });
