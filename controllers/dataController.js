@@ -5314,7 +5314,6 @@ async function calculateAwardInfo(req, res) {
     const maxRow = maxRowIndex?.rowIndex ?? 0;
 
     await calculateFurtherMetrics(templateId, sheetId, maxRow);
-    await transaction.commit();
     await createLog({ action: 'CALCULATE_AWARD_INFO', username, performedBy: req.userRole, details: `Calculated award info for templateId: ${templateId}, sheetId: ${sheetId}` });
     res.status(200).json({ message: 'Award information calculated successfully.' });
   } catch(error){
