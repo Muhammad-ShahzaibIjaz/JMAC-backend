@@ -37,11 +37,13 @@ const treeRoutes = require("./routes/treeRoutes");
 const userRoutes = require("./routes/userRoutes");
 const projectionRoutes = require("./routes/projectionRoutes");
 const logRoutes = require("./routes/logRoutes");
+const campusGoalRoutes = require("./routes/campusGoalRoutes");
 
 
 
 
 
+app.use("/api", campusGoalRoutes);
 app.use("/api", logRoutes);
 app.use("/api", excelRoutes);
 app.use("/api", templateRoutes);

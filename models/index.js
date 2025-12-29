@@ -23,6 +23,7 @@ const User = require('./User');
 const ElementMatrix = require('./ElementMatrix');
 const TemplatePermission = require('./TemplatePermission');
 const Log = require('./Log');
+const CampusGoal = require('./CampusGoal');
 const sequelize = require('../config/database');
 
 // Define associations
@@ -67,6 +68,9 @@ Tree.belongsTo(Template, { foreignKey: 'templateId' });
 
 Template.hasMany(BandRule, { foreignKey: 'templateId', onDelete: 'CASCADE' });
 BandRule.belongsTo(Template, { foreignKey: 'templateId' });
+
+Template.hasMany(CampusGoal, { foreignKey: 'templateId', onDelete: 'CASCADE' });
+CampusGoal.belongsTo(Template, { foreignKey: 'templateId' });
 
 Template.hasMany(MappingTemplate, { foreignKey: 'templateId', onDelete: 'CASCADE' });
 MappingTemplate.belongsTo(Template, { foreignKey: 'templateId' });
@@ -125,5 +129,6 @@ module.exports = {
   User,
   ElementMatrix,
   TemplatePermission,
-  Log
+  Log,
+  CampusGoal,
 };

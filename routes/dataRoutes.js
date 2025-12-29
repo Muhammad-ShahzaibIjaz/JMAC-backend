@@ -25,6 +25,7 @@ router.put('/award-calculation', verifyToken, verifyUserActive, dataController.c
 router.put('/find-pell', verifyToken, verifyUserActive, dataController.calculatePellFlag);
 router.put('/replace-value', verifyToken, verifyUserActive, dataController.bulkReplaceValues);
 router.post('/evaluate-conditions', verifyToken, verifyUserActive, dataController.evaluateSheetDataWithConditions);
+router.put('delete-rows-by-condition', verifyToken, verifyUserActive, dataController.deleteSheetDataByConditions)
 router.post('/apply-conditional-rule', verifyToken, verifyUserActive, dataController.evaluateSheetDataAndAssign);
 router.post('/status-values', verifyToken, verifyUserActive, dataController.getStatusValues);
 router.post('/header-values', verifyToken, verifyUserActive, dataController.getHeaderValues);
