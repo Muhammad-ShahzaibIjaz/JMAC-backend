@@ -20,7 +20,7 @@ const CalculationRule = sequelize.define(
     isGlobal: {
       type: DataTypes.BOOLEAN,
       allowNull: false,
-      defaultValue: true,
+      defaultValue: false,
     },
     assignments: {
       type: DataTypes.TEXT,

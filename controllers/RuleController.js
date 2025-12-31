@@ -39,7 +39,7 @@ const createRule = async (req, res) => {
 
 
 const createConditionalRule = async (req, res) => {
-  const { ruleName, conditions, headers, targetHeaderName, targetValue, templateId } = req.body;
+  const { ruleName, conditions, headers, targetHeaderName, targetValue, templateId, isGlobal=false } = req.body;
   const username = await getUserName(req.userId);
   try {
 
@@ -57,14 +57,15 @@ const createConditionalRule = async (req, res) => {
       targetHeaderName,
       targetValue,
       headers: uniqueHeaders,
-      templateId
+      templateId,
+      isGlobal
     });
     await createLog({ action: 'CREATE_CONDITIONAL_RULE', username, performedBy: req.userId, details: `Conditional Rule '${ruleName}' created with ID: ${rule.id}` });
     return res.status(201).json({ id: rule.id, ruleName: rule.ruleName, conditions: Array.isArray(conditions.all)
   ? conditions.all.length
   : Array.isArray(conditions.any)
     ? conditions.any.length
-    : 0, targetHeaderName: rule.targetHeaderName, targetValue: rule.targetValue });
+    : 0, targetHeaderName: rule.targetHeaderName, targetValue: rule.targetValue, isGlobal: rule.isGlobal });
   } catch (error) {
     await createLog({ action: 'CREATE_CONDITIONAL_RULE_FAILED', username, performedBy: req.userId, details: `Failed to create conditional rule '${ruleName}': ${error.message}` });
     console.error("Error creating rule:", error);
@@ -73,7 +74,7 @@ const createConditionalRule = async (req, res) => {
 };
 
 const updateConditionalRule = async (req, res) => {
-  const { id, ruleName, conditions, headers, targetHeaderName, targetValue, templateId } = req.body;
+  const { id, ruleName, conditions, headers, targetHeaderName, targetValue, templateId, isGlobal=false } = req.body;
   const username = await getUserName(req.userId);
   try {
 
@@ -97,7 +98,8 @@ const updateConditionalRule = async (req, res) => {
       targetHeaderName,
       targetValue,
       headers: uniqueHeaders,
-      templateId
+      templateId,
+      isGlobal
     });
 
     // Transform updated rule to match getAllConditionalRules format
@@ -112,7 +114,8 @@ const updateConditionalRule = async (req, res) => {
       conditions: conditionCount,
       headers: rule.headers,
       targetHeaderName: rule.targetHeaderName,
-      targetValue: rule.targetValue
+      targetValue: rule.targetValue,
+      isGlobal: rule.isGlobal
     };
     await createLog({ action: 'UPDATE_CONDITIONAL_RULE', username, performedBy: req.userId, details: `Conditional Rule '${ruleName}' with ID: ${id} updated` });
     return res.status(200).json(transformedRule);
@@ -202,8 +205,8 @@ const getAllConditionalRules = async (req, res) => {
   try {
     const { templateId } = req.params;
     const rules = await ConditionalRule.findAll({
-      where: { templateId },
-      attributes: ['id', 'ruleName', 'conditions', 'headers', 'targetHeaderName', 'targetValue'],
+      where: { [Op.or]: [{templateId: templateId}, {isGlobal: true}] },
+      attributes: ['id', 'ruleName', 'conditions', 'headers', 'targetHeaderName', 'targetValue', 'isGlobal'],
       order: [['createdAt', 'DESC']]
     });
 
@@ -220,7 +223,8 @@ const getAllConditionalRules = async (req, res) => {
         conditions: conditionCount,
         headers: rule.headers,
         targetHeaderName: rule.targetHeaderName,
-        targetValue: rule.targetValue
+        targetValue: rule.targetValue,
+        isGlobal: rule.isGlobal
       };
     });
     return res.status(200).json(transformedRules);
@@ -274,8 +278,13 @@ const getBulkRulesByTemplateId = async (req, res) => {
   try {
     const { id } = req.query;
     const rules = await CalculationRule.findAll({
-      where: { templateId: id, isGlobal: true },
-      attributes: ['id', 'name', 'header', 'assignments'],
+      where: {
+    [Op.or]: [
+      { templateId: id },
+      { isGlobal: true }
+    ]
+  },
+      attributes: ['id', 'name', 'header', 'assignments', 'isGlobal'],
       order: [['createdAt', 'DESC']]
     });
 
@@ -283,7 +292,8 @@ const getBulkRulesByTemplateId = async (req, res) => {
       id: rule.id,
       name: rule.name,
       headerName: rule.header,
-      assignment: rule.assignments
+      assignment: rule.assignments,
+      isGlobal: rule.isGlobal
     }));
     return res.status(200).json(transformedRules);
   } catch (error) {
@@ -294,7 +304,7 @@ const getBulkRulesByTemplateId = async (req, res) => {
 
 
 const createBulkRule = async (req, res) => {
-  const { headerName, value, name, templateId } = req.body;
+  const { headerName, value, name, templateId, isGlobal=false } = req.body;
   const username = await getUserName(req.userId);
   try{
     // Validate input
@@ -311,7 +321,7 @@ const createBulkRule = async (req, res) => {
       name: name,
       header: headerName,
       assignments: value,
-      isGlobal: true,
+      isGlobal: isGlobal,
       templateId
     });
     await createLog({ action: 'CREATE_BULK_RULE', username, performedBy: req.userId, details: `Bulk Rule '${name}' created with ID: ${rule.id}` });
@@ -325,7 +335,7 @@ const createBulkRule = async (req, res) => {
 
 const updateBulkRule = async (req, res) => {
   const { id } = req.params;
-  const { headerName, value, name, templateId } = req.body;
+  const { headerName, value, name, templateId, isGlobal=false } = req.body;
   const username = await getUserName(req.userId);
   try {
     const rule = await CalculationRule.findByPk(id);
@@ -336,6 +346,7 @@ const updateBulkRule = async (req, res) => {
     rule.name = name;
     rule.header = headerName;
     rule.assignments = value;
+    rule.isGlobal = isGlobal;
     await rule.save();
     await createLog({ action: 'UPDATE_BULK_RULE', username, performedBy: req.userId, details: `Bulk Rule '${name}' with ID: ${id} updated` });
     return res.status(200).json({ id: rule.id, name: rule.name, headerName: rule.header, assignment: rule.assignments });
@@ -638,7 +649,7 @@ const autoPopulationRule = async (req, res) => {
 const createBandRule = async (req, res) => {
   const username = await getUserName(req.userId);
   try {
-    const { name, conditions, inputHeader, outputHeader, templateId, targetHeader, selectedValues } = req.body;
+    const { name, conditions, inputHeader, outputHeader, templateId, targetHeader, selectedValues, isGlobal=false } = req.body;
     if (!name || !conditions || !inputHeader || !outputHeader || !templateId) {
       return res.status(400).json({ error: "All fields (name, conditions, inputHeader, outputHeader, templateId) are required" });
     }
@@ -657,7 +668,8 @@ const createBandRule = async (req, res) => {
       outputHeader,
       templateId,
       targetHeader,
-      selectedValues
+      selectedValues,
+      isGlobal
     });
     await createLog({ action: 'CREATE_BAND_RULE', username, performedBy: req.userId, details: `Band Rule '${name}' created with ID: ${rule.id}` });
     return res.status(201).json(rule);
@@ -673,7 +685,7 @@ const updateBandRule = async (req, res) => {
   const username = await getUserName(req.userId);
   try {
     const { id } = req.params;
-    const { name, conditions, inputHeader, outputHeader, targetHeader, selectedValues } = req.body;
+    const { name, conditions, inputHeader, outputHeader, targetHeader, selectedValues, isGlobal=false } = req.body;
     if (!name || !conditions || !inputHeader || !outputHeader || !targetHeader || !selectedValues) {
       return res.status(400).json({ error: "All fields (name, conditions, inputHeader, outputHeader, targetHeader, studentTypes) are required" });
     }
@@ -687,10 +699,11 @@ const updateBandRule = async (req, res) => {
       inputHeader,
       outputHeader,
       targetHeader,
-      selectedValues
+      selectedValues,
+      isGlobal
     });
     await createLog({ action: 'UPDATE_BAND_RULE', username, performedBy: req.userId, details: `Band Rule '${name}' with ID: ${id} updated` });
-    return res.status(200).json({ name: rule.name, conditions: rule.conditions, inputHeader: rule.inputHeader, outputHeader: rule.outputHeader, targetHeader: rule.targetHeader, selectedValues: rule.selectedValues });
+    return res.status(200).json({ name: rule.name, conditions: rule.conditions, inputHeader: rule.inputHeader, outputHeader: rule.outputHeader, targetHeader: rule.targetHeader, selectedValues: rule.selectedValues, isGlobal: rule.isGlobal });
   } catch (error) {
     await createLog({ action: 'UPDATE_BAND_RULE_FAILED', username, performedBy: req.userId, details: `Failed to update band rule ID '${req.body.id}': ${error.message}` });
     console.error("Error updating band rule:", error);
@@ -703,8 +716,8 @@ const getBandRulesByTemplateId = async (req, res) => {
   try {
     const { templateId } = req.query;
     const rules = await BandRule.findAll({
-      where: { templateId },
-      attributes: ['id', 'name', 'conditions', 'inputHeader', 'outputHeader', 'targetHeader', 'selectedValues'],
+      where: { [Op.or]: [{templateId: templateId}, {isGlobal: true}] },
+      attributes: ['id', 'name', 'conditions', 'inputHeader', 'outputHeader', 'targetHeader', 'selectedValues', 'isGlobal'],
       order: [['createdAt', 'DESC']]
     });
     return res.status(200).json(rules);

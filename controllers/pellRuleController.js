@@ -1,10 +1,11 @@
+const { Op } = require('sequelize');
 const sequelize = require('../config/database');
 const { PellRule } = require('../models');
 const { createLog } = require("../utils/auditLogger");
 const { getUserName } = require('./userController');
 
 const createPellRule = async (req, res) => {
-    const { name, pellSource, criteria, targetHeader, templateId, acceptanceStatus } = req.body;
+    const { name, pellSource, criteria, targetHeader, templateId, acceptanceStatus, isGlobal=false } = req.body;
     const username = await getUserName(req.userId);
 
     try {
@@ -24,10 +25,11 @@ const createPellRule = async (req, res) => {
             criteria,
             targetHeader,
             templateId,
-            acceptanceStatus
+            acceptanceStatus,
+            isGlobal
         });
         await createLog({ action: 'CREATE_PELL_RULE', username, performedBy: req.userId, details: `Created PellRule '${name}' with ID: ${newPellRule.id}` });
-        res.status(201).json({id: newPellRule.id, pellName: name, pellSource: pellSource, criteria, targetHeader: targetHeader});
+        res.status(201).json({id: newPellRule.id, pellName: name, pellSource: pellSource, criteria, targetHeader: targetHeader, acceptanceStatus: acceptanceStatus, isGlobal: isGlobal});
     } catch (error) {
         await createLog({ action: 'CREATE_PELL_RULE_FAILED', username, performedBy: req.userId, details: `Failed to create PellRule '${name}': ${error.message}` });
         console.error('Error creating PellRule:', error);
@@ -37,7 +39,7 @@ const createPellRule = async (req, res) => {
 
 const updatePellRule = async (req, res) => {
     const { pellId } = req.params;
-    const { name, pellSource, criteria, targetHeader, acceptanceStatus, templateId } = req.body;
+    const { name, pellSource, criteria, targetHeader, acceptanceStatus, templateId, isGlobal=false } = req.body;
     const username = await getUserName(req.userId);
     try {
         const pellRule = await PellRule.findByPk(pellId);
@@ -50,6 +52,7 @@ const updatePellRule = async (req, res) => {
         pellRule.criteria = criteria || pellRule.criteria;
         pellRule.targetHeader = targetHeader || pellRule.targetHeader;
         pellRule.acceptanceStatus = acceptanceStatus || pellRule.acceptanceStatus;
+        pellRule.isGlobal = isGlobal;
         await pellRule.save();
         await createLog({ action: 'UPDATE_PELL_RULE', username, performedBy: req.userId, details: `Updated PellRule with ID: ${pellId}` });
         res.status(200).json(pellRule);
@@ -66,7 +69,10 @@ const getPellRules = async (req, res) => {
     const { templateId } = req.query;
 
     try {
-        const pellRules = await PellRule.findAll({ where: { templateId } });
+        const pellRules = await PellRule.findAll(
+            { where: { 
+                [Op.or]: [{templateId: templateId}, {isGlobal: true}] } }
+        );
         res.status(200).json(pellRules);
     } catch (error) {
         console.error('Error fetching PellRules:', error);

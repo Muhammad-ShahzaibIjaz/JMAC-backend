@@ -17,6 +17,11 @@ const ConditionalRule = sequelize.define(
             key: 'id',
         },
     },
+    isGlobal: {
+        type: DataTypes.BOOLEAN,
+        allowNull: false,
+        defaultValue: false,
+    },
     ruleName: {
         type: DataTypes.STRING,
         allowNull: true,

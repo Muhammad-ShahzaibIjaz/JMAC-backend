@@ -33,7 +33,12 @@ const PellRule = sequelize.define(
     templateId: {
         type: DataTypes.UUID,
         allowNull: false,
-    }
+    },
+    isGlobal: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+    },
   },
   {
     tableName: 'PellRule',

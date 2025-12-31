@@ -43,6 +43,11 @@ const BandRule = sequelize.define(
         allowNull: false,
         defaultValue: [],
     },
+    isGlobal: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+    },
 },
   {
     tableName: 'BandRule',
