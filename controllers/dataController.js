@@ -3447,17 +3447,16 @@ async function evaluateSheetDataWithConditions(req, res) {
 }
 
 async function deleteSheetDataByConditions(req, res) {
-  const { templateId, sheetId, headers = [], conditions = [] } = req.body;
+  const { templateId, sheetId, conditionHeaders = [], conditions = [] } = req.body;
   const username = await getUserName(req.userId);
   try {
     if (!templateId || !sheetId) {
       return res.status(400).json({ error: 'templateId and sheetId are required' });
     }
-
     const evaluationHeaders = await Header.findAll({
       where: {
         templateId,
-        name: { [Op.in]: headers }   // only fetch the headers we care about
+        name: { [Op.in]: conditionHeaders } 
       },
       raw: true,
     });
@@ -3509,7 +3508,7 @@ async function deleteSheetDataByConditions(req, res) {
       const rowData = evalRows.get(rowIndex) || {};
       const filteredRowData = {};
 
-      for (const name of headers) {
+      for (const name of conditionHeaders) {
         const normalized = normalizeKey(name);
         filteredRowData[normalized] = rowData[normalized] ?? { value: null };
       }
@@ -3520,6 +3519,35 @@ async function deleteSheetDataByConditions(req, res) {
 
     if (matchingRowIndices.length === 0) {
       return res.status(200).json({ message: 'No rows matched the conditions.' });
+    }
+
+
+    const existingData = await SheetData.findAll({
+      where: {
+        sheetId,
+        rowIndex: { [Op.in]: matchingRowIndices }
+      },
+      raw: true,
+    });
+
+    const operationLog = await OperationLog.create({
+      templateId,
+      sheetId,
+      operationType: 'DELETE_ROW'
+    });
+
+    const snapshots = existingData.map(entry => ({
+      operationLogId: operationLog.id,
+      headerId: entry.headerId,
+      sheetId,
+      rowIndex: entry.rowIndex,
+      originalValue: entry.value,
+      newValue: null,
+      changeType: 'DELETE'
+    }));
+
+    if (snapshots.length > 0) {
+      await SheetDataSnapshot.bulkCreate(snapshots);
     }
 
     // 🔹 Step 7: Delete matching rows
@@ -3542,7 +3570,6 @@ async function deleteSheetDataByConditions(req, res) {
       details: error.message,
     });
   }
-
 }
 
 

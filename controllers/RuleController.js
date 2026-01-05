@@ -325,7 +325,7 @@ const createBulkRule = async (req, res) => {
       templateId
     });
     await createLog({ action: 'CREATE_BULK_RULE', username, performedBy: req.userId, details: `Bulk Rule '${name}' created with ID: ${rule.id}` });
-    return res.status(201).json({ id: rule.id, name: rule.name, headerName, assignment: value });
+    return res.status(201).json({ id: rule.id, name: rule.name, headerName, assignment: value, isGlobal: rule.isGlobal });
   } catch (error) {
     await createLog({ action: 'CREATE_BULK_RULE_FAILED', username, performedBy: req.userId, details: `Failed to create bulk rule '${name}': ${error.message}` });
     console.error("Error creating bulk rule:", error);

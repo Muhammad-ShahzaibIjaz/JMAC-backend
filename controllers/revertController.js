@@ -8,7 +8,6 @@ const { getUserName } = require('./userController');
 
 async function undoUpdatedRow(operationLogId, sheetId) {
     const transaction = await sequelize.transaction();
-    const username = await getUserName(req.userId);
     try{
         const snapshots = await SheetDataSnapshot.findAll({
             where: { operationLogId, sheetId },
@@ -29,10 +28,8 @@ async function undoUpdatedRow(operationLogId, sheetId) {
                 }
             );
         }));
-        await createLog({ action: 'UNDO_UPDATED_ROW', username, performedBy: req.userId, details: `Undid updated row operation with Log ID: ${operationLogId} on Sheet ID: ${sheetId}` });
         await transaction.commit();
     } catch(error) {
-      await createLog({ action: 'UNDO_UPDATED_ROW_FAILED', username, performedBy: req.userId, details: `Failed to undo updated row operation with Log ID: ${operationLogId} on Sheet ID: ${sheetId}: ${error.message}` });
         await transaction.rollback();
         throw new Error(`Failed to undo operation: ${error.message}`);
     }
@@ -42,7 +39,6 @@ async function undoUpdatedRow(operationLogId, sheetId) {
 
 async function undoZipcodeOperation(operationLogId, sheetId) {
   const transaction = await sequelize.transaction();
-  const username = await getUserName(req.userId);
   try {
     const snapshots = await SheetDataSnapshot.findAll({
       where: { operationLogId, sheetId },
@@ -81,17 +77,14 @@ async function undoZipcodeOperation(operationLogId, sheetId) {
     );
 
     await Promise.all([...clearPromises, ...restorePromises]);
-    await createLog({ action: 'UNDO_ZIPCODE_OPERATION', username, performedBy: req.userId, details: `Undid zipcode operation with Log ID: ${operationLogId} on Sheet ID: ${sheetId}` });
     await transaction.commit();
   } catch (error) {
-    await createLog({ action: 'UNDO_ZIPCODE_OPERATION_FAILED', username, performedBy: req.userId, details: `Failed to undo zipcode operation with Log ID: ${operationLogId} on Sheet ID: ${sheetId}: ${error.message}` });
     await transaction.rollback();
     throw new Error(`Failed to undo zipcode operation: ${error.message}`);
   }
 }
 
 async function deleteLatestRowData(templateId, sheetId) {
-  const username = await getUserName(req.userId);
   try {
     // Find maximum rowIndex for the template
     const [result] = await sequelize.query(
@@ -109,7 +102,7 @@ async function deleteLatestRowData(templateId, sheetId) {
     );
     const maxRow = result?.maxRow;
     if (maxRow === null || maxRow === undefined) {
-      return res.status(404).json({ success: false, message: 'No data found to delete for this template' });
+      return { success: false, message: "No data found to delete for this template" };
     }
 
     const deletedCount = await SheetData.destroy({
@@ -125,15 +118,13 @@ async function deleteLatestRowData(templateId, sheetId) {
     });
 
     if (!deletedCount) {
-      return res.status(404).json({ success: false, message: 'No data found for the latest row' });
+      return { success: false, message: 'No data found for the latest row' };
     }
-    await createLog({ action: 'DELETE_LATEST_ROW_DATA', username, performedBy: req.userId, details: `Deleted latest row data (rowIndex: ${maxRow}) for Template ID: ${templateId} on Sheet ID: ${sheetId}` });
     return { 
       success: true, 
       message: `Deleted ${deletedCount} record(s) for rowIndex ${maxRow}` 
     };
   } catch (error) {
-    await createLog({ action: 'DELETE_LATEST_ROW_DATA_FAILED', username, performedBy: req.userId, details: `Failed to delete latest row data for Template ID: ${templateId} on Sheet ID: ${sheetId}: ${error.message}` });
     console.error('Error deleting latest row data:', error);
     return { 
       success: false, 
@@ -167,7 +158,6 @@ async function checkUndoOperationAvailable(req, res) {
 }
 
 async function undoDeleteRow(operationLogId, sheetId) {
-  const username = await getUserName(req.userId);
   const transaction = await sequelize.transaction();
   try {
     // Step 2: Fetch snapshots for this operation
@@ -182,7 +172,7 @@ async function undoDeleteRow(operationLogId, sheetId) {
 
     if (snapshots.length === 0) {
       await transaction.rollback();
-      return res.status(404).json({ message: 'No deletions found to undo.' });
+      throw new Error('No snapshots found for delete operation.');
     }
 
     // Step 3: Prepare restore data
@@ -199,17 +189,16 @@ async function undoDeleteRow(operationLogId, sheetId) {
       updateOnDuplicate: ['value'],
       transaction
     });
-    await createLog({ action: 'UNDO_DELETE_ROW', username, performedBy: req.userId, details: `Undid delete row operation with Log ID: ${operationLogId} on Sheet ID: ${sheetId}` });
     await transaction.commit();
   } catch (error) {
-    await createLog({ action: 'UNDO_DELETE_ROW_FAILED', username, performedBy: req.userId, details: `Failed to undo delete row operation with Log ID: ${operationLogId} on Sheet ID: ${sheetId}: ${error.message}` });
     await transaction.rollback();
     console.error('❌ Error undoing delete:', error);
-    return res.status(500).json({ message: 'Internal server error.', details: error.message });
+    throw new Error(`Failed to undo delete operation: ${error.message}`);
   }
 }
 
 async function undoLatestOperation(req, res) {
+  const username = await getUserName(req.userId);
   try {
     const { templateId, sheetId } = req.params;
 
@@ -243,10 +232,11 @@ async function undoLatestOperation(req, res) {
     const remainingOperations = await OperationLog.count({
       where: { templateId, sheetId },
     });
-
+    await createLog({ action: 'UNDO_OPERATION', username, performedBy: req.userRole, details: `Undid operation with Log ID: ${latestOperation.id} and operation: ${latestOperation.operationType} on Template ID: ${templateId}, Sheet ID: ${sheetId}` });
     return res.status(200).json(remainingOperations > 0);
 
   } catch (error) {
+    await createLog({ action: 'UNDO_OPERATION_FAILED', username, performedBy: req.userRole, details: `Failed to undo operation on Template ID: ${req.params.templateId}, Sheet ID: ${req.params.sheetId}: ${error.message}` });
     return res.status(500).json({ error: error.message });
   }
 }
@@ -254,7 +244,6 @@ async function undoLatestOperation(req, res) {
 
 
 async function undoHeaderOperation(templateId, sheetId, operationLogId) {
-  const username = await getUserName(req.userId);
   const transaction = await sequelize.transaction();
   try {
     const snapshots = await SheetDataSnapshot.findAll({
@@ -271,7 +260,7 @@ async function undoHeaderOperation(templateId, sheetId, operationLogId) {
 
     if (!header) {
       await transaction.rollback();
-      return res.status(404).json({ error: 'Header not found or does not belong to the template' });
+      throw new Error('Header not found or does not belong to the template');
     }
 
     await SheetData.destroy({
@@ -288,10 +277,8 @@ async function undoHeaderOperation(templateId, sheetId, operationLogId) {
       where: { operationLogId, sheetId },
       transaction,
     });
-    await createLog({ action: 'UNDO_ADD_HEADER', username, performedBy: req.userId, details: `Undid add header operation with Log ID: ${operationLogId} on Sheet ID: ${sheetId}` });
     await transaction.commit();
   } catch (error) {
-    await createLog({ action: 'UNDO_ADD_HEADER_FAILED', username, performedBy: req.userId, details: `Failed to undo add header operation with Log ID: ${operationLogId} on Sheet ID: ${sheetId}: ${error.message}` });
     await transaction.rollback();
   }
 }
