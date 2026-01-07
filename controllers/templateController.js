@@ -44,7 +44,7 @@ async function createTemplate(req, res) {
     await createLog({
       action: 'CREATE_TEMPLATE',
       username,
-      performedBy: req.userId,
+      performedBy: req.userRole,
       details: `Template '${template.name}' created with ID: ${template.id}`,
     });
     res.status(201).json({
@@ -52,7 +52,7 @@ async function createTemplate(req, res) {
       name: template.name
     });
   } catch (error) {
-    await createLog({ action: 'CREATE_TEMPLATE_FAILED', username, performedBy: req.userId, details: `Failed to create template '${name}': ${error.message}` });
+    await createLog({ action: 'CREATE_TEMPLATE_FAILED', username, performedBy: req.userRole, details: `Failed to create template '${name}': ${error.message}` });
     console.error('Error creating template:', error);
     res.status(500).json({ error: error.message });
   }
@@ -112,10 +112,10 @@ async function deleteTemplate(req, res) {
       console.warn(`Directory not found: ${dirPath}`);
     }
     
-    await createLog({ action: 'DELETE_TEMPLATE', username, performedBy: req.userId, details: `Template '${template.name}' with ID: ${template.id} deleted` });
+    await createLog({ action: 'DELETE_TEMPLATE', username, performedBy: req.userRole, details: `Template with ID: ${id} deleted` });
     return res.status(200).json(result);
   } catch (error) {
-    await createLog({ action: 'DELETE_TEMPLATE_FAILED', username, performedBy: req.userId, details: `Failed to delete template ID '${id}': ${error.message}` });
+    await createLog({ action: 'DELETE_TEMPLATE_FAILED', username, performedBy: req.userRole, details: `Failed to delete template ID '${id}': ${error.message}` });
     console.error("Error deleting template:", error);
     return res.status(500).json({ error: error.message || "Internal server error" });
   }
