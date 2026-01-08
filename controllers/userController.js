@@ -190,7 +190,7 @@ const getMyInfo = async (req, res) => {
     const userId  = req.userId;
     try {
         const user = await User.findByPk(userId, {
-            attributes: ['id', 'username', 'role'],
+            attributes: ['id', 'username', 'role', 'hasDecisionTreeAccess'],
         });
         if (!user) {
             return res.status(404).json({ message: "User not found" });
