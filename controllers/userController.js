@@ -25,7 +25,7 @@ const getUserName = async (userId) => {
 
 const createUser = async (req, res) => {
     const transaction = await sequelize.transaction();
-    const { username, password, role, permissions } = req.body;
+    const { username, password, role, permissions, hasDecisionTreeAccess=true } = req.body;
     try {
         if (!username || !password || !role) {
             await transaction.rollback();
@@ -42,6 +42,7 @@ const createUser = async (req, res) => {
             username: username.includes("@smartaid") ? username : `${username}@smartaid`,
             passwordHash,
             role,
+            hasDecisionTreeAccess
         }, { transaction });
 
         if (Array.isArray(permissions) && permissions.length > 0) {
@@ -65,7 +66,7 @@ const createUser = async (req, res) => {
 
 const updateUser = async (req, res) => {
     const transaction = await sequelize.transaction();
-    const { id, username, role, isActive, permissions } = req.body;
+    const { id, username, role, isActive, permissions, hasDecisionTreeAccess } = req.body;
     try {
         if (!id || !username || !role) {
             await transaction.rollback();
@@ -79,6 +80,7 @@ const updateUser = async (req, res) => {
         user.username = username.includes("@smartaid") ? username : `${username}@smartaid`;
         user.role = role;
         user.isActive = isActive;
+        user.hasDecisionTreeAccess = hasDecisionTreeAccess;
         await user.save({ transaction });
         if (Array.isArray(permissions)) {
             await TemplatePermission.destroy({ where: { userId: id }, transaction });
@@ -231,10 +233,25 @@ const getUsersInfo = async (req, res) => {
                 templateName: perm.Template?.name || '',
                 permission: perm.accessLevel ?? 'none',
             })),
+            hasDecisionTreeAccess: user.hasDecisionTreeAccess,
         }));
         res.status(200).json(systemUsers);
     } catch (error) {
         console.error("Error fetching users info:", error);
+        res.status(500).json({ message: "Internal server error" });
+    }
+}
+
+const getDecisionTreeAccess = async (req, res) => {
+    try {
+        const { userId } = req;
+        const user = await User.findByPk(userId);
+        if (!user) {
+            return res.status(404).json({ message: "User not found" });
+        }
+        res.status(200).json({ hasDecisionTreeAccess: user.hasDecisionTreeAccess });
+    } catch (error) {
+        console.error("Error fetching decision tree access:", error);
         res.status(500).json({ message: "Internal server error" });
     }
 }
@@ -248,5 +265,6 @@ module.exports = {
     updatePassword,
     deleteUser,
     logout,
-    getUserName
+    getUserName,
+    getDecisionTreeAccess
 };

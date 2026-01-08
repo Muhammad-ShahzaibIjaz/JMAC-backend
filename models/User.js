@@ -21,6 +21,11 @@ const User = sequelize.define("User", {
     allowNull: false,
     defaultValue: "Creator",
   },
+  hasDecisionTreeAccess: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: true,
+  },
   isActive: {
     type: DataTypes.BOOLEAN,
     allowNull: false,

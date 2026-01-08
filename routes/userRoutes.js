@@ -11,5 +11,6 @@ router.post('/login', userController.login);
 router.post('/logout', verifyToken, userController.logout);
 router.get('/me', verifyToken, verifyUserActive, userController.getMyInfo);
 router.get('/users', verifyToken, verifyUserActive, verifyAdmin, userController.getUsersInfo);
+router.get('/user/decision-tree-access', verifyToken, verifyUserActive, userController.getDecisionTreeAccess);
 
 module.exports = router;
