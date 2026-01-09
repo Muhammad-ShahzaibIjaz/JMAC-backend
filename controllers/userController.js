@@ -49,7 +49,7 @@ const createUser = async (req, res) => {
             const permissionRecords = permissions.map(perm => ({
                 templateId: perm.templateId,
                 userId: newUser.id,
-                accessLevel: perm.accessLevel || 'read',
+                accessLevel: perm.permission || 'read',
             }));
             await TemplatePermission.bulkCreate(permissionRecords, { transaction });
         }
@@ -87,7 +87,7 @@ const updateUser = async (req, res) => {
             const permissionRecords = permissions.map(perm => ({
                 templateId: perm.templateId,
                 userId: id,
-                accessLevel: perm.accessLevel || 'read',
+                accessLevel: perm.permission || 'read',
             }));
             await TemplatePermission.bulkCreate(permissionRecords, { transaction });
         }
