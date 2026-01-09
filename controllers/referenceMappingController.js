@@ -50,7 +50,6 @@ const addReferenceMapping = async (req, res) => {
 
 
 const updateReferenceMappings = async (crossReferenceId, mappings) => {
-    const username = await getUserName(req.userId);
     try {
         await sequelize.transaction(async (t) => {
             await CrossReferenceMapping.destroy({
@@ -66,9 +65,7 @@ const updateReferenceMappings = async (crossReferenceId, mappings) => {
                 { transaction: t }
             );
         });
-        await createLog({ action: 'UPDATE_REFERENCE_MAPPINGS', username, performedBy: req.userId, details: `Updated mappings for Cross-Reference ID: ${crossReferenceId}` });
     } catch (error) {
-        await createLog({ action: 'UPDATE_REFERENCE_MAPPINGS_FAILED', username, performedBy: req.userId, details: `Failed to update mappings for Cross-Reference ID: ${crossReferenceId}: ${error.message}` });
         console.error('Error updating reference mappings:', error);
         throw error;
     }
