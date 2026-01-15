@@ -35,6 +35,11 @@ const PopulationRule = sequelize.define(
       allowNull: false,
       defaultValue: 'population',
     },
+    populationType: {
+      type: DataTypes.ENUM('view', 'consolidated'),
+      allowNull: false,
+      defaultValue: 'view',
+    }
 },
   {
     tableName: 'PopulationRule',

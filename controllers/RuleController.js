@@ -424,7 +424,7 @@ const deleteConditionalRule = async (req, res) => {
 const createPopulationRule = async (req, res) => {
   const username = await getUserName(req.userId);
   try {
-    const { ruleName, conditions, headers, templateId, ruleType = 'population' } = req.body;
+    const { ruleName, conditions, headers, templateId, ruleType = 'population', populationType = 'view' } = req.body;
 
     if (!ruleName || !conditions || !headers || !templateId) {
       return res.status(400).json({ error: "All fields (ruleName, conditions, headers, templateId) are required" });
@@ -442,14 +442,15 @@ const createPopulationRule = async (req, res) => {
       conditions,
       headers: uniqueHeaders,
       templateId,
-      ruleType
+      ruleType,
+      populationType
     });
     await createLog({ action: 'CREATE_POPULATION_RULE', username, performedBy: req.userId, details: `Population Rule '${ruleName}' created with ID: ${rule.id}` });
     return res.status(201).json({ id: rule.id, ruleName: rule.ruleName, ruleType: rule.ruleType, conditions: Array.isArray(conditions.all)
   ? conditions.all.length
   : Array.isArray(conditions.any)
     ? conditions.any.length
-    : 0 });
+    : 0, populationType: rule.populationType });
   } catch (error) {
     await createLog({ action: 'CREATE_POPULATION_RULE_FAILED', username, performedBy: req.userId, details: `Failed to create population rule '${req.body.ruleName}': ${error.message}` });
     console.error("Error creating population rule:", error);
@@ -458,7 +459,7 @@ const createPopulationRule = async (req, res) => {
 };
 
 const updatePopulationRule = async (req, res) => {
-  const { id, ruleName, conditions, headers, ruleType } = req.body;
+  const { id, ruleName, conditions, headers, ruleType, populationType } = req.body;
   const username = await getUserName(req.userId);
   try {
     if (!id || !ruleName || !conditions || !headers || !ruleType) {
@@ -478,7 +479,8 @@ const updatePopulationRule = async (req, res) => {
       ruleName,
       conditions,
       headers: uniqueHeaders,
-      ruleType
+      ruleType,
+      populationType
     });
     await createLog({ action: 'UPDATE_POPULATION_RULE', username, performedBy: req.userId, details: `Population Rule '${ruleName}' with ID: ${id} updated` });
     // ✅ Match createPopulationRule response format
@@ -490,7 +492,8 @@ const updatePopulationRule = async (req, res) => {
         ? conditions.all.length
         : Array.isArray(conditions.any)
         ? conditions.any.length
-        : 0
+        : 0,
+      populationType: rule.populationType
     });
   } catch (error) {
     await createLog({ action: 'UPDATE_POPULATION_RULE_FAILED', username, performedBy: req.userId, details: `Failed to update population rule ID '${id}': ${error.message}` });
@@ -505,7 +508,7 @@ const getPopulationRuleByTemplateId = async (req, res) => {
   try {
     const rules = await PopulationRule.findAll({
       where: { templateId, ruleType },
-      attributes: ['id', 'ruleName', 'conditions', 'ruleType'],
+      attributes: ['id', 'ruleName', 'conditions', 'ruleType', 'populationType'],
       order: [['createdAt', 'DESC']]
     });
     const transformedRules = rules.map((rule) => {
@@ -519,7 +522,8 @@ const getPopulationRuleByTemplateId = async (req, res) => {
         id: rule.id,
         ruleName: rule.ruleName,
         conditions: conditionCount,
-        ruleType: rule.ruleType
+        ruleType: rule.ruleType,
+        populationType: rule.populationType
       };
     });
     return res.status(200).json(transformedRules);
@@ -534,7 +538,7 @@ const getPopulationRuleById = async (req, res) => {
   const { id } = req.query;
   try {
     const rule = await PopulationRule.findByPk(id, {
-      attributes: ['id', 'ruleName', 'conditions', 'headers', 'ruleType'],
+      attributes: ['id', 'ruleName', 'conditions', 'headers', 'ruleType', 'populationType'],
       raw: true
     });
     if (!rule) {

@@ -29,6 +29,16 @@ const Sheet = sequelize.define(
         type: DataTypes.TEXT,
         allowNull: false,
     },
+    sheetYear: {
+       type: DataTypes.TEXT,
+        allowNull: false,
+        defaultValue: '',
+    },
+    isFreezed: {
+        type: DataTypes.BOOLEAN,
+        allowNull: false,
+        defaultValue: false,
+    },
   },
   {
     tableName: 'Sheet',
