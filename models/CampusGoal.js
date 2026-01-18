@@ -31,6 +31,11 @@ const CampusGoal = sequelize.define(
       allowNull: false,
       defaultValue: "view",
     },
+    totalPopulationMappings: {
+      type: DataTypes.JSONB,
+      allowNull: false,
+      defaultValue: {},
+    },
   },
   {
     tableName: "CampusGoal",

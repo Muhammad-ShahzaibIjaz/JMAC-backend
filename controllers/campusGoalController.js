@@ -4,7 +4,7 @@ const { createLog } = require("../utils/auditLogger");
 const { getUserName } = require('./userController');
 
 const createCampusGoal = async (req, res) => {
-    const { templateId, goalName, populationGoals = {} } = req.body;
+    const { templateId, goalName, populationGoals = {}, goalType='view', totalPopulationMappings = [] } = req.body;
     const username = await getUserName(req.userId);
     try {
         if (!templateId || !goalName) {
@@ -19,7 +19,8 @@ const createCampusGoal = async (req, res) => {
             id: uuidv4(),
             templateId,
             goalName,
-            populationGoals
+            populationGoals,
+            goalType
         });
         await createLog({
             action: 'CREATE_CAMPUS_GOAL',
@@ -43,7 +44,7 @@ const createCampusGoal = async (req, res) => {
 
 const updateCampusGoal = async (req, res) => {
     const { goalId } = req.params;
-    const { goalName, populationGoals } = req.body;
+    const { goalName, populationGoals, totalPopulationMappings=[] } = req.body;
     const username = await getUserName(req.userId);
     try {
         const campusGoal = await CampusGoal.findByPk(goalId);
@@ -52,6 +53,7 @@ const updateCampusGoal = async (req, res) => {
         }
         campusGoal.goalName = goalName || campusGoal.goalName;
         campusGoal.populationGoals = populationGoals || campusGoal.populationGoals;
+        campusGoal.totalPopulationMappings = totalPopulationMappings || campusGoal.totalPopulationMappings;
         await campusGoal.save();
         await createLog({
             action: 'UPDATE_CAMPUS_GOAL',
