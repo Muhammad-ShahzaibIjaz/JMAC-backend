@@ -1122,10 +1122,25 @@ const ynFlags = [
 ];
 
 
+const REQUIRED_HEADERS = [
+  'First_Year/Transfer/Continuing/Readmit/Online',
+  'Student_Admitted',
+  'Student_Enrolled',
+  'Admissions_Funnel_Stage',
+  'Net_Tuition_Revenue',
+  'Total_Discount_Rate',
+  'NACUBO_Discount_Rate',
+  'Net_Charges_To_Student',
+  'Total_Institutional_Gift',
+  'Total_Institutional_Unfunded_Gift'
+];
+
+
 module.exports = {
   desiredOrder,
   awardTypePatterns,
   requiredHeadersName,
   desiredOrderType,
-  ynFlags
+  ynFlags,
+  REQUIRED_HEADERS
 };

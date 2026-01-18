@@ -3,7 +3,7 @@ const { DataTypes, Op, QueryTypes } = require('sequelize');
 const { PopulationStatus, PopulationSubmission, Header, PopulationRule, SheetData } = require('../models');
 const { evaluateConditions } = require('../services/evaluation');
 const { generateMultiYearExcelFile } = require('../services/SheetService');
-const { desiredOrder } = require('../utils/headerOrderList');
+const { desiredOrder, REQUIRED_HEADERS } = require('../utils/headerOrderList');
 const { geocodeStudents } = require('../utils/coordinateFinder');
 
 const savePopulationStatus = async (req, res) => {
@@ -2343,6 +2343,127 @@ const getDatabyStateCounty = async (req, res) => {
   }
 };
 
+
+function average(arr) {
+  if (!arr.length) return 0;
+  return arr.reduce((a, b) => a + b, 0) / arr.length;
+}
+
+function sum(arr) {
+  return arr.reduce((a, b) => a + b, 0);
+}
+
+async function getStudentRows(sheetId, rowIndices) {
+  const sheetData = await SheetData.findAll({
+    where: {
+      sheetId,
+      rowIndex: { [Op.in]: rowIndices },
+    },
+    raw: true, // plain objects, less memory overhead
+  });
+
+  const students = {};
+  sheetData.forEach(sd => {
+    if (!students[sd.rowIndex]) students[sd.rowIndex] = {};
+    students[sd.rowIndex][sd.headerId] = sd.value;
+  });
+
+  return Object.entries(students).map(([rowIndex, values]) => ({
+    rowIndex: parseInt(rowIndex, 10),
+    values,
+  }));
+}
+
+
+
+async function calculatePopulationStats(templateId, sheetId) {
+  // Step 1: Fetch consolidated population rules
+  const populationRules = await PopulationRule.findAll({
+    where: { templateId, populationType: 'consolidated' },
+    attributes: ['id', 'ruleName'],
+    raw: true,
+  });
+
+  // Step 2: Process each rule in parallel
+  const resultsArray = await Promise.all(
+    populationRules.map(async rule => {
+      const { conditions, headers } = await getRuleConditionsAndHeaders(rule.id);
+
+      // Step 3: Get matching row indices
+      const matchingRowIndices = await applyPopulationRule(templateId, sheetId, conditions, headers);
+      if (!matchingRowIndices || matchingRowIndices.length === 0) {
+        return { ruleName: rule.ruleName, stats: { admittedCount: 0, enrolledCount: 0, confirmedCount: 0, avgNetRevenue: 0, avgDiscountRate: 0, avgNacuboRate: 0, totalNetCharges: 0, totalFundedGift: 0, totalUnfundedGift: 0 } };
+      }
+
+      // Step 4: Fetch student rows
+      const studentRows = await getStudentRows(sheetId, matchingRowIndices);
+
+      // Step 5: Compute metrics
+      const admittedCount = studentRows.filter(s => {
+        const val = s.values['Student_Admitted'];
+        return val && (val.toLowerCase() === 'yes' || val.toLowerCase() === 'y');
+      }).length;
+
+      const enrolledCount = studentRows.filter(s => {
+        const val = s.values['Student_Enrolled'];
+        return val && (val.toLowerCase() === 'yes' || val.toLowerCase() === 'y');
+      }).length;
+
+      const confirmedCount = studentRows.filter(s => {
+        const val = s.values['Admissions_Funnel_Stage'];
+        return val && ['deposit', 'matriculated'].includes(val.toLowerCase());
+      }).length;
+
+      const avgNetRevenue = average(studentRows.map(s => parseFloat(s.values['Net_Tuition_Revenue'] || 0)));
+      const avgDiscountRate = average(studentRows.map(s => parseFloat(s.values['Total_Discount_Rate'] || 0)));
+      const avgNacuboRate = average(studentRows.map(s => parseFloat(s.values['NACUBO_Discount_Rate'] || 0)));
+      const totalNetCharges = sum(studentRows.map(s => parseFloat(s.values['Net_Charges_To_Student'] || 0)));
+      const totalFundedGift = sum(studentRows.map(s => parseFloat(s.values['Total_Institutional_Gift'] || 0)));
+      const totalUnfundedGift = sum(studentRows.map(s => parseFloat(s.values['Total_Institutional_Unfunded_Gift'] || 0)));
+
+      return {
+        ruleName: rule.ruleName,
+        stats: {
+          admittedCount,
+          enrolledCount,
+          confirmedCount,
+          avgNetRevenue,
+          avgDiscountRate,
+          avgNacuboRate,
+          totalNetCharges,
+          totalFundedGift,
+          totalUnfundedGift,
+        },
+      };
+    })
+  );
+
+  // Step 6: Convert array to object keyed by ruleName
+  const results = {};
+  resultsArray.forEach(r => {
+    results[r.ruleName] = r.stats;
+  });
+
+  return results;
+}
+
+
+
+async function getPreviousCensusStats(req, res) {
+  const { templateId, sheetId } = req.body;
+  try {
+    if (!templateId || !sheetId) {
+      return res.status(400).json({ error: 'templateId and sheetId are required' });
+    }
+    const stats = await calculatePopulationStats(templateId, sheetId);
+    res.status(200).json(stats);
+  } catch (error) {
+    console.error('Error calculating previous census stats:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+
 module.exports = {
     savePopulationStatus,
     savePopulationSubmissionDate,
@@ -2360,5 +2481,7 @@ module.exports = {
     getAwardStats,
     getStudentStealthCountByYear,
     getExportableStudentData,
-    getDatabyStateCounty
+    getDatabyStateCounty,
+    getPreviousCensusStats,
+    getRuleConditionsAndHeaders
 };

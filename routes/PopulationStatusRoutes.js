@@ -20,5 +20,6 @@ router.post('/award-stats', verifyToken, verifyUserActive, populationStatusContr
 router.post('/stealth-headcount-by-year', verifyToken, verifyUserActive, populationStatusController.getStudentStealthCountByYear);
 router.post('/exportable-student-data', verifyToken, verifyUserActive, populationStatusController.getExportableStudentData);
 router.post('/data-by-state-county', verifyToken, verifyUserActive, populationStatusController.getDatabyStateCounty);
+router.post('/previous-census-stats', populationStatusController.getPreviousCensusStats);
 
 module.exports = router;

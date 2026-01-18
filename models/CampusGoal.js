@@ -25,7 +25,12 @@ const CampusGoal = sequelize.define(
         type: DataTypes.JSONB,
         allowNull: false,
         defaultValue: {},
-    }
+    },
+    goalType: {
+      type: DataTypes.ENUM("consolidated", "view", "total"),
+      allowNull: false,
+      defaultValue: "view",
+    },
   },
   {
     tableName: "CampusGoal",
