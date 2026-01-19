@@ -36,7 +36,7 @@ const PopulationRule = sequelize.define(
       defaultValue: 'population',
     },
     populationType: {
-      type: DataTypes.ENUM('view', 'consolidated', 'total'),
+      type: DataTypes.ENUM('view', 'consolidated', 'total', 'awarding'),
       allowNull: false,
       defaultValue: 'view',
     }
