@@ -1,8 +1,8 @@
 const { DataTypes } = require("sequelize");
 const sequelize = require("../config/database");
 
-const CampusGoal = sequelize.define(
-  "CampusGoal",
+const ViewGoal = sequelize.define(
+  "ViewGoal",
   {
     id: {
       type: DataTypes.UUID,
@@ -17,7 +17,7 @@ const CampusGoal = sequelize.define(
         key: "id",
       },
     },
-    goalName: {
+    goalYear: {
       type: DataTypes.STRING(255),
       allowNull: false,
     },
@@ -26,19 +26,9 @@ const CampusGoal = sequelize.define(
         allowNull: false,
         defaultValue: {},
     },
-    goalType: {
-      type: DataTypes.ENUM("consolidated", "awarding"),
-      allowNull: false,
-      defaultValue: "awarding",
-    },
-    totalPopulationMappings: {
-      type: DataTypes.JSONB,
-      allowNull: false,
-      defaultValue: [],
-    },
   },
   {
-    tableName: "CampusGoal",
+    tableName: "ViewGoal",
     timestamps: true,
     indexes: [
       {
@@ -48,4 +38,4 @@ const CampusGoal = sequelize.define(
   }
 );
 
-module.exports = CampusGoal;
+module.exports = ViewGoal;

@@ -38,11 +38,12 @@ const userRoutes = require("./routes/userRoutes");
 const projectionRoutes = require("./routes/projectionRoutes");
 const logRoutes = require("./routes/logRoutes");
 const campusGoalRoutes = require("./routes/campusGoalRoutes");
+const viewGoalRoutes = require("./routes/viewGoalRoutes")
 
 
 
 
-
+app.use("/api", viewGoalRoutes);
 app.use("/api", campusGoalRoutes);
 app.use("/api", logRoutes);
 app.use("/api", excelRoutes);

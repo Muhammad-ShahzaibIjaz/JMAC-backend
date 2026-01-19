@@ -4,7 +4,7 @@ const { createLog } = require("../utils/auditLogger");
 const { getUserName } = require('./userController');
 
 const createCampusGoal = async (req, res) => {
-    const { templateId, goalName, populationGoals = {}, goalType='view', totalPopulationMappings = [] } = req.body;
+    const { templateId, goalName, populationGoals = {}, goalType='awarding', totalPopulationMappings = [] } = req.body;
     const username = await getUserName(req.userId);
     try {
         if (!templateId || !goalName) {
@@ -20,7 +20,8 @@ const createCampusGoal = async (req, res) => {
             templateId,
             goalName,
             populationGoals,
-            goalType
+            goalType,
+            totalPopulationMappings
         });
         await createLog({
             action: 'CREATE_CAMPUS_GOAL',

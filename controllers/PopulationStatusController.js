@@ -2392,7 +2392,7 @@ async function calculatePopulationStats(templateId, sheetId) {
       // Step 3: Get matching row indices
       const matchingRowIndices = await applyPopulationRule(templateId, sheetId, conditions, headers);
       if (!matchingRowIndices || matchingRowIndices.length === 0) {
-        return { ruleName: rule.ruleName, stats: { admittedCount: 0, enrolledCount: 0, confirmedCount: 0, avgNetRevenue: 0, avgDiscountRate: 0, avgNacuboRate: 0, totalNetCharges: 0, totalFundedGift: 0, totalUnfundedGift: 0 } };
+        return { ruleName: rule.ruleName, stats: { admittedCount: 0, enrolledCount: 0, netconfirmedCount: 0, avgNetRevenue: 0, avgDiscountRate: 0, avgNacuboRate: 0, totalNetCharges: 0, totalFundedGift: 0, totalUnfundedGift: 0 } };
       }
 
       // Step 4: Fetch student rows
@@ -2409,7 +2409,7 @@ async function calculatePopulationStats(templateId, sheetId) {
         return val && (val.toLowerCase() === 'yes' || val.toLowerCase() === 'y');
       }).length;
 
-      const confirmedCount = studentRows.filter(s => {
+      const netconfirmedCount = studentRows.filter(s => {
         const val = s.values['Admissions_Funnel_Stage'];
         return val && ['deposit', 'matriculated'].includes(val.toLowerCase());
       }).length;
@@ -2426,7 +2426,7 @@ async function calculatePopulationStats(templateId, sheetId) {
         stats: {
           admittedCount,
           enrolledCount,
-          confirmedCount,
+          netconfirmedCount,
           avgNetRevenue,
           avgDiscountRate,
           avgNacuboRate,

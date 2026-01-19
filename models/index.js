@@ -24,11 +24,15 @@ const ElementMatrix = require('./ElementMatrix');
 const TemplatePermission = require('./TemplatePermission');
 const Log = require('./Log');
 const CampusGoal = require('./CampusGoal');
+const ViewGoal = require('./ViewGoal');
 const sequelize = require('../config/database');
 
 // Define associations
 Template.hasMany(File, { foreignKey: 'templateId', onDelete: 'CASCADE' });
 File.belongsTo(Template, { foreignKey: 'templateId' });
+
+Template.hasMany(ViewGoal, { foreignKey: 'templateId', onDelete: 'CASCADE' });
+ViewGoal.belongsTo(Template, { foreignKey: 'templateId' });
 
 Template.hasMany(ElementMatrix, { foreignKey: 'templateId', onDelete: 'CASCADE' });
 ElementMatrix.belongsTo(Template, { foreignKey: 'templateId' });
@@ -131,4 +135,5 @@ module.exports = {
   TemplatePermission,
   Log,
   CampusGoal,
+  ViewGoal
 };
