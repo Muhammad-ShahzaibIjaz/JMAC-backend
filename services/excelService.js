@@ -7,30 +7,6 @@ function isRowEmpty(row) {
   return row.every((cell) => cell === null || cell === undefined || cell === "");
 }
 
-// function processDataRows(jsonData, maxConsecutiveEmptyRows = 10) {
-//   if (!jsonData || jsonData.length < 1) {
-//     return { data: [], rowsSkipped: 0 };
-//   }
-  
-//   const headers = jsonData[0] || [];
-//   const dataRows = jsonData.slice(1) || [];
-//   const cleanedRows = [];
-//   let consecutiveEmptyRows = 0;
-
-//   for (const row of dataRows) {
-//     if (isRowEmpty(row)) {
-//       consecutiveEmptyRows++;
-//       if (consecutiveEmptyRows >= maxConsecutiveEmptyRows) break;
-//       continue;
-//     }
-//     consecutiveEmptyRows = 0;
-//     cleanedRows.push(row);
-//   }
-  
-//   const processedData = headers.length > 0 ? [headers, ...cleanedRows] : cleanedRows;
-//   return { data: processedData };
-// }
-
 function findFirstNonEmptyRow(jsonData, startFrom = 0) {
   for (let i = startFrom; i < jsonData.length; i++) {
     if (!isRowEmpty(jsonData[i])) {
@@ -110,56 +86,6 @@ function processDataRows(jsonData, headerOrientation='horizontal', headerPositio
     data
   };
 }
-
-// async function headerProcessor(files) {
-
-//   const processedFiles = [];
-
-//   for (const file of files) {
-//     if (!file.path) {
-//       throw new Error(`File path is undefined for ${file.originalname}`);
-//     }
-
-//     try {
-//       // Read file from disk
-//       let workbook;
-//       if (file.originalname.endsWith(".csv")) {
-//         const csvData = fs.readFileSync(file.path, "utf8");
-//         workbook = XLSX.read(csvData, { type: "string", raw: true });
-//       } else {
-//         workbook = XLSX.readFile(file.path); // Reads .xlsx/.xls directly from disk
-//       }
-
-//       const sheets = workbook.SheetNames.map((sheetName) => {
-//         const worksheet = workbook.Sheets[sheetName];
-//         const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
-
-//         const { data: processedData } = processDataRows(jsonData);
-//         const headers = processedData[0] || [];
-
-//         return {
-//           sheetName,
-//           headers,
-//           data: headers.length > 0 ? processedData.slice(1) : [],
-//         };
-//       }).filter((sheet) => sheet.headers.length > 0);
-
-//       if (sheets.length === 0) {
-//         throw new Error(`No valid sheets with headers found in ${file.originalname}`);
-//       }
-
-//       processedFiles.push({
-//         id: uuidv4(),
-//         fileName: file.originalname,
-//         sheets,
-//       });
-//     } catch (error) {
-//       throw new Error(`Failed to process file ${file.originalname}: ${error.message}`);
-//     }
-//   }
-
-//   return processedFiles;
-// }
 
 async function headerProcessor(files, headerOrientation='horizontal', headerPosition=0, isRowSkipped=false) {
 

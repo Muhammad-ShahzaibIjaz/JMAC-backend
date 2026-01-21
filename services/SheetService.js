@@ -164,4 +164,40 @@ async function generateMultiYearExcelFile(data) {
   return await workbook.xlsx.writeBuffer();
 }
 
-module.exports = { generateExcelFile, generateHeaderMappingExcel, generateMultiYearExcelFile };
+async function createExcelFile(headers, categoryData, includeHeaders, exportType, templateName = 'export') {
+  const currentDate = new Date().toISOString().split('T')[0];
+  const filePath = path.join(__dirname, '..', 'exports', `${templateName}_${currentDate}.xlsx`);
+
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+
+  const workbook = new ExcelJS.stream.xlsx.WorkbookWriter({ filename: filePath });
+  const sheet = workbook.addWorksheet('Data');
+
+  if (includeHeaders) {
+    sheet.addRow(headers).commit();
+  }
+
+  for (const row of categoryData) {
+    const rowData =
+      exportType === 'student_ids'
+        ? [row['Student_ID'] ?? '']
+        : headers.map(h => {
+            let value = row[h] ?? '';
+            if (typeof value === 'string') {
+              value = value.replace(/[\u0000-\u001F\u007F-\u009F]/g, '');
+            }
+            const parsedDate = new Date(value);
+            if (h.toLowerCase().includes('date') && !isNaN(parsedDate.getTime())) {
+              return parsedDate;
+            }
+            return value;
+          });
+    sheet.addRow(rowData).commit();
+  }
+
+  await workbook.commit();
+  return filePath;
+}
+
+
+module.exports = { generateExcelFile, generateHeaderMappingExcel, generateMultiYearExcelFile, createExcelFile };
