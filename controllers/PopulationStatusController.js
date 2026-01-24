@@ -61,8 +61,8 @@ const savePopulationSubmissionDate = async (req, res) => {
   const { templateId, submissionDate, selectedSheet } = req.body;
 
   try {
-    if (!templateId || !submissionDate || !selectedSheet) {
-      return res.status(400).json({ error: 'templateId, submissionDate, and selectedSheet are required' });
+    if (!templateId || !submissionDate || !selectedSheet || !submissionDescription) {
+      return res.status(400).json({ error: 'templateId, submissionDate, selectedSheet, and submissionDescription are required' });
     }
 
     // Check for exact match
@@ -95,10 +95,11 @@ const savePopulationSubmissionDate = async (req, res) => {
     const populationSubmission = await PopulationSubmission.create({
       templateId,
       submissionDate,
-      selectedSheet
+      selectedSheet,
+      submissionDescription
     });
 
-    res.status(201).json({id: populationSubmission.id, submissionDate: populationSubmission.submissionDate, selectedSheet: populationSubmission.selectedSheet});
+    res.status(201).json({id: populationSubmission.id, submissionDate: populationSubmission.submissionDate, selectedSheet: populationSubmission.selectedSheet, submissionDescription: populationSubmission.submissionDescription});
   } catch (error) {
     console.error('Error saving population submission date:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -113,7 +114,7 @@ const getPopulationSubmissionsByTemplateId = async (req, res) => {
         }
         const submissions = await PopulationSubmission.findAll({
             where: { templateId },
-            attributes: ['id', 'submissionDate', 'selectedSheet'],
+            attributes: ['id', 'submissionDate', 'selectedSheet', 'submissionDescription'],
             order: [['submissionDate', 'DESC']]
         });
         res.status(200).json(submissions);
@@ -124,10 +125,10 @@ const getPopulationSubmissionsByTemplateId = async (req, res) => {
 }
 
 const updatePopulationSubmissionDate = async (req, res) => {
-    const { id, submissionDate, selectedSheet } = req.body;
+    const { id, submissionDate, selectedSheet, submissionDescription } = req.body;
     try {
-        if (!id || !submissionDate || !selectedSheet) {
-            return res.status(400).json({ error: 'id, submissionDate, and selectedSheet are required' });
+        if (!id || !submissionDate || !selectedSheet || !submissionDescription) {
+            return res.status(400).json({ error: 'id, submissionDate, selectedSheet, and submissionDescription are required' });
         }
         const submission = await PopulationSubmission.findByPk(id);
         if (!submission) {
@@ -135,6 +136,7 @@ const updatePopulationSubmissionDate = async (req, res) => {
         }
         submission.submissionDate = submissionDate;
         submission.selectedSheet = selectedSheet;
+        submission.submissionDescription = submissionDescription;
         await submission.save();
         res.status(200).json(true);
     } catch (error) {

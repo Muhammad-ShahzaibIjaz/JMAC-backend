@@ -24,7 +24,12 @@ const PopulationSubmission = sequelize.define(
     selectedSheet: {
         type: DataTypes.UUID,
         allowNull: false,
-    }
+    },
+    submissionDescription: {
+        type: DataTypes.STRING,
+        allowNull: false,
+        defaultValue: ''
+    },
 },
   {
     tableName: 'PopulationSubmission',
