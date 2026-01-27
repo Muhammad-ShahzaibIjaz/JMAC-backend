@@ -979,6 +979,27 @@ async function getExtractedHeadersByTemplateId(req, res) {
   }
 }
 
+async function deleteExtractedHeadersByTemplateId(req, res) {
+  const { mappingTemplateId, fileBelongsTo=null } = req.query;
+  if (!mappingTemplateId) {
+    return res.status(400).json({ message: "Mapping Template Id is required" });
+  }
+
+  try {
+    await sequelize.transaction(async (t) => {
+      const whereClause = { mappingTemplateId };
+      if (fileBelongsTo) {
+        whereClause.fileBelongsTo = fileBelongsTo;
+      } else {
+        whereClause.fileBelongsTo = { [Op.is]: null };
+      }
+      await ExtractedHeader.destroy({ where: whereClause, transaction: t });
+    });
+    res.status(200).json({ message: "Extracted headers deleted successfully" });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+}
 
 async function processNLP(req, res) {
   const { ruleString } = req.body;
@@ -1046,5 +1067,6 @@ module.exports = {
   uploadAndProcessData,
   processAndGetHeaderSelectedSheets,
   processAndGetSheetMapHeaders,
-  getMissingHeaders
+  getMissingHeaders,
+  deleteExtractedHeadersByTemplateId
 };

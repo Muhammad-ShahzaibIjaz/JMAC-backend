@@ -744,7 +744,6 @@ async function getTemplateDataWithExcel(req, res) {
       return res.status(404).json({ error: `No headers found for templateId ${templateId}` });
     }
 
-    // Fetch all SheetData for the template
     const sheetData = await sequelize.query(`
         SELECT sd.id, sd."rowIndex", sd.value, sd."headerId"
         FROM "SheetData" sd

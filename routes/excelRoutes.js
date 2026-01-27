@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const { uploadAndGetHeaders, getFileSheets, uploadAndProcessData ,getExtractedHeadersByTemplateId,
-processAndGetHeaderSelectedSheets ,processAndSaveSelectedSheets, processAndCompareHeaders, processAndGetSheetMapHeaders, getMissingHeaders} = require('../controllers/excelController');
+processAndGetHeaderSelectedSheets ,processAndSaveSelectedSheets, processAndCompareHeaders, processAndGetSheetMapHeaders, getMissingHeaders, deleteExtractedHeadersByTemplateId} = require('../controllers/excelController');
 const upload = require('../middlewares/fileUpload');
 const { parseAPI } = require("../services/parseService");
 const { verifyToken, verifyUserActive } = require('../middlewares/authMiddleware');
@@ -17,6 +17,7 @@ router.post('/upload-and-get-selected-data', verifyToken, verifyUserActive, proc
 router.post('/extract-map-headers/:mappingTemplateId', verifyToken, verifyUserActive, processAndCompareHeaders);
 router.post('/extract-sheets-map-headers/:mappingTemplateId', verifyToken, verifyUserActive, processAndGetSheetMapHeaders);
 router.get('/get-extracted-headers', verifyToken, verifyUserActive, getExtractedHeadersByTemplateId);
+router.delete('/delete-extracted-headers', verifyToken, verifyUserActive, deleteExtractedHeadersByTemplateId);
 router.post('/parse-rule', verifyToken, verifyUserActive, parseAPI);
 
 
