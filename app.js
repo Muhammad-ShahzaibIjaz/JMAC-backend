@@ -6,7 +6,7 @@ const app = express();
 
 
 const corsOptions = {
-  origin: ['http://localhost:3000', 'https://mac-insight.vercel.app', 'https://j-mac.vercel.app', 'https://mac-insight-dev.vercel.app', 'https://macinsight-dev.vercel.app'],
+  origin: ['http://localhost:3000', 'https://mac-insight.vercel.app', 'https://j-mac.vercel.app', 'https://mac-insight-dev.vercel.app', 'https://macinsight-dev.vercel.app', 'http://localhost:8080', 'https://famaaaaa.vercel.app'],
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   credentials: true
 };
@@ -38,11 +38,14 @@ const userRoutes = require("./routes/userRoutes");
 const projectionRoutes = require("./routes/projectionRoutes");
 const logRoutes = require("./routes/logRoutes");
 const campusGoalRoutes = require("./routes/campusGoalRoutes");
-const viewGoalRoutes = require("./routes/viewGoalRoutes")
+const viewGoalRoutes = require("./routes/viewGoalRoutes");
+const faafRoute = require("./routes/faafRoute");
 
 
 
 
+
+app.use("/api", faafRoute);
 app.use("/api", viewGoalRoutes);
 app.use("/api", campusGoalRoutes);
 app.use("/api", logRoutes);
