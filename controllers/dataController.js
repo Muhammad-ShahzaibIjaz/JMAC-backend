@@ -6446,6 +6446,30 @@ async function evaluateMatrixAndAssignElement(req, res) {
   }
 }
 
+async function updateInstitutionalCode(req, res) {
+  const { templateId, sheetId, value} = req.body;
+  const username = await getUserName(req.userId);
+  try {
+    if (!templateId || !sheetId || !value) {
+      return res.status(400).json({ message: 'templateId, sheetId, and value are required.' });
+    }
+    const header = await Header.findOne({ where: { templateId, name: 'Institution_Code' } });
+    if (!header) {
+      return res.status(404).json({ message: 'Header "Institution_Code" not found for the given templateId.' });
+    }
+    const result = await SheetData.update(
+      { value },
+      { where: { headerId: header.id, sheetId } }
+    );
+    await createLog({ action: 'UPDATE_INSTITUTION_CODE', username, performedBy: req.userRole, details: `Updated Institution_Code for templateId: ${templateId}, sheetId: ${sheetId}` });
+    return res.status(200).json({ message: 'Institution code updated successfully.', details: result });
+  } catch (error) {
+    await createLog({ action: 'UPDATE_INSTITUTION_CODE_FAILED', username, performedBy: req.userRole, details: `Failed to update Institution_Code for templateId: ${req.body.templateId}, sheetId: ${req.body.sheetId}. Error: ${error.message}` });
+    console.error('Error in updateInstitutionalCode:', error);
+    return res.status(500).json({ message: 'Internal server error.', details: error.message });
+  }
+}
+
 module.exports = {
   deleteSheetData, 
   getMatrixPop, 
@@ -6484,5 +6508,6 @@ module.exports = {
   bulkUpdateYesNo,
   evaluateBandsAndAssign,
   evaluateMatrixAndAssignElement,
-  deleteSheetDataByConditions
+  deleteSheetDataByConditions,
+  updateInstitutionalCode,
 };

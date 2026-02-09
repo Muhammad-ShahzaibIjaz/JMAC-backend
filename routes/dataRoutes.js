@@ -35,6 +35,6 @@ router.post('/export-data-conditions', verifyToken, verifyUserActive, dataContro
 router.put('/bulk-update-yn', verifyToken, verifyUserActive, dataController.bulkUpdateYesNo);
 router.put('/evaluate-bands', verifyToken, verifyUserActive, dataController.evaluateBandsAndAssign);
 router.put('/assign-element', verifyToken, verifyUserActive, dataController.evaluateMatrixAndAssignElement);
-
+router.put('/update-institutional-code', verifyToken, verifyUserActive, dataController.updateInstitutionalCode);
 
 module.exports = router;
