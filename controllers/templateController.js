@@ -129,9 +129,16 @@ async function getTemplates(req, res) {
 
     if (userRole === "Admin" || userRole === "Creator") {
       // full access
-      templates = await Template.findAll();
+      templates = await Template.findAll({
+        where: {
+          id: { [Op.ne]: '58f3cf3b-ed4f-4d33-9ad1-0611f85b4df8' }
+        }
+      });
     } else if (userRole === "Consultant" || userRole === "Campus") {
       templates = await Template.findAll({
+        where: {
+          id: { [Op.ne]: '58f3cf3b-ed4f-4d33-9ad1-0611f85b4df8' }
+        },
         include: [
           {
             model: TemplatePermission,
