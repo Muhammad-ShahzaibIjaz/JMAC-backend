@@ -7,6 +7,7 @@ const { verifyToken, verifyUserActive } = require('../middlewares/authMiddleware
 
 
 router.post('/cross-references', verifyToken, verifyUserActive, referenceController.addCrossReference);
+router.post('/cross-references/duplicate', verifyToken, verifyUserActive, referenceController.duplicateCrossReference);
 router.get('/cross-references', verifyToken, verifyUserActive, referenceController.getCrossReferences);
 router.put('/cross-references', verifyToken, verifyUserActive, referenceController.updateCrossReferenceWithMapping);
 router.get('/cross-references-without-mapping', verifyToken, verifyUserActive, referenceController.getCrossReferencesWithoutMapping);

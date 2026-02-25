@@ -8,6 +8,8 @@ const { Template } = require('../models');
 const { generateHeaderMappingExcel } = require('../services/SheetService');
 const { createLog } = require("../utils/auditLogger");
 const { getUserName } = require('./userController');
+const { pre_defined_mapping } = require('../utils/preDefinedMapping');
+const desiredOrder = require('../utils/headerOrderList').desiredOrder;
 
 
 
@@ -115,6 +117,119 @@ async function getMapHeader(req, res) {
   }
 }
 
+function normalize(str) {
+  return str.toLowerCase().replace(/[_\s]/g, '');
+}
+
+function sortHeadersFlexibleMatch(headers) {
+  const normalizedToHeader = new Map();
+  const normalizedOriginals = [];
+
+  for (const h of headers) {
+    const norm = normalize(h.name);
+    normalizedToHeader.set(norm, h);
+    normalizedOriginals.push(norm);
+  }
+
+  const ordered = [];
+  const matchedKeys = new Set();
+
+  for (const name of desiredOrder) {
+    const norm = normalize(name);
+    const match = normalizedToHeader.get(norm);
+    if (match) {
+      ordered.push(match);
+      matchedKeys.add(norm);
+    }
+  }
+
+  const extras = [];
+  for (let i = 0; i < headers.length; i++) {
+    const norm = normalizedOriginals[i];
+    if (!matchedKeys.has(norm)) {
+      extras.push(headers[i]);
+    }
+  }
+
+  return ordered.concat(extras);
+}
+
+
+async function createPreDefinedMapping(req, res) {
+  try {
+    const { templateId, mappingtemplateId } = req.query;
+
+    // Fetch headers for the template
+    const headers = await Header.findAll({
+      where: { templateId },
+      attributes: ["id", "name", "criticalityLevel"],
+    });
+
+    if (!headers || headers.length === 0) {
+      return res
+        .status(404)
+        .json({ error: `No headers found for templateId ${templateId}` });
+    }
+
+    // Build MapHeaders based on predefined mapping
+    const mapHeadersToCreate = [];
+
+    for (const header of headers) {
+      const mapping = pre_defined_mapping.find(
+        (m) => m.name.toLowerCase() === header.name.toLowerCase()
+      );
+
+      if (mapping) {
+        mapping.aliases.forEach((alias) => {
+          mapHeadersToCreate.push({
+            id: uuidv4(),
+            name: alias,
+            headerId: header.id,
+            mappingTemplateId: mappingtemplateId,
+          });
+        });
+      }
+    }
+
+    // Save MapHeaders in DB
+    if (mapHeadersToCreate.length > 0) {
+      await MapHeader.bulkCreate(mapHeadersToCreate, { validate: true });
+    }
+
+    // Fetch headers again, now including their MapHeaders
+    const enrichedHeaders = await Header.findAll({
+      where: { templateId },
+      attributes: ["id", "name", "criticalityLevel"],
+      include: [
+        {
+          model: MapHeader,
+          where: { mappingTemplateId: mappingtemplateId },
+          attributes: ["id", "name", "headerId", "createdAt"],
+          required: false,
+          separate: true,
+          order: [["createdAt", "ASC"]],
+        },
+      ],
+    });
+
+    if (!enrichedHeaders || enrichedHeaders.length === 0) {
+      return res.status(404).json({
+        error: `No headers with MapHeaders found for templateId ${templateId}`,
+      });
+    }
+
+    const sortedHeaders = sortHeadersFlexibleMatch(enrichedHeaders);
+
+    res.status(200).json(sortedHeaders);
+  } catch (error) {
+    console.error(
+      `Error creating predefined mapping: ${error.message}`,
+      error.stack
+    );
+    res.status(500).json({ error: error.message });
+  }
+}
+
 const getHeaderMappingTable = async (templateId, mappingTemplateId) => {
   try {
     const headers = await Header.findAll({
@@ -193,5 +308,6 @@ const exportHeaderMapping = async (req, res) => {
 module.exports = {
   updateMapHeader,
   getMapHeader,
-  exportHeaderMapping
+  exportHeaderMapping,
+  createPreDefinedMapping,
 };

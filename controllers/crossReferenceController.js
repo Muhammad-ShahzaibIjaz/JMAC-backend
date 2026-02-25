@@ -53,6 +53,46 @@ const addCrossReference = async (req, res) => {
     }
 }
 
+const duplicateCrossReference = async (req, res) => {
+  const { referenceId, name } = req.body;
+  const username = await getUserName(req.userId);
+  try {
+    if (!referenceId || !name) {
+      return res.status(400).json({ error: 'referenceId and name are required' });
+    }
+    const existingReference = await CrossReference.findByPk(referenceId);
+    if (!existingReference) {
+      return res.status(404).json({ error: 'Cross-reference to duplicate not found' });
+    }
+    const duplicateReference = await sequelize.transaction(async (t) => {
+      const newReference = await CrossReference.create({
+        name,
+        templateId: existingReference.templateId,
+        inputHeaderIds: existingReference.inputHeaderIds,
+        outputHeaderIds: existingReference.outputHeaderIds,
+        dependentReferenceId: existingReference.dependentReferenceId
+      }, { transaction: t });
+      const existingMappings = await CrossReferenceMapping.findAll({
+        where: { crossReferenceId: referenceId },
+        transaction: t
+      });
+      const newMappingsData = existingMappings.map(mapping => ({
+        crossReferenceId: newReference.id,
+        inputValue: mapping.inputValue,
+        outputValue: mapping.outputValue
+      }));
+      await CrossReferenceMapping.bulkCreate(newMappingsData, { transaction: t });
+      return newReference;
+    });
+    await createLog({ action: 'DUPLICATE_CROSS_REFERENCE', username, performedBy: req.userId, details: `Duplicated Cross-Reference '${existingReference.name}' with new name '${name}' and ID: ${duplicateReference.id}` });
+    return res.status(201).json(duplicateReference.id);
+  }
+    catch (error) {      await createLog({ action: 'DUPLICATE_CROSS_REFERENCE_FAILED', username, performedBy: req.userId, details: `Failed to duplicate Cross-Reference with ID '${referenceId}': ${error.message}` });
+        console.error('Error duplicating cross-reference:', error);
+        return res.status(500).json({ error: 'Internal server error' });
+    }
+};
+
 
 const getCrossReferences = async (req, res) => {
   const { templateId } = req.query;
@@ -394,5 +434,6 @@ module.exports = {
     applyReference,
     updateCrossReferenceWithMapping,
     parseAndGetReferenceMapping,
-    getReferenceHeader
+    getReferenceHeader,
+    duplicateCrossReference
 };

@@ -29,12 +29,85 @@ const createPellRule = async (req, res) => {
             isGlobal
         });
         await createLog({ action: 'CREATE_PELL_RULE', username, performedBy: req.userId, details: `Created PellRule '${name}' with ID: ${newPellRule.id}` });
-        res.status(201).json({id: newPellRule.id, pellName: name, pellSource: pellSource, criteria, targetHeader: targetHeader, acceptanceStatus: acceptanceStatus, isGlobal: isGlobal});
+        res.status(201).json({id: newPellRule.id, name, pellSource: newPellRule.pellSource, criteria: newPellRule.criteria, targetHeader: newPellRule.targetHeader, acceptanceStatus: newPellRule.acceptanceStatus, isGlobal: newPellRule.isGlobal});
     } catch (error) {
         await createLog({ action: 'CREATE_PELL_RULE_FAILED', username, performedBy: req.userId, details: `Failed to create PellRule '${name}': ${error.message}` });
         console.error('Error creating PellRule:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
+};
+
+const duplicatePellRule = async (req, res) => {
+  const { pellId, name, templateId } = req.body;
+
+  if (!pellId || !name || !templateId) {
+    return res.status(400).json({ error: "pellId, name, and templateId are required" });
+  }
+
+  try {
+    const usernamePromise = getUserName(req.userId);
+
+    // Run queries in parallel
+    const [existingPellRule, isRuleExist, username] = await Promise.all([
+      PellRule.findByPk(pellId),
+      PellRule.findOne({ where: { templateId, name } }),
+      usernamePromise
+    ]);
+
+    if (!existingPellRule) {
+      return res.status(404).json({ error: "PellRule to duplicate not found" });
+    }
+
+    if (isRuleExist) {
+      return res.status(409).json({ error: "Duplicate PellRule already exists" });
+    }
+
+    const {
+      pellSource,
+      criteria,
+      targetHeader,
+      acceptanceStatus,
+      isGlobal
+    } = existingPellRule;
+
+    const duplicatePellRule = await PellRule.create({
+      name,
+      pellSource,
+      criteria,
+      targetHeader,
+      templateId,
+      acceptanceStatus,
+      isGlobal
+    });
+
+    await createLog({
+      action: "DUPLICATE_PELL_RULE",
+      username,
+      performedBy: req.userId,
+      details: `Duplicated PellRule with new ID: ${duplicatePellRule.id} from original ID: ${pellId}`
+    });
+
+    return res.status(201).json({
+      id: duplicatePellRule.id,
+      name: duplicatePellRule.name,
+      pellSource: duplicatePellRule.pellSource,
+      criteria: duplicatePellRule.criteria,
+      targetHeader: duplicatePellRule.targetHeader,
+      templateId: duplicatePellRule.templateId,
+      acceptanceStatus: duplicatePellRule.acceptanceStatus,
+      isGlobal: duplicatePellRule.isGlobal
+    });
+  } catch (error) {
+    const username = await getUserName(req.userId);
+    await createLog({
+      action: "DUPLICATE_PELL_RULE_FAILED",
+      username,
+      performedBy: req.userId,
+      details: `Failed to duplicate PellRule with original ID: ${pellId}: ${error.message}`
+    });
+    console.error("Error duplicating PellRule:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
 };
 
 const updatePellRule = async (req, res) => {
@@ -119,5 +192,6 @@ module.exports = {
     getPellRules,
     getPellRuleById,
     deletePellRule,
-    updatePellRule
+    updatePellRule,
+    duplicatePellRule
 }

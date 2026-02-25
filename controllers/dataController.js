@@ -6153,6 +6153,267 @@ async function bulkUpdateYesNo(req, res) {
   }
 }
 
+async function clearHeaderData(req, res) {
+  const username = await getUserName(req.userId);
+  const transaction = await sequelize.transaction();
+
+  try {
+    const { templateId, sheetId, headerName } = req.body;
+    if (!templateId || !sheetId || !headerName) {
+      await transaction.rollback();
+      return res.status(400).json({ message: 'templateId, sheetId, and headerName are required.' });
+    }
+
+    console.time('fetch header');
+    const header = await Header.findOne({ where: { templateId, name: headerName }, transaction });
+    if (!header) {
+      await transaction.rollback();
+      return res.status(404).json({ message: `Header "${headerName}" not found for the given templateId.` });
+    }
+    console.timeEnd('fetch header');
+
+    console.time('get row count');
+    const [countResult] = await sequelize.query(
+      `SELECT COUNT(*)::int AS count FROM "SheetData" WHERE "sheetId" = :sheetId AND "headerId" = :headerId`,
+      { replacements: { sheetId, headerId: header.id }, type: QueryTypes.SELECT, transaction }
+    );
+    console.timeEnd('get row count');
+
+    if (countResult.count === 0) {
+      await transaction.rollback();
+      return res.status(404).json({ message: 'No data found for the specified headerId and sheetId.' });
+    }
+
+    // Step 2: Create operation log
+    const operationLog = await OperationLog.create({
+      templateId,
+      sheetId,
+      operationType: 'CALCULATION',
+    }, { transaction });
+
+    console.time('fetch rows');
+    const rows = await SheetData.findAll({
+      where: { sheetId, headerId: header.id },
+      attributes: ['rowIndex', 'value'],
+      raw: true,
+      transaction
+    });
+    console.timeEnd('fetch rows');
+
+    console.time('bulk insert snapshots');
+    const snapshots = rows.map(row => ({
+      operationLogId: operationLog.id,
+      headerId: header.id,
+      sheetId,
+      rowIndex: row.rowIndex,
+      originalValue: row.value,
+      newValue: '',
+      changeType: 'UPDATE'
+    }));
+
+    await SheetDataSnapshot.bulkCreate(snapshots, { transaction });
+    console.timeEnd('bulk insert snapshots');
+
+    console.time('bulk update values');
+    await SheetData.update(
+      { value: '' },
+      { where: { sheetId, headerId: header.id }, transaction }
+    );
+    console.timeEnd('bulk update values');
+
+    await transaction.commit();
+
+    await createLog({
+      action: 'CLEARING_HEADER_DATA',
+      username,
+      performedBy: req.userRole,
+      details: `Cleared header data for templateId: ${templateId}, sheetId: ${sheetId}, headerName: ${headerName}`
+    });
+
+    return res.status(200).json({
+      message: 'Header data cleared successfully',
+      clearedRows: countResult.count,
+      snapshotsInserted: snapshots.length
+    });
+
+  } catch (error) {
+    await transaction.rollback();
+    await createLog({
+      action: 'CLEARING_HEADER_DATA_FAILED',
+      username,
+      performedBy: req.userRole,
+      details: `Failed to clear header data for templateId: ${req.body.templateId}, sheetId: ${req.body.sheetId}, headerName: ${req.body.headerName}. Error: ${error.message}`
+    });
+    return res.status(500).json({ message: 'Internal server error.', details: error.message });
+  }
+}
+
+
+
+
+async function clearEmptyHeaderColumns(req, res) {
+  const username = await getUserName(req.userId);
+  const transaction = await sequelize.transaction();
+
+  try {
+    const { templateId, sheetId } = req.body;
+    if (!templateId || !sheetId) {
+      await transaction.rollback();
+      return res.status(400).json({ message: 'templateId and sheetId are required.' });
+    }
+    // Step 1: Fetch all headers for this template
+    const headers = await Header.findAll({
+      where: { templateId },
+      attributes: ['id', 'name'],
+      raw: true,
+      transaction
+    });
+    if (headers.length === 0) {
+      await transaction.rollback();
+      return res.status(404).json({ message: 'No headers found for this template.' });
+    }
+
+    let totalCleared = 0;
+    const clearedHeaders = [];
+
+    // Step 3: Iterate headers and clear only empty columns
+    for (const header of headers) {
+      const [checkResult] = await sequelize.query(
+        `
+        SELECT COUNT(*)::int AS count
+        FROM "SheetData"
+        WHERE "sheetId" = :sheetId
+          AND "headerId" = :headerId
+          AND "value" IS NOT NULL
+          AND TRIM("value") <> ''
+          AND LOWER("value") <> 'null'
+        `,
+        { replacements: { sheetId, headerId: header.id }, type: QueryTypes.SELECT, transaction }
+      );
+      // Skip if column has non-empty values
+      if (checkResult.count > 0) continue;
+
+      // Clear values (set to empty string)
+      const [updateResult] = await sequelize.query(
+        `
+        UPDATE "SheetData"
+        SET "value" = ''
+        WHERE "sheetId" = :sheetId AND "headerId" = :headerId
+        `,
+        { replacements: { sheetId, headerId: header.id }, transaction }
+      );
+
+      clearedHeaders.push(header.name);
+      totalCleared += updateResult.rowCount || 0;
+    }
+
+    await transaction.commit();
+
+    await createLog({
+      action: 'CLEAR_EMPTY_HEADER_COLUMNS',
+      username,
+      performedBy: req.userRole,
+      details: `Cleared empty header columns for templateId: ${templateId}, sheetId: ${sheetId}`
+    });
+
+    return res.status(200).json({
+      message: 'Empty header columns cleared successfully.',
+      clearedRows: totalCleared,
+      headersCleared: clearedHeaders
+    });
+
+  } catch (error) {
+    await transaction.rollback();
+    await createLog({
+      action: 'CLEAR_EMPTY_HEADER_COLUMNS_FAILED',
+      username,
+      performedBy: req.userRole,
+      details: `Failed to clear empty header columns for templateId: ${req.body.templateId}, sheetId: ${req.body.sheetId}. Error: ${error.message}`
+    });
+    return res.status(500).json({ message: 'Internal server error.', details: error.message });
+  }
+}
+
+
+async function normalizeNullValues(req, res) {
+  const username = await getUserName(req.userId);
+  const transaction = await sequelize.transaction();
+
+  try {
+    const { templateId, sheetId } = req.body;
+    if (!templateId || !sheetId) {
+      await transaction.rollback();
+      return res.status(400).json({ message: 'templateId and sheetId are required.' });
+    }
+
+    // Step 1: Count affected rows
+    const [countResult] = await sequelize.query(
+      `
+      SELECT COUNT(*)::int AS count
+      FROM "SheetData"
+      WHERE "sheetId" = :sheetId
+        AND (
+          "value" IS NULL
+          OR TRIM("value") = ''
+          OR LOWER("value") = 'null'
+        )
+      `,
+      { replacements: { sheetId }, type: QueryTypes.SELECT, transaction }
+    );
+
+    if (countResult.count === 0) {
+      await transaction.rollback();
+      return res.status(200).json({ message: 'No NULL or empty values found to normalize.', normalizedRows: 0 });
+    }
+
+    // Step 2: Create operation log
+    await OperationLog.create({
+      templateId,
+      sheetId,
+      operationType: 'CALCULATION',
+    }, { transaction });
+
+    // Step 3: Update values to empty string
+    const [updateResult] = await sequelize.query(
+      `
+      UPDATE "SheetData"
+      SET "value" = ''
+      WHERE "sheetId" = :sheetId
+        AND (
+          "value" IS NULL
+          OR TRIM("value") = ''
+          OR LOWER("value") = 'null'
+        )
+      `,
+      { replacements: { sheetId }, transaction }
+    );
+
+    await transaction.commit();
+
+    await createLog({
+      action: 'NORMALIZE_NULL_VALUES',
+      username,
+      performedBy: req.userRole,
+      details: `Normalized NULL/null/empty values for templateId: ${templateId}, sheetId: ${sheetId}`
+    });
+
+    return res.status(200).json({
+      message: 'Null values normalized successfully.',
+      normalizedRows: updateResult.rowCount || countResult.count
+    });
+
+  } catch (error) {
+    await transaction.rollback();
+    await createLog({
+      action: 'NORMALIZE_NULL_VALUES_FAILED',
+      username,
+      performedBy: req.userRole,
+      details: `Failed to normalize null values for templateId: ${req.body.templateId}, sheetId: ${req.body.sheetId}. Error: ${error.message}`
+    });
+    return res.status(500).json({ message: 'Internal server error.', details: error.message });
+  }
+}
+
 
 async function evaluateBandsAndAssign(req, res) {
   const username = await getUserName(req.userId);
@@ -6510,4 +6771,7 @@ module.exports = {
   evaluateMatrixAndAssignElement,
   deleteSheetDataByConditions,
   updateInstitutionalCode,
+  clearHeaderData,
+  clearEmptyHeaderColumns,
+  normalizeNullValues,
 };

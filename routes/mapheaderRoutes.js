@@ -6,4 +6,6 @@ const { verifyToken, verifyUserActive } = require('../middlewares/authMiddleware
 router.put('/map-headers/:maptemplateId', verifyToken, verifyUserActive, mapHeaderController.updateMapHeader);
 router.get('/map-headers', verifyToken, verifyUserActive, mapHeaderController.getMapHeader);
 router.get('/export-mapping', verifyToken, verifyUserActive, mapHeaderController.exportHeaderMapping);
+router.post('/headers-with-predefined-mapping', verifyToken, verifyUserActive, mapHeaderController.createPreDefinedMapping);
+
 module.exports = router;

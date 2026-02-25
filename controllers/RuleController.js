@@ -73,6 +73,36 @@ const createConditionalRule = async (req, res) => {
   }
 };
 
+const duplicateConditionalRule = async (req, res) => {
+  const { id, ruleName, templateId } = req.body;
+  const username = await getUserName(req.userId);
+  try {
+    if (!id || !ruleName || !templateId) {
+      return res.status(400).json({ error: "All fields (id, ruleName, templateId) are required" });
+    }
+    const existingRule = await ConditionalRule.findByPk(id);
+    if (!existingRule) {
+      return res.status(404).json({ error: "Original rule not found" });
+    }
+    const isRuleExist = await ConditionalRule.findOne({ where: { templateId, ruleName } });
+    if (isRuleExist) {
+      return res.status(409).json({ error: "Duplicate rule already exists" });
+    }
+    const { conditions, headers, targetHeaderName, targetValue, isGlobal } = existingRule;
+    const newRule = await ConditionalRule.create({ ruleName, conditions, headers, targetHeaderName, targetValue, isGlobal, templateId });
+    await createLog({ action: 'DUPLICATE_CONDITIONAL_RULE', username, performedBy: req.userId, details: `Conditional Rule '${ruleName}' duplicated with ID: ${newRule.id}` });
+    return res.status(201).json({ id: newRule.id, ruleName: newRule.ruleName, conditions: Array.isArray(conditions.all)
+  ? conditions.all.length
+  : Array.isArray(conditions.any)
+    ? conditions.any.length
+    : 0, targetHeaderName: newRule.targetHeaderName, targetValue: newRule.targetValue, isGlobal: newRule.isGlobal });
+  } catch (error) {
+    await createLog({ action: 'DUPLICATE_CONDITIONAL_RULE_FAILED', username, performedBy: req.userId, details: `Failed to duplicate conditional rule ID '${id}': ${error.message}` });
+    console.error("Error duplicating rule:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+
 const updateConditionalRule = async (req, res) => {
   const { id, ruleName, conditions, headers, targetHeaderName, targetValue, templateId, isGlobal=false } = req.body;
   const username = await getUserName(req.userId);
@@ -333,6 +363,61 @@ const createBulkRule = async (req, res) => {
   }
 }
 
+const duplicateBulkRule = async (req, res) => {
+  const { id, name, templateId } = req.body;
+
+  if (!id || !name || !templateId) {
+    return res.status(400).json({ error: "All fields (id, name, templateId) are required" });
+  }
+
+  try {
+    const usernamePromise = getUserName(req.userId);
+
+    // Run queries in parallel
+    const [existingRule, isRuleExist, username] = await Promise.all([
+      CalculationRule.findByPk(id),
+      CalculationRule.findOne({ where: { templateId, name } }),
+      usernamePromise
+    ]);
+
+    if (!existingRule) {
+      return res.status(404).json({ error: "Original rule not found" });
+    }
+
+    if (isRuleExist) {
+      return res.status(409).json({ error: "Duplicate rule already exists" });
+    }
+
+    const { header, assignments, isGlobal } = existingRule;
+    const newRule = await CalculationRule.create({ name, header, assignments, isGlobal, templateId });
+
+    await createLog({
+      action: "DUPLICATE_BULK_RULE",
+      username,
+      performedBy: req.userId,
+      details: `Bulk Rule '${name}' duplicated with ID: ${newRule.id}`
+    });
+
+    return res.status(201).json({
+      id: newRule.id,
+      name: newRule.name,
+      headerName: newRule.header,
+      assignment: newRule.assignments,
+      isGlobal: newRule.isGlobal
+    });
+  } catch (error) {
+    const username = await getUserName(req.userId); // fallback if Promise.all fails early
+    await createLog({
+      action: "DUPLICATE_BULK_RULE_FAILED",
+      username,
+      performedBy: req.userId,
+      details: `Failed to duplicate bulk rule ID '${id}': ${error.message}`
+    });
+    console.error("Error duplicating bulk rule:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+
 const updateBulkRule = async (req, res) => {
   const { id } = req.params;
   const { headerName, value, name, templateId, isGlobal=false } = req.body;
@@ -454,6 +539,36 @@ const createPopulationRule = async (req, res) => {
   } catch (error) {
     await createLog({ action: 'CREATE_POPULATION_RULE_FAILED', username, performedBy: req.userId, details: `Failed to create population rule '${req.body.ruleName}': ${error.message}` });
     console.error("Error creating population rule:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+const duplicatePopulationRule = async (req, res) => {
+  const { id, ruleName, templateId } = req.body;
+  const username = await getUserName(req.userId);
+  try {
+    if (!id || !ruleName || !templateId) {
+      return res.status(400).json({ error: "All fields (id, ruleName, templateId) are required" });
+    }
+    const existingRule = await PopulationRule.findByPk(id);
+    if (!existingRule) {
+      return res.status(404).json({ error: "Original rule not found" });
+    }
+    const isRuleExist = await PopulationRule.findOne({ where: { templateId, ruleName, ruleType: existingRule.ruleType } });
+    if (isRuleExist) {
+      return res.status(409).json({ error: "Duplicate rule already exists" });
+    }
+    const { conditions, headers, ruleType, populationType } = existingRule;
+    const newRule = await PopulationRule.create({ ruleName, conditions, headers, templateId, ruleType, populationType });
+    await createLog({ action: 'DUPLICATE_POPULATION_RULE', username, performedBy: req.userId, details: `Population Rule '${ruleName}' duplicated with ID: ${newRule.id}` });
+    return res.status(201).json({ id: newRule.id, ruleName: newRule.ruleName, ruleType: newRule.ruleType, conditions: Array.isArray(conditions.all)
+  ? conditions.all.length
+  : Array.isArray(conditions.any)
+    ? conditions.any.length
+    : 0, populationType: newRule.populationType });
+  } catch (error) {
+    await createLog({ action: 'DUPLICATE_POPULATION_RULE_FAILED', username, performedBy: req.userId, details: `Failed to duplicate population rule ID '${id}': ${error.message}` });
+    console.error("Error duplicating population rule:", error);
     return res.status(500).json({ error: "Internal server error" });
   }
 };
@@ -684,6 +799,44 @@ const createBandRule = async (req, res) => {
   }
 };
 
+const duplicateBandRule = async (req, res) => {
+  const { bandId, name, templateId } = req.body;
+  const username = await getUserName(req.userId);
+  try {
+    if (!bandId || !name || !templateId) {
+      return res.status(400).json({ error: "All fields (bandId, name, templateId) are required" });
+    }
+    const existingRule = await BandRule.findByPk(bandId);
+    if (!existingRule) {
+      return res.status(404).json({ error: "Original band rule not found" });
+    }
+    const isBandRuleExist = await BandRule.findOne({
+      where: { name, templateId }
+    });
+    if (isBandRuleExist) {
+      return res.status(409).json({ error: "Band rule with the same name already exists for this template" });
+    }
+    const { conditions, inputHeader, outputHeader, targetHeader, selectedValues, isGlobal } = existingRule;
+    const newRule = await BandRule.create({
+      id: uuidv4(),
+      name,
+      conditions,
+      inputHeader,
+      outputHeader,
+      templateId,
+      targetHeader,
+      selectedValues,
+      isGlobal
+    });
+    await createLog({ action: 'DUPLICATE_BAND_RULE', username, performedBy: req.userId, details: `Band Rule '${name}' duplicated with ID: ${newRule.id}` });
+    return res.status(201).json(newRule);
+  } catch (error) {
+    await createLog({ action: 'DUPLICATE_BAND_RULE_FAILED', username, performedBy: req.userId, details: `Failed to duplicate band rule ID '${bandId}': ${error.message}` });
+    console.error("Error duplicating band rule:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+}
+
 
 const updateBandRule = async (req, res) => {
   const username = await getUserName(req.userId);
@@ -787,6 +940,41 @@ const createElementMatrix = async (req, res) => {
   }
 };
 
+const duplicateElementMatrix = async (req, res) => {
+  const { id, name, templateId } = req.body;
+  const username = await getUserName(req.userId);
+  try {
+    if (!id || !name || !templateId) {
+      return res.status(400).json({ error: "All fields (id, name, templateId) are required" });
+    }
+    const existingMatrix = await ElementMatrix.findByPk(id);
+    if (!existingMatrix) {
+      return res.status(404).json({ error: "Original element matrix not found" });
+    }
+    const isMatrixExist = await ElementMatrix.findOne({
+      where: { name, templateId }
+    });
+    if (isMatrixExist) {
+      return res.status(409).json({ error: "Element matrix with the same name already exists for this template" });
+    }
+    const { academicBands, financialBands, values } = existingMatrix;
+    const newMatrix = await ElementMatrix.create({
+      id: uuidv4(),
+      name,
+      academicBands,
+      financialBands,
+      values,
+      templateId
+    });
+    await createLog({ action: 'DUPLICATE_ELEMENT_MATRIX', username, performedBy: req.userId, details: `Element Matrix '${name}' duplicated with ID: ${newMatrix.id}` });
+    return res.status(201).json(newMatrix);
+  } catch (error) {
+    await createLog({ action: 'DUPLICATE_ELEMENT_MATRIX_FAILED', username, performedBy: req.userId, details: `Failed to duplicate element matrix ID '${id}': ${error.message}` });
+    console.error("Error duplicating element matrix:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+
 
 const updateElementMatrix = async (req, res) => {
   const username = await getUserName(req.userId);
@@ -883,5 +1071,10 @@ module.exports = {
   createElementMatrix,
   updateElementMatrix,
   deleteElementMatrix,
-  getElementMatricesByTemplateId
+  getElementMatricesByTemplateId,
+  duplicateBulkRule,
+  duplicateBandRule,
+  duplicateElementMatrix,
+  duplicateConditionalRule,
+  duplicatePopulationRule
 };

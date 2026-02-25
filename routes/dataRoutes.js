@@ -36,5 +36,8 @@ router.put('/bulk-update-yn', verifyToken, verifyUserActive, dataController.bulk
 router.put('/evaluate-bands', verifyToken, verifyUserActive, dataController.evaluateBandsAndAssign);
 router.put('/assign-element', verifyToken, verifyUserActive, dataController.evaluateMatrixAndAssignElement);
 router.put('/update-institutional-code', verifyToken, verifyUserActive, dataController.updateInstitutionalCode);
+router.put('/clear-column-data', verifyToken, verifyUserActive, dataController.clearHeaderData);
+router.put('/clear-empty-columns', verifyToken, verifyUserActive, dataController.clearEmptyHeaderColumns);
+router.put('/normalize-null-values', verifyToken, verifyUserActive, dataController.normalizeNullValues);
 
 module.exports = router;
