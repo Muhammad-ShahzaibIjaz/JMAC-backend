@@ -731,7 +731,7 @@ async function validateTemplate(templateId) {
 
 async function getTemplateDataWithExcel(req, res) {
   try {
-    const { templateId, sheetId, templateName } = req.query;
+    const { templateId, sheetId, templateName, withEmptyColumns=true } = req.query;
     // Fetch all headers for the template
     const headers = await Header.findAll({
       where: { templateId },
@@ -799,14 +799,21 @@ async function getTemplateDataWithExcel(req, res) {
         maxRowIndex = data.rowIndex;
       }
     }
-    const responseHeaders = sortedHeaders.map(header => ({
-      id: header.id,
-      name: header.name,
-      criticalityLevel: header.criticalityLevel,
-      columnType: header.columnType,
-      data: validatedDataByHeader.get(header.id),
-    }));
-
+    const responseHeaders = sortedHeaders.map(header => {
+      const data = validatedDataByHeader.get(header.id);
+      return {
+        id: header.id,
+        name: header.name,
+        criticalityLevel: header.criticalityLevel,
+        columnType: header.columnType,
+        data,
+      };
+    }).filter(headerObj => {
+      if (withEmptyColumns === 'false' || withEmptyColumns === false) {
+        return headerObj.data.some(d => d.value !== null && d.value !== '' && d.value !== undefined && d.value !== 'null' && d.value !== 'NULL');
+      }
+      return true;
+    });
     const totalErrorRows = errorRows.size;
     const filePath = await generateExcelFile({
       headers: responseHeaders,
@@ -842,7 +849,7 @@ async function getTemplateDataWithExcel(req, res) {
 
 async function exportDataWithConditions(req, res) {
   const username = await getUserName(req.userId);
-  const { templateId, sheetId, templateName, conditions = [], conditionHeaders = [], currentPage = 1, pageSize = 10000 } = req.body;
+  const { templateId, sheetId, templateName, conditions = [], conditionHeaders = [], currentPage = 1, pageSize = 10000, withEmptyColumns=true } = req.body;
   
   try {
     if (!templateId || !sheetId || !templateName) {
@@ -1005,13 +1012,21 @@ async function exportDataWithConditions(req, res) {
     }
 
     // 🔹 Step 7: Prepare response headers structure
-    const responseHeaders = sortedHeaders.map(header => ({
-      id: header.id,
-      name: header.name,
-      criticalityLevel: header.criticalityLevel,
-      columnType: header.columnType,
-      data: validatedDataByHeader.get(header.id),
-    }));
+    const responseHeaders = sortedHeaders.map(header => {
+      const data = validatedDataByHeader.get(header.id);
+      return {
+        id: header.id,
+        name: header.name,
+        criticalityLevel: header.criticalityLevel,
+        columnType: header.columnType,
+        data,
+      };
+    }).filter(headerObj => {
+      if (withEmptyColumns === 'false' || withEmptyColumns === false) {
+        return headerObj.data.some(d => d.value !== null && d.value !== '' && d.value !== undefined && d.value !== 'null' && d.value !== 'NULL');
+      }
+      return true;
+    });
 
     // 🔹 Step 8: Generate Excel file using EXISTING function
     const totalErrorRows = errorRows.size;
