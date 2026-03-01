@@ -3745,6 +3745,143 @@ async function evaluateSheetDataAndAssign(req, res) {
 }
 
 
+async function evaluateSheetDataAndDelete(req, res) {
+  const username = await getUserName(req.userId);
+  const { templateId, sheetId, headers = [], conditions = [] } = req.body;
+  try {
+    if (!templateId || !sheetId) {
+      return res.status(400).json({ error: 'templateId and sheetId are required' });
+    }
+    // 🔹 Step 1: Fetch headers from DB
+    const allHeaders = await Header.findAll({
+      where: {
+        templateId,
+        name: { [Op.in]: [...headers] }
+      },
+      raw: true,
+    });
+
+    const evaluationHeaders = allHeaders.filter(h => headers.includes(h.name));
+    if (allHeaders.length === 0) {
+      return res.status(404).json({ error: 'No headers found for the template' });
+    }
+
+    // Get Max Row Index
+    const [result] = await sequelize.query(`
+      SELECT MAX("rowIndex") AS "maxRow"
+      FROM "SheetData"
+      WHERE "sheetId" = :sheetId
+        AND "headerId" IN (
+          SELECT "id" FROM "Header" WHERE "templateId" = :templateId
+        )
+    `, {
+      replacements: { sheetId, templateId },
+      type: QueryTypes.SELECT
+    });
+    
+    const maxRowIndex = result.maxRow ?? 0;
+
+    // 🔹 Step 2: Build header lookup
+    const evaluationHeaderIds = evaluationHeaders.map(h => h.id);
+
+    // 🔹 Step 3: Fetch SheetData for all relevant headers
+    const sheetDataForEvaluation = await SheetData.findAll({
+      where: {
+        sheetId,
+        headerId: { [Op.in]: evaluationHeaderIds }
+      },
+      raw: true,
+    });
+    // 🔹 Step 4: Organize data row-wise
+    const evalRows = new Map(); // rowIndex → { headerName → { value, id } }
+    sheetDataForEvaluation.forEach(entry => {
+      const header = evaluationHeaders.find(h => h.id === entry.headerId);
+      const normalizedName = normalizeKey(header.name);
+      const row = evalRows.get(entry.rowIndex) || {};
+      row[normalizedName] = { value: entry.value, id: entry.id };
+      evalRows.set(entry.rowIndex, row);
+    });
+    // 🔹 Step 5: Evaluate conditions
+    const matchingRowIndices = [];
+
+    for (let rowIndex = 1; rowIndex <= maxRowIndex; rowIndex++) {
+      const rowData = evalRows.get(rowIndex) || {};
+
+      const filteredRowData = {};
+      for (const name of headers) {
+        const normalized = normalizeKey(name);
+        filteredRowData[normalized] = rowData[normalized] ?? { value: '' };
+      }
+
+      const isValid = evaluateConditions(filteredRowData, conditions);
+      if (isValid) matchingRowIndices.push(rowIndex);
+    }
+    // 🔹 Step 6: Delete Matching Rows
+    if (matchingRowIndices.length > 0) {
+      // Fetch all rows that will be deleted
+      const rowsToDelete = await SheetData.findAll({
+        where: {
+          sheetId,
+          rowIndex: { [Op.in]: matchingRowIndices }
+        },
+        raw: true,
+      });
+
+      // Create operation log
+      const operationLog = await OperationLog.create({
+        templateId,
+        sheetId,
+        operationType: 'DELETE_ROW'
+      });
+
+      // Prepare snapshots before deletion
+      const snapshots = rowsToDelete.map(entry => ({
+        operationLogId: operationLog.id,
+        headerId: entry.headerId,
+        sheetId: entry.sheetId,
+        rowIndex: entry.rowIndex,
+        originalValue: entry.value,
+        newValue: null,
+        changeType: 'DELETE'
+      }));
+
+      // Delete rows
+      await SheetData.destroy({
+        where: {
+          sheetId,
+          rowIndex: { [Op.in]: matchingRowIndices }
+        }
+      });
+
+      // Save snapshots
+      if (snapshots.length > 0) {
+        await SheetDataSnapshot.bulkCreate(snapshots);
+      }
+    }
+
+    await createLog({
+      action: 'EVALUATE_AND_DELETE',
+      username: username,
+      performedBy: req.userRole,
+      details: `Evaluated and deleted rows for templateId: ${templateId}, sheetId: ${sheetId}. Total deleted rows: ${matchingRowIndices.length}`
+    });
+
+    return res.status(200).json({
+      message: 'Deletion completed',
+      deletedRows: matchingRowIndices.length
+    });
+    
+  } catch (error) {
+    await createLog({ action: 'EVALUATE_AND_DELETE_FAILED', username: username, performedBy: req.userRole, details: `Failed to evaluate and delete for templateId: ${req.body.templateId}, sheetId: ${req.body.sheetId}. Error: ${error.message}` });
+    console.error('Error in evaluateSheetDataAndDelete:', error);
+    res.status(500).json({
+      error: 'Internal server error',
+      details: error.message,
+    });
+  }
+}
+
+
 async function applyReferenceOnData(inputHeaderId, outputHeaderId, mappings, sheetId, templateId) {
   const transaction = await sequelize.transaction();
   try {
@@ -6789,4 +6926,5 @@ module.exports = {
   clearHeaderData,
   clearEmptyHeaderColumns,
   normalizeNullValues,
+  evaluateSheetDataAndDelete
 };
