@@ -6572,7 +6572,6 @@ async function evaluateBandsAndAssign(req, res) {
   const transaction = await sequelize.transaction();
   try{
     const { templateId, sheetId, inputHeader, outputHeader, bandConditions, targetHeader, selectedValues } = req.body;
-
     if (!templateId || !sheetId || !inputHeader || !outputHeader || !Array.isArray(bandConditions) || bandConditions.length === 0 || !targetHeader || !Array.isArray(selectedValues) || selectedValues.length === 0) {
       await transaction.rollback();
       return res.status(400).json({ message: 'Invalid input. templateId, sheetId, inputHeader, outputHeader, targetHeader, selectedValue, and bandConditions are required.' });
@@ -6581,7 +6580,6 @@ async function evaluateBandsAndAssign(req, res) {
     const inputHeaderId = await Header.findOne({ where: { templateId, name: inputHeader } });
     const outputHeaderId = await Header.findOne({ where: { templateId, name: outputHeader } });
     const targetHeaderId = await Header.findOne({ where: { templateId, name: targetHeader } });
-
     if (!targetHeaderId) {
       await transaction.rollback();
       return res.status(404).json({ message: `Target header "${targetHeader}" not found for the given templateId.` });
@@ -6596,7 +6594,6 @@ async function evaluateBandsAndAssign(req, res) {
       `SELECT MAX("rowIndex") as "maxRowIndex" FROM "SheetData" WHERE "sheetId" = :sheetId`,
       { replacements: { sheetId }, type: sequelize.QueryTypes.SELECT }
     );
-
 
     const inputData = await sequelize.query(
       `
@@ -6632,6 +6629,7 @@ async function evaluateBandsAndAssign(req, res) {
       attributes: ["rowIndex", "id", "value"],
       raw: true,
     });
+
     const outputMap = new Map(existingOutput.map(r => [r.rowIndex, r]));
 
     const toInsert = [];
@@ -6649,7 +6647,7 @@ async function evaluateBandsAndAssign(req, res) {
     const inputMap = new Map(inputData.map(r => [r.rowIndex, r.value]));
 
 
-    for (let rowIndex = 1; rowIndex <= maxRowIndex; rowIndex++) {
+    for (let rowIndex = 0; rowIndex <= maxRowIndex; rowIndex++) {
       const rawValue = inputMap.has(rowIndex) ? inputMap.get(rowIndex) : null;
       const inputValue = rawValue === null || rawValue === "" || rawValue === "null" || rawValue === "NULL" ? null : parseFloat(rawValue);
       let assignedValue = null;
@@ -6671,13 +6669,12 @@ async function evaluateBandsAndAssign(req, res) {
         } else {
           upperOk = true; // no upper bound
         }
-
+        
         if (lowerOk && upperOk) {
           assignedValue = band.assignValue;
           break;
         }
       }
-
       if (assignedValue !== null) {
         const existing = outputMap.get(rowIndex);
         if (existing) {

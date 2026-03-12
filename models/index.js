@@ -25,6 +25,7 @@ const TemplatePermission = require('./TemplatePermission');
 const Log = require('./Log');
 const CampusGoal = require('./CampusGoal');
 const ViewGoal = require('./ViewGoal');
+const Campus = require('./Campus');
 const sequelize = require('../config/database');
 
 // Define associations
@@ -135,5 +136,6 @@ module.exports = {
   TemplatePermission,
   Log,
   CampusGoal,
-  ViewGoal
+  ViewGoal,
+  Campus,
 };

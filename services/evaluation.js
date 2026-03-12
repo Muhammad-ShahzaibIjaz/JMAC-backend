@@ -52,7 +52,8 @@ function evaluateConditions(rowData, conditionBlock) {
 }
 
 function evaluateBound(value, bound) {
-  if (!bound || !bound.operator || bound.value === undefined || bound.value === null || bound.value === "") {
+  if (!bound || !bound.operator || bound.value === undefined || bound.value === null || bound.value === "" || isNaN(bound.value) || value === null || value === '' || value === "NULL" || value === "null" || isNaN(value)) {
+    console.log(`No valid bound provided, returning true (no restriction)`);
     return false; // no restriction
   }
 

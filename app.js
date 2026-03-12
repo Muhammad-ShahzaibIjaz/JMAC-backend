@@ -40,11 +40,14 @@ const logRoutes = require("./routes/logRoutes");
 const campusGoalRoutes = require("./routes/campusGoalRoutes");
 const viewGoalRoutes = require("./routes/viewGoalRoutes");
 const faafRoute = require("./routes/faafRoute");
+const campusRoutes = require("./routes/campusRoutes");
 
 
 
 
 
+
+app.use("/api", campusRoutes);
 app.use("/api", faafRoute);
 app.use("/api", viewGoalRoutes);
 app.use("/api", campusGoalRoutes);
