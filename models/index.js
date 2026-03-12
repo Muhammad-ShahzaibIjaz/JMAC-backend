@@ -28,8 +28,8 @@ const ViewGoal = require('./ViewGoal');
 const Campus = require('./Campus');
 const sequelize = require('../config/database');
 
-// Campus.hasMany(Template, { foreignKey: 'campusId', onDelete: 'CASCADE' });
-// Template.belongsTo(Campus, { foreignKey: 'campusId', onDelete: 'CASCADE' });
+Campus.hasMany(Template, { foreignKey: 'campusId', onDelete: 'CASCADE' });
+Template.belongsTo(Campus, { foreignKey: 'campusId', onDelete: 'CASCADE' });
 
 // Define associations
 Template.hasMany(File, { foreignKey: 'templateId', onDelete: 'CASCADE' });

@@ -17,7 +17,6 @@ const Template = sequelize.define(
     campusId: {
       type: DataTypes.UUID,
       allowNull: false,
-      defaultValue: '96bd9812-3955-4d08-8513-b007f7e0bed6',
     }
   },
   {
