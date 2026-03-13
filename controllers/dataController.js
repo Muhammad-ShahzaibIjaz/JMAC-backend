@@ -6090,6 +6090,50 @@ async function autoFillInternationalAwards(req, res) {
 }
 
 
+async function getAllStatusValues(req, res) {
+  const { templateId, sheetId } = req.body;
+
+  try {
+    if (!templateId || !sheetId) {
+      return res.status(400).json({ message: 'templateId and sheetId are required.' });
+    }
+
+    // Build header names dynamically: Awd_Status1 ... Awd_Status20
+    const headerNames = Array.from({ length: 20 }, (_, i) => `Awd_Status${i + 1}`);
+
+    const result = await SheetData.findAll({
+      attributes: ['value'],
+      include: [{
+        model: Header,
+        attributes: [],
+        where: { templateId, name: headerNames },
+        required: true
+      }],
+      where: { sheetId },
+      raw: true
+    });
+
+    if (!result || result.length === 0) {
+      return res.status(200).json({ statusValues: [] });
+    }
+
+    // Deduplicate all values (no filtering)
+    const uniqueValues = Array.from(
+      new Set(
+        result
+          .map(item => item.value?.toString().trim())
+          .filter(val => val && val.toLowerCase() !== "null")
+      )
+    );
+
+    return res.status(200).json({ statusValues: uniqueValues });
+
+  } catch (error) {
+    console.error('Error in getAllStatusValues:', error);
+    return res.status(500).json({ message: 'Internal server error.' });
+  }
+}
+
 async function getAcceptanceStatusValues(req, res) {
   const { templateId, sheetId, targetHeader } = req.body;
 
@@ -6923,5 +6967,6 @@ module.exports = {
   clearHeaderData,
   clearEmptyHeaderColumns,
   normalizeNullValues,
-  evaluateSheetDataAndDelete
+  evaluateSheetDataAndDelete,
+  getAllStatusValues
 };

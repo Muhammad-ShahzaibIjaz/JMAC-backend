@@ -32,6 +32,7 @@ router.post('/status-values', verifyToken, verifyUserActive, dataController.getS
 router.post('/header-values', verifyToken, verifyUserActive, dataController.getHeaderValues);
 router.put('/auto-fill-award', verifyToken, verifyUserActive, dataController.autoFillInternationalAwards);
 router.post('/acceptance-status-values', verifyToken, verifyUserActive, dataController.getAcceptanceStatusValues);
+router.post('/all-status-values', verifyToken, verifyUserActive, dataController.getAllStatusValues);
 router.post('/export-data-conditions', verifyToken, verifyUserActive, dataController.exportDataWithConditions);
 router.put('/bulk-update-yn', verifyToken, verifyUserActive, dataController.bulkUpdateYesNo);
 router.put('/evaluate-bands', verifyToken, verifyUserActive, dataController.evaluateBandsAndAssign);
