@@ -121,6 +121,37 @@ async function deleteTemplate(req, res) {
   }
 }
 
+async function getTemplatesByCampus(req, res) {
+  const { campusId } = req.params;
+  const { userRole } = req;
+
+  try {
+    let templates = [];
+
+    if (!campusId) {
+      return res.status(400).json({ error: "campusId is required" });
+    }
+
+    if (userRole === "Admin" || userRole === "Creator") {
+      templates = await Template.findAll({
+        where: {
+          id: { [Op.ne]: '58f3cf3b-ed4f-4d33-9ad1-0611f85b4df8' },
+          campusId: campusId, // explicitly match campusId
+        }
+      });
+    }
+
+    const formattedTemplates = templates.map((template) => ({
+      id: template.id,
+      name: template.name,
+    }));
+
+    res.json(formattedTemplates);
+  } catch (error) {
+    console.error("Error fetching templates:", error);
+    res.status(500).json({ error: error.message });
+  }
+}
 
 async function getTemplates(req, res) {
   const { userId, userRole } = req;
@@ -208,4 +239,5 @@ module.exports = {
   getTemplates,
   getTemplateByID,
   getTemplatePermissionStatus,
+  getTemplatesByCampus
 };
