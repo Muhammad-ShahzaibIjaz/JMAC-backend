@@ -6852,7 +6852,8 @@ async function evaluateMatrixAndAssignElement(req, res) {
 
     for (const [rowIndex, { academicBand, financialBand, oldElement }] of bandMap.entries()) {
       if (academicBand && financialBand) {
-        const elementValue = matrix.values[academicBand - 1]?.[financialBand - 1];
+        const elementValue = matrix.values[financialBand - 1][academicBand - 1];
+
         if (elementValue !== undefined && elementValue !== oldElement) {
           updates.push({
             rowIndex,
