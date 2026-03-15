@@ -14,50 +14,57 @@ const Campus = sequelize.define(
       allowNull: false,
     },
     address: {
-        type: DataTypes.TEXT,
-        allowNull: true,
+      type: DataTypes.TEXT,
+      allowNull: true,
     },
     city: {
-        type: DataTypes.STRING(255),
-        allowNull: true,
+      type: DataTypes.STRING(255),
+      allowNull: true,
     },
     state: {
-        type: DataTypes.STRING(255),
-        allowNull: true,
+      type: DataTypes.STRING(255),
+      allowNull: true,
     },
     zipCode: {
-        type: DataTypes.STRING(20),
-        allowNull: true,
+      type: DataTypes.STRING(20),
+      allowNull: true,
     },
-    phoneNumber: {
-        type: DataTypes.STRING(20),
-        allowNull: true,
+    campusMainNumber: {
+      type: DataTypes.STRING(20),
+      allowNull: true,
     },
-    email: {
-        type: DataTypes.STRING(255),
-        allowNull: true,
+    presidentEmail: {
+      type: DataTypes.STRING(255),
+      allowNull: true,
     },
-    numberOfStudents: {
-        type: DataTypes.INTEGER,
-        allowNull: true,
+    undergradStudents: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
     },
-    principalName: {
-        type: DataTypes.STRING(255),
-        allowNull: true,
+    gradStudents: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+    },
+    presidentName: {
+      type: DataTypes.STRING(255),
+      allowNull: true,
     },
     schoolType: {
-        type: DataTypes.ENUM("Elementary", "Middle", "High", "K-12", "University", "Community College"),
-        allowNull: false,
-        defaultValue: "University",
-    }
+      type: DataTypes.ENUM(
+        "Community College",
+        "4 Year Public University",
+        "4 Year Private University",
+        "Other"
+      ),
+      allowNull: false,
+      defaultValue: "Other",
+    },
   },
   {
     tableName: "Campus",
     timestamps: true,
     indexes: [
-      {
-        fields: ["id"],
-      },
+      { fields: ["id"] },
     ],
   }
 );
