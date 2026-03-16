@@ -58,7 +58,7 @@ const getPopulationStatusByTemplateId = async (req, res) => {
 };
 
 const savePopulationSubmissionDate = async (req, res) => {
-  const { templateId, submissionDate, selectedSheet } = req.body;
+  const { templateId, submissionDate, selectedSheet, submissionDescription="" } = req.body;
 
   try {
     if (!templateId || !submissionDate || !selectedSheet || !submissionDescription) {
