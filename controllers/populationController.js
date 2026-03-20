@@ -2,7 +2,7 @@ const SheetData = require('../models/SheetData');
 const Header = require('../models/Header');
 const Template = require('../models/Template');
 const sequelize = require('../config/database');
-const { DataTypes, Op, where, cast, col, fn, literal} = require('sequelize');
+const { DataTypes, Op, where, cast, col, fn, literal, QueryTypes} = require('sequelize');
 const { v4: uuidv4 } = require('uuid');
 const math = require('mathjs');
 const { OperationLog, SheetDataSnapshot } = require('../models');
@@ -730,7 +730,7 @@ async function countStudentsByTemplateRaw(templateId, sheetId) {
 
     const [result] = await sequelize.query(query, {
       replacements: { templateId, sheetId },
-      type: sequelize.QueryTypes.SELECT,
+      type: QueryTypes.SELECT,
     });
 
     return result.studentCount || 0;
@@ -751,10 +751,58 @@ async function countStudentsByTemplate(req, res) {
   }
 }
 
+async function countHeaderValues(req, res) {
+  try {
+    const { templateId, sheetId, baseHeader } = req.body;
+
+    // Step 1: Find the headerId for the given template and header name
+    const header = await Header.findOne({
+      where: { templateId, name: baseHeader },
+      attributes: ['id'],
+    });
+
+    if (!header) {
+      return res.status(404).json({ error: 'Header not found for given templateId and baseHeader' });
+    }
+
+    // Step 2: Fetch values from SheetData for that headerId and sheetId
+    const query = `
+      SELECT 
+        CASE 
+          WHEN LOWER(TRIM(sd."value")) IN ('y', 'yes') THEN 'Yes'
+          WHEN LOWER(TRIM(sd."value")) IN ('n', 'no') THEN 'No'
+          WHEN NULLIF(TRIM(sd."value"), '') IS NULL THEN 'blank'
+          ELSE sd."value"
+        END AS "normalizedValue",
+        COUNT(*) AS "count"
+      FROM "SheetData" sd
+      WHERE sd."headerId" = :headerId AND sd."sheetId" = :sheetId
+      GROUP BY "normalizedValue"
+    `;
+
+    const results = await sequelize.query(query, {
+      replacements: { headerId: header.id, sheetId },
+      type: QueryTypes.SELECT,
+    });
+
+    // Step 3: Convert results into key-value pair object
+    const counts = results.reduce((acc, row) => {
+      acc[row.normalizedValue] = parseInt(row.count, 10);
+      return acc;
+    }, {});
+
+    return res.json({ baseHeader, counts });
+  } catch (err) {
+    console.error('Error counting header values:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
 module.exports = {
     categorizer,
     getDataWithRange,
     getCategoryStats,
     countStudentsByTemplate,
-    exportStudentData
+    exportStudentData,
+    countHeaderValues
 };

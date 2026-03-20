@@ -25,10 +25,6 @@ const BandRule = sequelize.define(
         type: DataTypes.JSONB,
         allowNull: false,
     },
-    inputHeader: {
-        type: DataTypes.STRING,
-        allowNull: false,
-    },
     outputHeader: {
         type: DataTypes.STRING,
         allowNull: false,

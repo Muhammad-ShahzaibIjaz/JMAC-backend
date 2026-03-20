@@ -27,6 +27,7 @@ router.put('/replace-value', verifyToken, verifyUserActive, dataController.bulkR
 router.post('/evaluate-conditions', verifyToken, verifyUserActive, dataController.evaluateSheetDataWithConditions);
 router.put('/delete-rows-by-condition', verifyToken, verifyUserActive, dataController.deleteSheetDataByConditions);
 router.post('/apply-conditional-rule', verifyToken, verifyUserActive, dataController.evaluateSheetDataAndAssign);
+router.post('/preview-evaluate-conditions',verifyToken, verifyUserActive, dataController.evaluateSheetDataPreview);
 router.put('/evaluate-and-delete', verifyToken, verifyUserActive, dataController.evaluateSheetDataAndDelete);
 router.post('/status-values', verifyToken, verifyUserActive, dataController.getStatusValues);
 router.post('/header-values', verifyToken, verifyUserActive, dataController.getHeaderValues);

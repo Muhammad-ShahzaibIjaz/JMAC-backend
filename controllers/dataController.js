@@ -3744,6 +3744,111 @@ async function evaluateSheetDataAndAssign(req, res) {
   }
 }
 
+async function evaluateSheetDataPreview(req, res) {
+  const username = await getUserName(req.userId);
+  const { templateId, sheetId, headers = [], conditions = [], targetHeaderName, targetValue, limit = 50, offset = 0 } = req.body;
+
+  try {
+    if (!templateId || !sheetId) {
+      return res.status(400).json({ error: 'templateId and sheetId are required' });
+    }
+
+    // 🔹 Step 1: Fetch headers (evaluation + target)
+    const allHeaders = await Header.findAll({
+      where: { templateId, name: { [Op.in]: [...headers, targetHeaderName] } },
+      raw: true,
+    });
+    if (allHeaders.length === 0) {
+      return res.status(404).json({ error: 'No headers found for the template' });
+    }
+
+    const evaluationHeaders = allHeaders.filter(h => headers.includes(h.name));
+    const targetHeader = allHeaders.find(h => h.name === targetHeaderName);
+
+    // 🔹 Step 2: Get max row index
+    const [result] = await sequelize.query(`
+      SELECT MAX("rowIndex") AS "maxRow"
+      FROM "SheetData"
+      WHERE "sheetId" = :sheetId
+        AND "headerId" IN (
+          SELECT "id" FROM "Header" WHERE "templateId" = :templateId
+        )
+    `, {
+      replacements: { sheetId, templateId },
+      type: QueryTypes.SELECT
+    });
+    const maxRowIndex = result.maxRow ?? 0;
+
+    // 🔹 Step 3: Fetch sheet data for all relevant headers
+    const sheetDataForEvaluation = await SheetData.findAll({
+      where: { sheetId, headerId: { [Op.in]: allHeaders.map(h => h.id) } },
+      raw: true,
+    });
+
+    // 🔹 Step 4: Organize row-wise
+    const evalRows = new Map();
+    sheetDataForEvaluation.forEach(entry => {
+      const header = allHeaders.find(h => h.id === entry.headerId);
+      const normalizedName = normalizeKey(header.name);
+      const row = evalRows.get(entry.rowIndex) || {};
+      row[normalizedName] = { value: entry.value }; // ✅ only value, no id
+      evalRows.set(entry.rowIndex, row);
+    });
+
+    // 🔹 Step 5: Evaluate conditions
+    const allRowResults = [];
+    for (let rowIndex = 1; rowIndex <= maxRowIndex; rowIndex++) {
+      const rowData = evalRows.get(rowIndex) || {};
+      const filteredRowData = {};
+
+      for (const name of headers) {
+        const normalized = normalizeKey(name);
+        filteredRowData[normalized] = rowData[normalized] ?? { value: '' };
+      }
+
+      const isValid = evaluateConditions(filteredRowData, conditions);
+
+      // Include ALL headers (evaluation + target)
+      const fullRowData = {};
+      for (const h of [...headers, targetHeaderName]) {
+        const normalized = normalizeKey(h);
+        if (h === targetHeaderName && isValid) {
+          fullRowData[normalized] = { value: targetValue };
+        } else {
+          fullRowData[normalized] = rowData[normalized] ?? { value: '' };
+        }
+      }
+
+      allRowResults.push({
+        rowIndex,
+        data: fullRowData
+      });
+    }
+
+    // 🔹 Step 6: Sort and chunk
+    allRowResults.sort((a, b) => a.rowIndex - b.rowIndex);
+    const previewRows = allRowResults.slice(offset, offset + limit);
+    await createLog({
+      action: 'EVALUATE_PREVIEW',
+      username,
+      performedBy: req.userRole,
+      details: `Previewed evaluation for templateId: ${templateId}, sheetId: ${sheetId}.`
+    });
+
+    return res.status(200).json(previewRows);
+
+  } catch (error) {
+    await createLog({
+      action: 'EVALUATE_PREVIEW_FAILED',
+      username,
+      performedBy: req.userRole,
+      details: `Failed to preview evaluation for templateId: ${req.body.templateId}, sheetId: ${req.body.sheetId}. Error: ${error.message}`
+    });
+    console.error('Error in evaluateSheetDataPreview:', error);
+    res.status(500).json({ error: 'Internal server error', details: error.message });
+  }
+}
+
 
 async function evaluateSheetDataAndDelete(req, res) {
   const username = await getUserName(req.userId);
@@ -6614,39 +6719,50 @@ async function normalizeNullValues(req, res) {
 async function evaluateBandsAndAssign(req, res) {
   const username = await getUserName(req.userId);
   const transaction = await sequelize.transaction();
-  try{
-    const { templateId, sheetId, inputHeader, outputHeader, bandConditions, targetHeader, selectedValues } = req.body;
-    if (!templateId || !sheetId || !inputHeader || !outputHeader || !Array.isArray(bandConditions) || bandConditions.length === 0 || !targetHeader || !Array.isArray(selectedValues) || selectedValues.length === 0) {
+  try {
+    const { templateId, sheetId, outputHeader, targetHeader, selectedValues, conditions } = req.body;
+
+    if (!templateId || !sheetId || !outputHeader || !targetHeader || !Array.isArray(selectedValues) || selectedValues.length === 0 || !Array.isArray(conditions) || conditions.length === 0) {
       await transaction.rollback();
-      return res.status(400).json({ message: 'Invalid input. templateId, sheetId, inputHeader, outputHeader, targetHeader, selectedValue, and bandConditions are required.' });
+      return res.status(400).json({ message: 'Invalid input. templateId, sheetId, outputHeader, targetHeader, selectedValues, and conditions are required.' });
     }
 
-    const inputHeaderId = await Header.findOne({ where: { templateId, name: inputHeader } });
     const outputHeaderId = await Header.findOne({ where: { templateId, name: outputHeader } });
     const targetHeaderId = await Header.findOne({ where: { templateId, name: targetHeader } });
-    if (!targetHeaderId) {
+
+    if (!outputHeaderId || !targetHeaderId) {
       await transaction.rollback();
-      return res.status(404).json({ message: `Target header "${targetHeader}" not found for the given templateId.` });
+      return res.status(404).json({ message: "Output or target header not found for the given templateId." });
     }
 
-    if (!inputHeaderId || !outputHeaderId) {
-      await transaction.rollback();
-      return res.status(404).json({ message: "Input or output header not found for the given templateId." });
+    // Resolve all input headers used in conditions
+    const inputHeaderNames = [...new Set(conditions.map(c => c.inputHeader))];
+    const inputHeaders = await Header.findAll({ where: { templateId, name: inputHeaderNames } });
+    const inputHeaderMap = new Map(inputHeaders.map(h => [h.name, h.id]));
+
+    // Validate all input headers exist
+    for (const name of inputHeaderNames) {
+      if (!inputHeaderMap.has(name)) {
+        await transaction.rollback();
+        return res.status(404).json({ message: `Input header "${name}" not found for the given templateId.` });
+      }
     }
 
+    // Get max row index
     const [{ maxRowIndex }] = await sequelize.query(
       `SELECT MAX("rowIndex") as "maxRowIndex" FROM "SheetData" WHERE "sheetId" = :sheetId`,
-      { replacements: { sheetId }, type: sequelize.QueryTypes.SELECT }
+      { replacements: { sheetId }, type: QueryTypes.SELECT }
     );
 
+    // Fetch all input data for relevant headers + target filter
     const inputData = await sequelize.query(
       `
-      SELECT i."rowIndex", i."value"
+      SELECT i."rowIndex", i."value", i."headerId"
       FROM "SheetData" AS i
       INNER JOIN "SheetData" AS t
         ON i."rowIndex" = t."rowIndex"
       AND i."sheetId" = t."sheetId"
-      WHERE i."headerId" = :inputHeaderId
+      WHERE i."headerId" IN (:inputHeaderIds)
         AND i."sheetId" = :sheetId
         AND t."headerId" = :targetHeaderId
         AND t."value" IN (:selectedValues)
@@ -6654,18 +6770,25 @@ async function evaluateBandsAndAssign(req, res) {
       `,
       {
         replacements: {
-          inputHeaderId: inputHeaderId.id,
+          inputHeaderIds: inputHeaderNames.map(n => inputHeaderMap.get(n)),
           targetHeaderId: targetHeaderId.id,
           sheetId,
           selectedValues,
         },
-        type: sequelize.QueryTypes.SELECT,
+        type: QueryTypes.SELECT,
       }
     );
 
     if (inputData.length === 0) {
       await transaction.rollback();
-      return res.status(200).json({ message: "No data found for the input header." });
+      return res.status(200).json({ message: "No data found for the input headers." });
+    }
+
+    // Build maps: { headerId -> Map(rowIndex -> value) }
+    const headerValueMaps = new Map();
+    for (const row of inputData) {
+      if (!headerValueMaps.has(row.headerId)) headerValueMaps.set(row.headerId, new Map());
+      headerValueMaps.get(row.headerId).set(row.rowIndex, row.value);
     }
 
     const existingOutput = await SheetData.findAll({
@@ -6673,12 +6796,9 @@ async function evaluateBandsAndAssign(req, res) {
       attributes: ["rowIndex", "id", "value"],
       raw: true,
     });
-
     const outputMap = new Map(existingOutput.map(r => [r.rowIndex, r]));
 
-    const toInsert = [];
-    const toUpdate = [];
-    const snapshots = [];
+    const toInsert = [], toUpdate = [], snapshots = [];
 
     const operationLog = await OperationLog.create({
       templateId,
@@ -6686,106 +6806,69 @@ async function evaluateBandsAndAssign(req, res) {
       operationType: 'CALCULATION',
     }, { transaction });
 
-
-    // Build input map for quick lookup
-    const inputMap = new Map(inputData.map(r => [r.rowIndex, r.value]));
-
-
+    let correctOnes = 0;
     for (let rowIndex = 0; rowIndex <= maxRowIndex; rowIndex++) {
-      const rawValue = inputMap.has(rowIndex) ? inputMap.get(rowIndex) : null;
-      const inputValue = rawValue === null || rawValue === "" || rawValue === "null" || rawValue === "NULL" ? null : parseFloat(rawValue);
       let assignedValue = null;
+      for (const cond of conditions) {
+        const headerId = inputHeaderMap.get(cond.inputHeader);
+        const rawValue = headerValueMaps.get(headerId)?.get(rowIndex) ?? null;
+        const inputValue = rawValue === null || rawValue === "" || rawValue.toUpperCase() === "NULL" ? null : parseFloat(rawValue);
 
-      for (const band of bandConditions) {
         let lowerOk = false, upperOk = false;
-        // Lower bound check
-        if (band.lowerBound?.operator === 'isNull') {
+        if (cond.lowerBound?.operator === 'isNull') {
           lowerOk = (inputValue === null);
-        } else if (band.lowerBound?.operator === 'isNotNull') {
+        } else if (cond.lowerBound?.operator === 'isNotNull') {
           lowerOk = (inputValue !== null);
         } else {
-          lowerOk = evaluateBound(inputValue, band.lowerBound);
+          lowerOk = evaluateBound(inputValue, cond.lowerBound);
+          if (lowerOk) correctOnes++;
         }
 
-        // Upper bound check
-        if (band.upperBound !== "" && band.upperBound !== null && band.upperBound !== undefined) {
-          upperOk = evaluateBound(inputValue, band.upperBound);
+        if (cond.upperBound) {
+          upperOk = evaluateBound(inputValue, cond.upperBound);
         } else {
-          upperOk = true; // no upper bound
+          upperOk = true;
         }
-        
+
         if (lowerOk && upperOk) {
-          assignedValue = band.assignValue;
-          break;
+          assignedValue = cond.assignValue;
+          break; // stop at first matching condition
         }
       }
+      
       if (assignedValue !== null) {
         const existing = outputMap.get(rowIndex);
         if (existing) {
           if (existing.value !== assignedValue) {
             toUpdate.push({ id: existing.id, value: assignedValue });
-            // Snapshot for update
-            snapshots.push({
-              operationLogId: operationLog.id,
-              headerId: outputHeaderId.id,
-              sheetId,
-              rowIndex,
-              originalValue: existing.value,
-              newValue: assignedValue,
-              changeType: 'UPDATE',
-            });
+            snapshots.push({ operationLogId: operationLog.id, headerId: outputHeaderId.id, sheetId, rowIndex, originalValue: existing.value, newValue: assignedValue, changeType: 'UPDATE' });
           }
         } else {
-          toInsert.push({
-            headerId: outputHeaderId.id,
-            sheetId,
-            rowIndex,
-            value: assignedValue,
-          });
-          snapshots.push({
-            operationLogId: operationLog.id,
-            headerId: outputHeaderId.id,
-            sheetId,
-            rowIndex,
-            originalValue: null,
-            newValue: assignedValue,
-            changeType: 'INSERT',
-          });
-
+          toInsert.push({ headerId: outputHeaderId.id, sheetId, rowIndex, value: assignedValue });
+          snapshots.push({ operationLogId: operationLog.id, headerId: outputHeaderId.id, sheetId, rowIndex, originalValue: null, newValue: assignedValue, changeType: 'INSERT' });
         }
       }
     }
 
     // Bulk commit
-    if (toInsert.length > 0) {
-      await SheetData.bulkCreate(toInsert, { transaction });
-    }
+    if (toInsert.length > 0) await SheetData.bulkCreate(toInsert, { transaction });
     if (toUpdate.length > 0) {
-      // Batch updates for performance
       const batchSize = 10000;
       for (let i = 0; i < toUpdate.length; i += batchSize) {
         const batch = toUpdate.slice(i, i + batchSize);
-        await Promise.all(
-          batch.map(upd =>
-            SheetData.update({ value: upd.value }, { where: { id: upd.id }, transaction })
-          )
-        );
+        await Promise.all(batch.map(upd => SheetData.update({ value: upd.value }, { where: { id: upd.id }, transaction })));
       }
     }
-    if (snapshots.length > 0) {
-      await SheetDataSnapshot.bulkCreate(snapshots, { transaction });
-    }
-    await transaction.commit();
-    await createLog({ action: 'EVALUATE_BANDS_AND_ASSIGN', username, performedBy: req.userRole, details: `Evaluated bands and assigned values for templateId: ${templateId}, sheetId: ${sheetId}` });
-    return res.status(200).json({
-      message: "Band evaluation completed successfully.",
-      inserted: toInsert.length,
-      updated: toUpdate.length,
-    });
+    if (snapshots.length > 0) await SheetDataSnapshot.bulkCreate(snapshots, { transaction });
 
-  } catch(error){
+    await transaction.commit();
+    await createLog({ action: 'EVALUATE_BANDS_AND_ASSIGN', username, performedBy: req.userRole, details: `Evaluated conditions and assigned values for templateId: ${templateId}, sheetId: ${sheetId}` });
+
+    return res.status(200).json({ message: "Condition evaluation completed successfully.", inserted: toInsert.length, updated: toUpdate.length });
+
+  } catch (error) {
     await transaction.rollback();
-    await createLog({ action: 'EVALUATE_BANDS_AND_ASSIGN_FAILED', username, performedBy: req.userRole, details: `Failed to evaluate bands and assign values for templateId: ${req.body.templateId}, sheetId: ${req.body.sheetId}. Error: ${error.message}` });
+    await createLog({ action: 'EVALUATE_BANDS_AND_ASSIGN_FAILED', username, performedBy: req.userRole, details: `Failed for templateId: ${req.body.templateId}, sheetId: ${req.body.sheetId}. Error: ${error.message}` });
     console.error('Error in evaluateBandsAndAssign:', error);
     return res.status(500).json({ message: 'Internal server error.', details: error.message });
   }
@@ -6969,5 +7052,6 @@ module.exports = {
   clearEmptyHeaderColumns,
   normalizeNullValues,
   evaluateSheetDataAndDelete,
-  getAllStatusValues
+  getAllStatusValues,
+  evaluateSheetDataPreview
 };

@@ -768,9 +768,9 @@ const autoPopulationRule = async (req, res) => {
 const createBandRule = async (req, res) => {
   const username = await getUserName(req.userId);
   try {
-    const { name, conditions, inputHeader, outputHeader, templateId, targetHeader, selectedValues, isGlobal=false } = req.body;
-    if (!name || !conditions || !inputHeader || !outputHeader || !templateId) {
-      return res.status(400).json({ error: "All fields (name, conditions, inputHeader, outputHeader, templateId) are required" });
+    const { name, conditions, outputHeader, templateId, targetHeader, selectedValues, isGlobal=false } = req.body;
+    if (!name || !conditions || !outputHeader || !templateId) {
+      return res.status(400).json({ error: "All fields (name, conditions, outputHeader, templateId) are required" });
     }
     const isBandRuleExist = await BandRule.findOne({
       where: { name, templateId }
@@ -783,7 +783,6 @@ const createBandRule = async (req, res) => {
       id: uuidv4(),
       name,
       conditions,
-      inputHeader,
       outputHeader,
       templateId,
       targetHeader,
@@ -816,12 +815,11 @@ const duplicateBandRule = async (req, res) => {
     if (isBandRuleExist) {
       return res.status(409).json({ error: "Band rule with the same name already exists for this template" });
     }
-    const { conditions, inputHeader, outputHeader, targetHeader, selectedValues, isGlobal } = existingRule;
+    const { conditions, outputHeader, targetHeader, selectedValues, isGlobal } = existingRule;
     const newRule = await BandRule.create({
       id: uuidv4(),
       name,
       conditions,
-      inputHeader,
       outputHeader,
       templateId,
       targetHeader,
@@ -842,9 +840,9 @@ const updateBandRule = async (req, res) => {
   const username = await getUserName(req.userId);
   try {
     const { id } = req.params;
-    const { name, conditions, inputHeader, outputHeader, targetHeader, selectedValues, isGlobal=false } = req.body;
-    if (!name || !conditions || !inputHeader || !outputHeader || !targetHeader || !selectedValues) {
-      return res.status(400).json({ error: "All fields (name, conditions, inputHeader, outputHeader, targetHeader, studentTypes) are required" });
+    const { name, conditions, outputHeader, targetHeader, selectedValues, isGlobal=false } = req.body;
+    if (!name || !conditions || !outputHeader || !targetHeader || !selectedValues) {
+      return res.status(400).json({ error: "All fields (name, conditions, outputHeader, targetHeader, studentTypes) are required" });
     }
     const rule = await BandRule.findByPk(id);
     if (!rule) {
@@ -853,14 +851,13 @@ const updateBandRule = async (req, res) => {
     await rule.update({
       name,
       conditions,
-      inputHeader,
       outputHeader,
       targetHeader,
       selectedValues,
       isGlobal
     });
     await createLog({ action: 'UPDATE_BAND_RULE', username, performedBy: req.userId, details: `Band Rule '${name}' with ID: ${id} updated` });
-    return res.status(200).json({ name: rule.name, conditions: rule.conditions, inputHeader: rule.inputHeader, outputHeader: rule.outputHeader, targetHeader: rule.targetHeader, selectedValues: rule.selectedValues, isGlobal: rule.isGlobal });
+    return res.status(200).json({ name: rule.name, conditions: rule.conditions, outputHeader: rule.outputHeader, targetHeader: rule.targetHeader, selectedValues: rule.selectedValues, isGlobal: rule.isGlobal });
   } catch (error) {
     await createLog({ action: 'UPDATE_BAND_RULE_FAILED', username, performedBy: req.userId, details: `Failed to update band rule ID '${req.body.id}': ${error.message}` });
     console.error("Error updating band rule:", error);
@@ -874,7 +871,7 @@ const getBandRulesByTemplateId = async (req, res) => {
     const { templateId } = req.query;
     const rules = await BandRule.findAll({
       where: { [Op.or]: [{templateId: templateId}, {isGlobal: true}] },
-      attributes: ['id', 'name', 'conditions', 'inputHeader', 'outputHeader', 'targetHeader', 'selectedValues', 'isGlobal'],
+      attributes: ['id', 'name', 'conditions', 'outputHeader', 'targetHeader', 'selectedValues', 'isGlobal'],
       order: [['createdAt', 'DESC']]
     });
     return res.status(200).json(rules);

@@ -7,6 +7,7 @@ router.post('/ranges', verifyToken, verifyUserActive, populationController.categ
 router.post('/category-breakdown', verifyToken, verifyUserActive, populationController.getCategoryStats);
 router.get('/count-students/:templateId/:sheetId', verifyToken, verifyUserActive, populationController.countStudentsByTemplate);
 router.post('/export/students', populationController.exportStudentData);
+router.post('/count-header-values', populationController.countHeaderValues);
 
 
 module.exports = router;
