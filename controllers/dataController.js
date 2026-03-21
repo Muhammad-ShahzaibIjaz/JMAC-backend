@@ -14,7 +14,7 @@ const { convertScore } = require('../services/conversion');
 const { getCipTitle } = require('../services/cipService');
 const { desiredOrder, requiredHeadersName, awardTypePatterns, ynFlags } = require('../utils/headerOrderList');
 const { buildZipCountyMap } = require('../services/countyService');
-const { calculateNACUBODiscountRate, calculateNetCharges, calculateGap, calculateNeedMet, calculateTotalDiscountRate, calculateNetTuition, calculateNeed, matchCriteria, calculateTotalNeedMet, calculateTotalDirectCost, calculateTotalInstitutionalMeritGift } = require('../utils/calculationHelper');
+const { calculateNACUBODiscountRate, calculateNetCharges, calculateGap, calculateNeedMet, calculateTotalDiscountRate, calculateNetTuition, calculateNeed, matchCriteria, calculateTotalNeedMet, calculateTotalDirectCost, calculateTotalInstitutionalMeritGift, calculateNetTuitionFee, calculateTuitionDiscountRate } = require('../utils/calculationHelper');
 const { evaluateConditions, evaluateBound } = require('../services/evaluation');
 const { createLog } = require("../utils/auditLogger");
 const { getUserName } = require('./userController');
@@ -4167,8 +4167,8 @@ async function deleteRow(req, res) {
   }
 }
 
-
 async function calculateAwards(templateId, sheetId, acceptedStatuses, transaction) {
+  // Step 1: Fetch headers once
   const headers = await Header.findAll({
     where: { templateId, name: requiredHeadersName },
     transaction
@@ -4180,6 +4180,7 @@ async function calculateAwards(templateId, sheetId, acceptedStatuses, transactio
     Object.keys(awardTypePatterns).map(name => [name, headerMap[name]])
   );
 
+  // Step 2: Fetch all relevant SheetData in one query
   const sheetData = await SheetData.findAll({
     where: {
       headerId: { [Op.in]: requiredHeaderIds },
@@ -4195,6 +4196,7 @@ async function calculateAwards(templateId, sheetId, acceptedStatuses, transactio
     return;
   }
 
+  // Step 3: Build in-memory map
   const sheetDataMap = {};
   for (const cell of sheetData) {
     sheetDataMap[`${cell.rowIndex}_${cell.headerId}`] = cell.value;
@@ -4203,6 +4205,7 @@ async function calculateAwards(templateId, sheetId, acceptedStatuses, transactio
   const rowIndexes = [...new Set(sheetData.map(d => d.rowIndex))];
   const acceptedStatusSet = new Set(acceptedStatuses.map(s => s.toLowerCase()));
 
+  // Step 4: Create operation log once
   const operationLog = await OperationLog.create({
     templateId,
     sheetId,
@@ -4213,6 +4216,7 @@ async function calculateAwards(templateId, sheetId, acceptedStatuses, transactio
   const updates = [];
   const snapshots = [];
 
+  // Step 5: Process rows entirely in memory
   for (const rowIndex of rowIndexes) {
     const rowData = {};
     for (const headerId of requiredHeaderIds) {
@@ -4240,39 +4244,47 @@ async function calculateAwards(templateId, sheetId, acceptedStatuses, transactio
       }
     }
 
+    // Collect updates + snapshots
     for (const [awardName, total] of Object.entries(awardSums)) {
       const headerId = awardHeaderIds[awardName];
       if (!headerId) continue;
+
+      const newValue = total.toString();
+      const originalValue = sheetDataMap[`${rowIndex}_${headerId}`] ?? null;
 
       updates.push({
         rowIndex: parseInt(rowIndex),
         headerId,
         sheetId,
-        value: total.toString()
+        value: newValue
       });
 
-      const originalValue = sheetDataMap[`${rowIndex}_${headerId}`] ?? null;
       snapshots.push({
         operationLogId: operationLog.id,
         headerId,
         sheetId,
         rowIndex: parseInt(rowIndex),
         originalValue,
-        newValue: total.toString(),
+        newValue,
         changeType: originalValue ? 'UPDATE' : 'INSERT'
       });
     }
   }
 
-  await SheetData.bulkCreate(updates, {
-    updateOnDuplicate: ['value'],
-    transaction
-  });
+  // Step 6: Bulk write once
+  if (updates.length > 0) {
+    await SheetData.bulkCreate(updates, {
+      updateOnDuplicate: ['value'],
+      transaction
+    });
+  }
 
-  await SheetDataSnapshot.bulkCreate(snapshots, {
-    validate: false,
-    transaction
-  });
+  if (snapshots.length > 0) {
+    await SheetDataSnapshot.bulkCreate(snapshots, {
+      validate: false,
+      transaction
+    });
+  }
 
   await transaction.commit();
 }
@@ -4284,7 +4296,7 @@ async function processNACUBODiscountRates(templateId, sheetId, maxRowIndex) {
     const headers = await Header.findAll({
       where: {
         templateId,
-        name: ['2_Semester_Tuition', '2_Semester_Fees', 'Total_Institutional_Unfunded_Gift', 'NACUBO_Discount_Rate']
+        name: ['2_Semester_Tuition', '2_Semester_Fees', 'Total_Institutional_Gift', 'NACUBO_Discount_Rate']
       },
       transaction
     });
@@ -4300,7 +4312,7 @@ async function processNACUBODiscountRates(templateId, sheetId, maxRowIndex) {
     // Step 2: Fetch relevant SheetData
     const sheetData = await SheetData.findAll({
       where: {
-        headerId: [headerMap['2_Semester_Tuition'], headerMap['2_Semester_Fees'], headerMap['Total_Institutional_Unfunded_Gift']],
+        headerId: [headerMap['2_Semester_Tuition'], headerMap['2_Semester_Fees'], headerMap['Total_Institutional_Gift']],
         sheetId: sheetId
       },
       transaction
@@ -4327,7 +4339,7 @@ async function processNACUBODiscountRates(templateId, sheetId, maxRowIndex) {
       const values = grouped[rowIndex] || {};
       const tuition = values[headerMap['2_Semester_Tuition']] || 0;
       const fees = values[headerMap['2_Semester_Fees']] || 0;
-      const gift = values[headerMap['Total_Institutional_Unfunded_Gift']] || 0;
+      const gift = values[headerMap['Total_Institutional_Gift']] || 0;
       const discountRate = calculateNACUBODiscountRate(tuition, fees, gift);
       const existing = await SheetData.findOne({
         where: {
@@ -4655,7 +4667,7 @@ async function processNetTuition(templateId, sheetId, maxRowIndex) {
     const headers = await Header.findAll({
       where: {
         templateId,
-        name: ['2_Semester_Tuition', 'Total_Institutional_Gift', 'Net_Tuition_Revenue', '2_Semester_Fees']
+        name: ['2_Semester_Tuition', 'Total_Institutional_Gift', 'Net_Tuition_Revenue']
       },
       transaction
     });
@@ -4671,7 +4683,7 @@ async function processNetTuition(templateId, sheetId, maxRowIndex) {
     // Step 2: Fetch relevant SheetData
     const sheetData = await SheetData.findAll({
       where: {
-        headerId: [headerMap['2_Semester_Tuition'], headerMap['Total_Institutional_Gift'], headerMap['2_Semester_Fees']],
+        headerId: [headerMap['2_Semester_Tuition'], headerMap['Total_Institutional_Gift']],
         sheetId: sheetId
       },
       transaction
@@ -4699,9 +4711,8 @@ async function processNetTuition(templateId, sheetId, maxRowIndex) {
       const values = grouped[rowIndex] || {};
       const tuition = values[headerMap['2_Semester_Tuition']] || 0;
       const gift = values[headerMap['Total_Institutional_Gift']] || 0;
-      const fees = values[headerMap['2_Semester_Fees']] || 0;
 
-      const netTuition = calculateNetTuition(tuition, gift, fees);
+      const netTuition = calculateNetTuition(tuition, gift);
 
       const existing = await SheetData.findOne({
         where: {
@@ -4767,15 +4778,15 @@ async function processNetTuition(templateId, sheetId, maxRowIndex) {
   }
 }
 
-async function processTotalDiscountRate(templateId, sheetId, maxRowIndex) {
-  console.log('Processing Total_Discount_Rate...');
+async function processNetTuitionFee(templateId, sheetId, maxRowIndex) {
+  console.log('Processing Net_Tuition/Fee_Revenue...');
   const transaction = await sequelize.transaction();
   try {
     // Step 1: Fetch headers
     const headers = await Header.findAll({
       where: {
         templateId,
-        name: ['Net_Charges_To_Student', 'Total_Direct_Costs', 'Total_Discount_Rate']
+        name: ['2_Semester_Tuition', 'Total_Institutional_Gift', 'Net_Tuition/Fee_Revenue', '2_Semester_Fees']
       },
       transaction
     });
@@ -4783,15 +4794,15 @@ async function processTotalDiscountRate(templateId, sheetId, maxRowIndex) {
     const headerMap = {};
     headers.forEach(h => headerMap[h.name] = h.id);
 
-    if (!headerMap['Total_Discount_Rate']) {
+    if (!headerMap['Net_Tuition/Fee_Revenue']) {
       await transaction.rollback();
-      return { message: 'Total_Discount_Rate header not found.' };
+      return { message: 'Net_Tuition/Fee_Revenue header not found.' };
     }
 
     // Step 2: Fetch relevant SheetData
     const sheetData = await SheetData.findAll({
       where: {
-        headerId: [headerMap['Net_Charges_To_Student'], headerMap['Total_Direct_Costs']],
+        headerId: [headerMap['2_Semester_Tuition'], headerMap['Total_Institutional_Gift'], headerMap['2_Semester_Fees']],
         sheetId: sheetId
       },
       transaction
@@ -4817,10 +4828,130 @@ async function processTotalDiscountRate(templateId, sheetId, maxRowIndex) {
 
     for (let rowIndex = 0; rowIndex <= maxRowIndex; rowIndex++) {
       const values = grouped[rowIndex] || {};
-      const netCharges = values[headerMap['Net_Charges_To_Student']] || 0;
-      const gift = values[headerMap['Total_Direct_Costs']] || 0;
+      const tuition = values[headerMap['2_Semester_Tuition']] || 0;
+      const gift = values[headerMap['Total_Institutional_Gift']] || 0;
+      const fees = values[headerMap['2_Semester_Fees']] || 0;
 
-      const discountRate = calculateTotalDiscountRate(netCharges, gift);
+      const netTuition = calculateNetTuitionFee(tuition, gift, fees);
+
+      const existing = await SheetData.findOne({
+        where: {
+          headerId: headerMap['Net_Tuition/Fee_Revenue'],
+          sheetId: sheetId,
+          rowIndex: parseInt(rowIndex)
+        },
+        transaction
+      });
+
+      if (existing) {
+        snapshotPayload.push({
+          operationLogId: operationLog.id,
+          headerId: headerMap['Net_Tuition/Fee_Revenue'],
+          sheetId: sheetId,
+          rowIndex: parseInt(rowIndex),
+          originalValue: existing.value,
+          newValue: netTuition.toString(),
+          changeType: 'UPDATE'
+        });
+
+        existing.value = netTuition.toString();
+        await existing.save({ transaction });
+      } else {
+        snapshotPayload.push({
+          operationLogId: operationLog.id,
+          headerId: headerMap['Net_Tuition/Fee_Revenue'],
+          sheetId: sheetId,
+          rowIndex: parseInt(rowIndex),
+          originalValue: null,
+          newValue: netTuition.toString(),
+          changeType: 'INSERT'
+        });
+
+        insertPayload.push({
+          headerId: headerMap['Net_Tuition/Fee_Revenue'],
+          sheetId: sheetId,
+          rowIndex: parseInt(rowIndex),
+          value: netTuition.toString()
+        });
+      }
+    }
+
+    // Step 6: Bulk insert new SheetData
+    if (insertPayload.length > 0) {
+      await SheetData.bulkCreate(insertPayload, { transaction });
+    }
+
+    // Step 7: Bulk insert SheetDataSnapshot
+    if (snapshotPayload.length > 0) {
+      await SheetDataSnapshot.bulkCreate(snapshotPayload, { transaction });
+    }
+
+    await transaction.commit();
+    return {
+      message: 'Processed Net_Tuition/Fee_Revenue with logging and snapshots.',
+      rowsAffected: insertPayload.length + snapshotPayload.length
+    };
+  } catch (error) {
+    await transaction.rollback();
+    console.error('Error processing Net_Tuition/Fee_Revenue:', error);
+    throw error;
+  }
+}
+
+async function processTotalDiscountRate(templateId, sheetId, maxRowIndex) {
+  console.log('Processing Total_Discount_Rate...');
+  const transaction = await sequelize.transaction();
+  try {
+    // Step 1: Fetch headers
+    const headers = await Header.findAll({
+      where: {
+        templateId,
+        name: ['Total_Institutional_Gift', 'Total_Direct_Costs', 'Total_Discount_Rate']
+      },
+      transaction
+    });
+
+    const headerMap = {};
+    headers.forEach(h => headerMap[h.name] = h.id);
+
+    if (!headerMap['Total_Discount_Rate']) {
+      await transaction.rollback();
+      return { message: 'Total_Discount_Rate header not found.' };
+    }
+
+    // Step 2: Fetch relevant SheetData
+    const sheetData = await SheetData.findAll({
+      where: {
+        headerId: [headerMap['Total_Institutional_Gift'], headerMap['Total_Direct_Costs']],
+        sheetId: sheetId
+      },
+      transaction
+    });
+
+    // Step 3: Group by rowIndex
+    const grouped = {};
+    sheetData.forEach(data => {
+      if (!grouped[data.rowIndex]) grouped[data.rowIndex] = {};
+      grouped[data.rowIndex][data.headerId] = parseFloat(data.value) || 0;
+    });
+
+    // Step 4: Create OperationLog
+    const operationLog = await OperationLog.create({
+      templateId,
+      sheetId,
+      operationType: 'CALCULATION'
+    }, { transaction });
+
+    // Step 5: Prepare payloads
+    const insertPayload = [];
+    const snapshotPayload = [];
+
+    for (let rowIndex = 0; rowIndex <= maxRowIndex; rowIndex++) {
+      const values = grouped[rowIndex] || {};
+      const gift = values[headerMap['Total_Institutional_Gift']] || 0;
+      const directCosts = values[headerMap['Total_Direct_Costs']] || 0;
+
+      const discountRate = calculateTotalDiscountRate(gift, directCosts);
       const existing = await SheetData.findOne({
         where: {
           headerId: headerMap['Total_Discount_Rate'],
@@ -5413,7 +5544,7 @@ async function processTotalNeedMet_W(templateId, sheetId, maxRowIndex) {
     const headers = await Header.findAll({
       where: {
         templateId,
-        name: ['Student_Financial_Need', 'Total_Merit_Based_Aid', '%_Of_Need_Met_W/Gift_Aid']
+        name: ['Student_Financial_Need', 'Total_Gift_Aid', '%_Of_Need_Met_W/Gift_Aid']
       },
       transaction
     });
@@ -5429,7 +5560,7 @@ async function processTotalNeedMet_W(templateId, sheetId, maxRowIndex) {
     // Step 2: Fetch relevant SheetData
     const sheetData = await SheetData.findAll({
       where: {
-        headerId: [headerMap['Student_Financial_Need'], headerMap['Total_Merit_Based_Aid']],
+        headerId: [headerMap['Student_Financial_Need'], headerMap['Total_Gift_Aid']],
         sheetId: sheetId
       },
       transaction
@@ -5456,9 +5587,9 @@ async function processTotalNeedMet_W(templateId, sheetId, maxRowIndex) {
     for (let rowIndex = 0; rowIndex <= maxRowIndex; rowIndex++) {
       const values = grouped[rowIndex] || {};
       const need = values[headerMap['Student_Financial_Need']] || 0;
-      const totalMeritAid = values[headerMap['Total_Merit_Based_Aid']] || 0;
+      const totalGiftAid = values[headerMap['Total_Gift_Aid']] || 0;
 
-      const discountRate = calculateTotalInstitutionalMeritGift(need, totalMeritAid);
+      const discountRate = calculateTotalInstitutionalMeritGift(need, totalGiftAid);
 
       const existing = await SheetData.findOne({
         where: {
@@ -5520,6 +5651,121 @@ async function processTotalNeedMet_W(templateId, sheetId, maxRowIndex) {
   } catch (error) {
     await transaction.rollback();
     console.error('Error processing %_Of_Need_Met_W/Gift_Aid:', error);
+    throw error;
+  }
+}
+
+async function processTuitionDiscountRates(templateId, sheetId, maxRowIndex) {
+  const transaction = await sequelize.transaction();
+  try {
+    // Step 1: Fetch headers
+    const headers = await Header.findAll({
+      where: {
+        templateId,
+        name: ['2_Semester_Tuition', 'Total_Institutional_Gift', 'Tuition_Discount_Rate']
+      },
+      transaction
+    });
+
+
+    const headerMap = {};
+    headers.forEach(h => headerMap[h.name] = h.id);
+
+    if (!headerMap['Tuition_Discount_Rate']) {
+      await transaction.rollback();
+      return { message: 'Tuition_Discount_Rate header not found.' };
+    }
+    // Step 2: Fetch relevant SheetData
+    const sheetData = await SheetData.findAll({
+      where: {
+        headerId: [headerMap['2_Semester_Tuition'], headerMap['Total_Institutional_Gift']],
+        sheetId: sheetId
+      },
+      transaction
+    });
+
+    // Step 3: Group by rowIndex
+    const grouped = {};
+    sheetData.forEach(data => {
+      if (!grouped[data.rowIndex]) grouped[data.rowIndex] = {};
+      grouped[data.rowIndex][data.headerId] = parseFloat(data.value) || 0;
+    });
+
+    // Step 4: Create OperationLog
+    const operationLog = await OperationLog.create({
+      templateId,
+      sheetId,
+      operationType: 'CALCULATION'
+    }, { transaction });
+
+    // Step 5: Prepare payloads
+    const insertPayload = [];
+    const snapshotPayload = [];
+    for (let rowIndex = 0; rowIndex <= maxRowIndex; rowIndex++) {
+      const values = grouped[rowIndex] || {};
+      const tuition = values[headerMap['2_Semester_Tuition']] || 0;
+      const gift = values[headerMap['Total_Institutional_Gift']] || 0;
+      const discountRate = calculateTuitionDiscountRate(tuition, gift);
+      const existing = await SheetData.findOne({
+        where: {
+          headerId: headerMap['Tuition_Discount_Rate'],
+          rowIndex: parseInt(rowIndex),
+          sheetId: sheetId
+        },
+        transaction
+      });
+
+      if (existing) {
+        snapshotPayload.push({
+          operationLogId: operationLog.id,
+          headerId: headerMap['Tuition_Discount_Rate'],
+          sheetId: sheetId,
+          rowIndex: parseInt(rowIndex),
+          originalValue: existing.value,
+          newValue: discountRate.toString(),
+          changeType: 'UPDATE'
+        });
+
+        existing.value = discountRate.toString();
+        await existing.save({ transaction });
+      } else {
+        snapshotPayload.push({
+          operationLogId: operationLog.id,
+          headerId: headerMap['Tuition_Discount_Rate'],
+          sheetId: sheetId,
+          rowIndex: parseInt(rowIndex),
+          originalValue: null,
+          newValue: discountRate.toString(),
+          changeType: 'INSERT'
+        });
+
+        insertPayload.push({
+          headerId: headerMap['Tuition_Discount_Rate'],
+          sheetId: sheetId,
+          rowIndex: parseInt(rowIndex),
+          value: discountRate.toString()
+        });
+      }
+    }
+
+    // Step 6: Bulk insert new SheetData
+    if (insertPayload.length > 0) {
+      await SheetData.bulkCreate(insertPayload, { transaction });
+    }
+
+    // Step 7: Bulk insert SheetDataSnapshot
+    if (snapshotPayload.length > 0) {
+      await SheetDataSnapshot.bulkCreate(snapshotPayload, { transaction });
+    }
+
+    await transaction.commit();
+    return {
+      message: 'Processed Tuition Discount Rates with logging and snapshots.',
+      rowsAffected: insertPayload.length + snapshotPayload.length
+    };
+  } catch (error) {
+    await transaction.rollback();
+    console.error('Error processing Tuition Discount Rates:', error);
     throw error;
   }
 }
@@ -5664,12 +5910,14 @@ async function calculateFurtherMetrics(templateId, sheetId, maxRowIndex) {
   await processNetCharges(templateId, sheetId, maxRowIndex);
   await processTotalDirectCost(templateId, sheetId, maxRowIndex);
   await processNetTuition(templateId, sheetId, maxRowIndex);
+  await processNetTuitionFee(templateId, sheetId, maxRowIndex);
   await processTotalDiscountRate(templateId, sheetId, maxRowIndex);
   await processNeed(templateId, sheetId, maxRowIndex);
   await processNeedMet(templateId, sheetId, maxRowIndex);
   await processGap(templateId, sheetId, maxRowIndex);
   await processTotalNeedMet(templateId, sheetId, maxRowIndex);
   await processTotalNeedMet_W(templateId, sheetId, maxRowIndex);
+  await processTuitionDiscountRates(templateId, sheetId, maxRowIndex);
   await processCampusDiscount(templateId, sheetId, maxRowIndex);
 }
 
@@ -5682,7 +5930,9 @@ async function calculateAwardInfo(req, res) {
       await transaction.rollback();
       return res.status(400).json({ message: 'Invalid input. templateId, sheetId, and acceptedStatuses are required.' });
     }
+    console.time('calculateAwardInfo');
     await calculateAwards(templateId, sheetId, acceptedStatuses, transaction);
+    console.timeEnd('calculateAwardInfo');
     const maxRowIndex = await SheetData.findOne({
       where: { sheetId },
       include: [{

@@ -1,17 +1,27 @@
-function calculateNACUBODiscountRate(tuition, fees, totalUnfundedGift) {
+function calculateNACUBODiscountRate(tuition, fees, totalInstitutionalGift) {
   if (tuition + fees === 0) return 0;
-  const rate = ((tuition + fees) - totalUnfundedGift) / (tuition + fees);
+  const rate = totalInstitutionalGift / (tuition + fees);
   return (rate * 100).toFixed(2);
 }
 
-function calculateTotalDiscountRate(netCharges, totalDirectCost) {
-  if (totalDirectCost === 0 || netCharges === 0) return 0;
-  const rate = (netCharges / totalDirectCost);
+function calculateTuitionDiscountRate(tuition, totalInstitutionalGift) {
+  if (tuition === 0 || totalInstitutionalGift === 0) return 0;
+  const rate = totalInstitutionalGift / tuition;
   return (rate * 100).toFixed(2);
 }
 
-function calculateNetTuition(tuition, totalInstitutionalGift, fees) {
+function calculateTotalDiscountRate(totalInstitutionalGift, totalDirectCost) {
+  if (totalDirectCost === 0 || totalInstitutionalGift === 0) return 0;
+  const rate = (totalInstitutionalGift / totalDirectCost);
+  return (rate * 100).toFixed(2);
+}
+
+function calculateNetTuitionFee(tuition, totalInstitutionalGift, fees) {
   return (tuition + fees) - totalInstitutionalGift;
+}
+
+function calculateNetTuition(tuition, totalInstitutionalGift) {
+  return tuition - totalInstitutionalGift;
 }
 
 function calculateNetCharges(tuition, fees, housingCost, food, gift) {
@@ -23,7 +33,8 @@ function calculateTotalDirectCost(tuition, fees, housingCost, food) {
 }
 
 function calculateNeed(COA, SAI) {
-  return COA - SAI;
+  const need = COA - SAI;
+  return need > 0 ? need : 0;
 }
 
 function calculateNeedMet(need, totalNeedBasedAid) {
@@ -40,11 +51,9 @@ function calculateTotalNeedMet(need, totalNeedBasedAid) {
   return (rate * 100).toFixed(2);
 }
 
-function calculateTotalInstitutionalMeritGift(need, totalMeritBasedAid) {
-  if (need === 0) return 100;
-  const upper = need - totalMeritBasedAid;
-  if (upper <= 0) return 100;
-  const rate = upper / need;
+function calculateTotalInstitutionalMeritGift(need, totalGiftAid) {
+  if (need === 0 || totalGiftAid === 0) return 0;
+  const rate = totalGiftAid / need;
   return (rate * 100).toFixed(2);
 }
 
@@ -68,6 +77,8 @@ module.exports = {
   calculateNACUBODiscountRate,
   calculateTotalDiscountRate,
   calculateNetTuition,
+  calculateNetTuitionFee,
+  calculateTuitionDiscountRate,
   calculateNetCharges,
   calculateNeed,
   calculateNeedMet,

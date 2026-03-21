@@ -11,7 +11,7 @@ const { createLog } = require("../utils/auditLogger");
 const { getUserName } = require('./userController');
 
 async function createTemplate(req, res) {
-  const { name } = req.body;
+  const { name, campusId } = req.body;
   const username = await getUserName(req.userId);
   try {
 
@@ -19,14 +19,24 @@ async function createTemplate(req, res) {
       return res.status(400).json({ error: 'Template name is required and must be a non-empty string' });
     }
 
+    // Validate campusId
+    if (!campusId || typeof campusId !== 'string') {
+      return res.status(400).json({ error: 'campusId is required and must be a valid UUID string' });
+    }
+
+
     const trimmedName = name.trim();
 
     const existingTemplate = await Template.findOne({
-      where: sequelize.where(
-        sequelize.fn('LOWER', sequelize.col('name')),
-        trimmedName.toLowerCase()
-      ),
+      where: {
+        campusId,
+        [Op.and]: sequelize.where(
+          sequelize.fn('LOWER', sequelize.col('name')),
+          trimmedName.toLowerCase()
+        ),
+      },
     });
+
 
     if (existingTemplate) {
       return res.status(409).json({ error: 'A template with this name already exists' });
@@ -37,6 +47,7 @@ async function createTemplate(req, res) {
         {
           id: uuidv4(),
           name: name.trim(),
+          campusId,
         },
         { transaction: t }
       );
@@ -67,6 +78,7 @@ async function deleteTemplate(req, res) {
     if (!id || typeof id !== "string" || id.trim().length === 0) {
       return res.status(400).json({ error: "Template ID is required and must be a non-empty string" });
     }
+    
     const result = await sequelize.transaction(async (t) => {
       // Find the template
       const template = await Template.findByPk(id, { transaction: t });

@@ -39,6 +39,10 @@ async function generateExcelFile({ headers, maxRowIndex, totalErrorRows, errorRo
       if (header.columnType === 'Date' && value) {
         const parsedDate = new Date(value);
         return isNaN(parsedDate.getTime()) ? '' : parsedDate;
+      } else if(header.columnType === 'integer' || header.columnType === 'decimal') {
+        return isNaN(Number(value)) ? '' : Number(value);
+      } else if (header.columnType === 'Boolean') {
+        return value === true || value === 'true' ? 'Yes' : value === false || value === 'false' ? 'No' : '';
       }
       return value;
     });
