@@ -28,6 +28,7 @@
     "mathjs": "^14.5.0",
     "multer": "^1.4.5-lts.2",
     "nodemon": "^3.1.9",
+    "odbc": "^2.4.9",
     "pg": "^8.16.3",
     "pg-copy-streams": "^7.0.0",
     "pg-hstore": "^2.3.4",

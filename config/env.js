@@ -13,5 +13,6 @@ module.exports = {
   FOLDER_NAME: "uploads",
   GEO_API_KEY: process.env.GEO_API_KEY || "",
   SECRET_KEY: process.env.SECRET_KEY,
-  ENVIRONMENT: process.env.CURRENT_ENVIRONMENT || "dev"
+  ENVIRONMENT: process.env.CURRENT_ENVIRONMENT || "dev",
+  DB_PATH: process.env.DB_PATH || 'D:\\Jen_McMahon\\IPEDS_2024-25_Provisional\\IPEDS202425.accdb'
 };

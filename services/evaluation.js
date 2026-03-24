@@ -62,6 +62,8 @@ function evaluateBound(value, bound) {
     case "greaterThanEqual": return value >= numBound;
     case "lessThan": return value < numBound;
     case "lessThanEqual": return value <= numBound;
+    case "isNotEqualTo": return value !== numBound;
+    case "isEqualTo": return value === numBound;
     default: return false; // unknown operator → ignore
   }
 }
