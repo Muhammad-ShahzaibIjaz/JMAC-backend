@@ -1,3 +1,11 @@
+const originalEmit = process.emit;
+process.emit = function (event, warning) {
+    if (event === 'warning' && warning?.code === 'DEP0169') {
+        return false;
+    }
+    return originalEmit.apply(this, arguments);
+};
+
 const path = require("path");
 require("dotenv").config();
 const app = require("./app");

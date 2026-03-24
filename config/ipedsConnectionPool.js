@@ -18,7 +18,7 @@ class IPEDSPool {
         // Create new connection if under max limit
         if (this.currentConnections < this.maxPoolSize) {
             this.currentConnections++;
-            const connectionString = `DRIVER={Microsoft Access Driver (*.mdb, *.accdb)};DBQ=${DB_PATH};`;
+            const connectionString = `DRIVER=MDBTools;DBQ=${DB_PATH};`;
             const connection = await odbc.connect(connectionString);
             return connection;
         }
