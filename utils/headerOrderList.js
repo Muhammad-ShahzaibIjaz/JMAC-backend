@@ -1067,6 +1067,7 @@ const awardTypePatterns = {
   "Total_Need_Based_Aid": /^.N..$/,
   "Total_Gift_Aid": /^...G$/,
   "Total_Work_Aid": /^...W$/,
+  "Total_Elite_Gift": /^IP.G$/
 };
 
 const ynFlags = [
