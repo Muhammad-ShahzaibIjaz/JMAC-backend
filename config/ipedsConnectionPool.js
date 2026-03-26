@@ -1,6 +1,9 @@
 // ipedsConnectionPool.js
 const odbc = require('odbc');
-const { DB_PATH } = require("./env");
+const { DB_PATH, DB_CONNECTION_VALUE } = require("./env");
+
+console.log('DB_PATH:', DB_PATH);
+console.log('DB_CONNECTION_VALUE:', DB_CONNECTION_VALUE);
 
 class IPEDSPool {
     constructor() {
@@ -18,7 +21,12 @@ class IPEDSPool {
         // Create new connection if under max limit
         if (this.currentConnections < this.maxPoolSize) {
             this.currentConnections++;
-            const connectionString = `DRIVER=MDBTools;DBQ=${DB_PATH};`;
+            const connectionString = `${DB_CONNECTION_VALUE};DBQ=${DB_PATH}`;
+
+            // Debug: log the full connection string
+            console.log('Connection string:', connectionString);
+
+            
             const connection = await odbc.connect(connectionString);
             return connection;
         }

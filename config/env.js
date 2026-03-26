@@ -14,5 +14,6 @@ module.exports = {
   GEO_API_KEY: process.env.GEO_API_KEY || "",
   SECRET_KEY: process.env.SECRET_KEY,
   ENVIRONMENT: process.env.CURRENT_ENVIRONMENT || "dev",
-  DB_PATH: process.env.DB_PATH || 'D:\\Jen_McMahon\\IPEDS_2024-25_Provisional\\IPEDS202425.accdb'
+  DB_PATH: process.env.DB_PATH,
+  DB_CONNECTION_VALUE: process.env.DB_CONNECTION_VALUE || "DRIVER={Microsoft Access Driver (*.mdb, *.accdb)}",
 };

@@ -37,17 +37,17 @@ function calculateNeed(COA, SAI) {
   return need > 0 ? need : 0;
 }
 
-function calculateNeedMet(need, totalNeedBasedAid) {
-  return need - totalNeedBasedAid;
+function calculateNeedMet(need, giftAid, workAid, fnflAmount) {
+  return need - (giftAid + workAid + fnflAmount);
 }
 
-function calculateGap(needMet) {
-  return needMet > 0 ? needMet : 0;
+function calculateGap(directCosts, gift, fnflAmount) {
+  return directCosts - gift - fnflAmount;
 }
 
-function calculateTotalNeedMet(need, totalNeedBasedAid) {
-  if (need === 0) return 0;
-  const rate = (need - totalNeedBasedAid) / need;
+function calculateTotalNeedMet(need, giftAid, workAid, fnflAmount) {
+  if (need === 0 || (giftAid === 0 && workAid === 0 && fnflAmount === 0)) return 0;
+  const rate = (giftAid + workAid + fnflAmount) / need;
   return (rate * 100).toFixed(2);
 }
 

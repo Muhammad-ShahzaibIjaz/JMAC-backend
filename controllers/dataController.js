@@ -4215,6 +4215,7 @@ async function calculateAwards(templateId, sheetId, acceptedStatuses, transactio
 
   const updates = [];
   const snapshots = [];
+  const fnflSums = [];
 
   // Step 5: Process rows entirely in memory
   for (const rowIndex of rowIndexes) {
@@ -4226,7 +4227,7 @@ async function calculateAwards(templateId, sheetId, acceptedStatuses, transactio
     const awardSums = Object.fromEntries(
       Object.keys(awardTypePatterns).map(name => [name, 0])
     );
-
+    let fnflTotal = 0;
     for (let i = 1; i <= 20; i++) {
       const cd = rowData[headerMap[`Awd_CR${i}`]];
       const amtRaw = rowData[headerMap[`Awd_Amt${i}`]];
@@ -4242,6 +4243,12 @@ async function calculateAwards(templateId, sheetId, acceptedStatuses, transactio
           awardSums[awardName] += amt;
         }
       }
+
+      if (/^FNFL$/.test(cd)) {
+        fnflTotal += amt;
+      }
+
+      fnflSums.push({rowIndex: parseInt(rowIndex), amount: fnflTotal });
     }
 
     // Collect updates + snapshots
@@ -4287,6 +4294,7 @@ async function calculateAwards(templateId, sheetId, acceptedStatuses, transactio
   }
 
   await transaction.commit();
+  return fnflSums;
 }
 
 async function processNACUBODiscountRates(templateId, sheetId, maxRowIndex) {
@@ -5181,7 +5189,7 @@ async function processNeed(templateId, sheetId, maxRowIndex) {
   }
 }
 
-async function processNeedMet(templateId, sheetId, maxRowIndex) {
+async function processNeedMet(templateId, sheetId, maxRowIndex, fnflSums) {
   console.log('Processing Need_Met...');
   const transaction = await sequelize.transaction();
   try {
@@ -5189,7 +5197,7 @@ async function processNeedMet(templateId, sheetId, maxRowIndex) {
     const headers = await Header.findAll({
       where: {
         templateId,
-        name: ['Student_Financial_Need', 'Total_Need_Based_Aid', 'Total_Need_Met']
+        name: ['Student_Financial_Need', 'Total_Gift_Aid', 'Total_Work_Aid', 'Total_Need_Met']
       },
       transaction
     });
@@ -5205,7 +5213,7 @@ async function processNeedMet(templateId, sheetId, maxRowIndex) {
     // Step 2: Fetch relevant SheetData
     const sheetData = await SheetData.findAll({
       where: {
-        headerId: [headerMap['Student_Financial_Need'], headerMap['Total_Need_Based_Aid']],
+        headerId: [headerMap['Student_Financial_Need'], headerMap['Total_Gift_Aid'], headerMap['Total_Work_Aid']],
         sheetId: sheetId
       },
       transaction
@@ -5231,10 +5239,12 @@ async function processNeedMet(templateId, sheetId, maxRowIndex) {
 
     for (let rowIndex = 0; rowIndex <= maxRowIndex; rowIndex++) {
       const values = grouped[rowIndex] || {};
+      const fnflValue = fnflSums[rowIndex] || { rowIndex: parseInt(rowIndex), amount: 0 };
       const need = values[headerMap['Student_Financial_Need']] || 0;
-      const gift = values[headerMap['Total_Need_Based_Aid']] || 0;
+      const gift = values[headerMap['Total_Gift_Aid']] || 0;
+      const work = values[headerMap['Total_Work_Aid']] || 0;
 
-      const needMet = calculateNeedMet(need, gift);
+      const needMet = calculateNeedMet(need, gift, work, fnflValue.amount);
 
       const existing = await SheetData.findOne({
         where: {
@@ -5300,7 +5310,7 @@ async function processNeedMet(templateId, sheetId, maxRowIndex) {
   }
 }
 
-async function processGap(templateId, sheetId, maxRowIndex) {
+async function processGap(templateId, sheetId, maxRowIndex, fnflSums) {
   console.log('Processing Gap...');
   const transaction = await sequelize.transaction();
   try {
@@ -5308,7 +5318,7 @@ async function processGap(templateId, sheetId, maxRowIndex) {
     const headers = await Header.findAll({
       where: {
         templateId,
-        name: ['Total_Need_Met', 'GAP/Unmet_Need']
+        name: ['Total_Direct_Costs', 'Total_Institutional_Gift', 'GAP/Unmet_Need']
       },
       transaction
     });
@@ -5324,7 +5334,7 @@ async function processGap(templateId, sheetId, maxRowIndex) {
     // Step 2: Fetch relevant SheetData
     const sheetData = await SheetData.findAll({
       where: {
-        headerId: [headerMap['Total_Need_Met']],
+        headerId: [headerMap['Total_Direct_Costs'], headerMap['Total_Institutional_Gift']],
         sheetId: sheetId
       },
       transaction
@@ -5350,8 +5360,11 @@ async function processGap(templateId, sheetId, maxRowIndex) {
 
     for (let rowIndex = 0; rowIndex <= maxRowIndex; rowIndex++) {
       const values = grouped[rowIndex] || {};
-      const needMet = values[headerMap['Total_Need_Met']] || 0;
-      const gap = calculateGap(needMet);
+      const gift = values[headerMap['Total_Institutional_Gift']] || 0;
+      const directCosts = values[headerMap['Total_Direct_Costs']] || 0;
+      const fnflValue = fnflSums[rowIndex] || { rowIndex: parseInt(rowIndex), amount: 0 };
+      
+      const gap = calculateGap(directCosts, gift, fnflValue.amount);
 
       const existing = await SheetData.findOne({
         where: {
@@ -5417,7 +5430,7 @@ async function processGap(templateId, sheetId, maxRowIndex) {
   }
 }
 
-async function processTotalNeedMet(templateId, sheetId, maxRowIndex) {
+async function processTotalNeedMet(templateId, sheetId, maxRowIndex, fnflSums) {
   console.log('Processing Total_Need_Met...');
   const transaction = await sequelize.transaction();
   try {
@@ -5425,7 +5438,7 @@ async function processTotalNeedMet(templateId, sheetId, maxRowIndex) {
     const headers = await Header.findAll({
       where: {
         templateId,
-        name: ['Student_Financial_Need', 'Total_Need_Based_Aid', '%_Of_Need_Met']
+        name: ['Student_Financial_Need', 'Total_Gift_Aid', 'Total_Work_Aid', '%_Of_Need_Met']
       },
       transaction
     });
@@ -5441,7 +5454,7 @@ async function processTotalNeedMet(templateId, sheetId, maxRowIndex) {
     // Step 2: Fetch relevant SheetData
     const sheetData = await SheetData.findAll({
       where: {
-        headerId: [headerMap['Student_Financial_Need'], headerMap['Total_Need_Based_Aid']],
+        headerId: [headerMap['Student_Financial_Need'], headerMap['Total_Gift_Aid'], headerMap['Total_Work_Aid']],
         sheetId: sheetId
       },
       transaction
@@ -5468,9 +5481,11 @@ async function processTotalNeedMet(templateId, sheetId, maxRowIndex) {
     for (let rowIndex = 0; rowIndex <= maxRowIndex; rowIndex++) {
       const values = grouped[rowIndex] || {};
       const need = values[headerMap['Student_Financial_Need']] || 0;
-      const totalNeedBasedAid = values[headerMap['Total_Need_Based_Aid']] || 0;
+      const gift = values[headerMap['Total_Gift_Aid']] || 0;
+      const work = values[headerMap['Total_Work_Aid']] || 0;
+      const fnflValue = fnflSums[rowIndex] || { rowIndex: parseInt(rowIndex), amount: 0 };
 
-      const discountRate = calculateTotalNeedMet(need, totalNeedBasedAid);
+      const discountRate = calculateTotalNeedMet(need, gift, work, fnflValue.amount);
 
       const existing = await SheetData.findOne({
         where: {
@@ -5905,7 +5920,7 @@ async function processCampusDiscount(templateId, sheetId, maxRowIndex) {
 }
 
 
-async function calculateFurtherMetrics(templateId, sheetId, maxRowIndex) {
+async function calculateFurtherMetrics(templateId, sheetId, maxRowIndex, fnflSums) {
   await processNACUBODiscountRates(templateId, sheetId, maxRowIndex);
   await processNetCharges(templateId, sheetId, maxRowIndex);
   await processTotalDirectCost(templateId, sheetId, maxRowIndex);
@@ -5913,9 +5928,9 @@ async function calculateFurtherMetrics(templateId, sheetId, maxRowIndex) {
   await processNetTuitionFee(templateId, sheetId, maxRowIndex);
   await processTotalDiscountRate(templateId, sheetId, maxRowIndex);
   await processNeed(templateId, sheetId, maxRowIndex);
-  await processNeedMet(templateId, sheetId, maxRowIndex);
-  await processGap(templateId, sheetId, maxRowIndex);
-  await processTotalNeedMet(templateId, sheetId, maxRowIndex);
+  await processNeedMet(templateId, sheetId, maxRowIndex, fnflSums);
+  await processGap(templateId, sheetId, maxRowIndex, fnflSums);
+  await processTotalNeedMet(templateId, sheetId, maxRowIndex, fnflSums);
   await processTotalNeedMet_W(templateId, sheetId, maxRowIndex);
   await processTuitionDiscountRates(templateId, sheetId, maxRowIndex);
   await processCampusDiscount(templateId, sheetId, maxRowIndex);
@@ -5930,9 +5945,6 @@ async function calculateAwardInfo(req, res) {
       await transaction.rollback();
       return res.status(400).json({ message: 'Invalid input. templateId, sheetId, and acceptedStatuses are required.' });
     }
-    console.time('calculateAwardInfo');
-    await calculateAwards(templateId, sheetId, acceptedStatuses, transaction);
-    console.timeEnd('calculateAwardInfo');
     const maxRowIndex = await SheetData.findOne({
       where: { sheetId },
       include: [{
@@ -5944,8 +5956,11 @@ async function calculateAwardInfo(req, res) {
       attributes: ['rowIndex'],
     });
     const maxRow = maxRowIndex?.rowIndex ?? 0;
+    console.time('calculateAwardInfo');
+    const fnflSums = await calculateAwards(templateId, sheetId, acceptedStatuses, transaction);
+    console.timeEnd('calculateAwardInfo');
 
-    await calculateFurtherMetrics(templateId, sheetId, maxRow);
+    await calculateFurtherMetrics(templateId, sheetId, maxRow, fnflSums);
     await createLog({ action: 'CALCULATE_AWARD_INFO', username, performedBy: req.userRole, details: `Calculated award info for templateId: ${templateId}, sheetId: ${sheetId}` });
     res.status(200).json({ message: 'Award information calculated successfully.' });
   } catch(error){
