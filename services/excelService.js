@@ -26,8 +26,9 @@ function processDataRows(jsonData, headerOrientation='horizontal', headerPositio
 
   if (headerOrientation === 'horizontal') {
     // Handle horizontal headers (normal row)
+    console.time("Finding header row");
     const baseHeaderRowIndex = headerPosition !== null ? Number(headerPosition) : findFirstNonEmptyRow(jsonData);
-
+    console.timeEnd("Finding header row");
     const headerRowIndex = baseHeaderRowIndex + (isRowSkipped ? 1 : 0);
     
     if (headerRowIndex === -1 || headerRowIndex >= jsonData.length || !Array.isArray(jsonData[headerRowIndex])) {
@@ -37,6 +38,7 @@ function processDataRows(jsonData, headerOrientation='horizontal', headerPositio
     headers = jsonData[headerRowIndex].filter(cell => cell !== null && cell !== undefined);
     
     // Process data rows
+    console.time("Processing data rows");
     let consecutiveEmptyRows = 0;
     for (let i = headerRowIndex + 1; i < jsonData.length; i++) {
       const row = jsonData[i];
@@ -48,6 +50,7 @@ function processDataRows(jsonData, headerOrientation='horizontal', headerPositio
       consecutiveEmptyRows = 0;
       data.push(row);
     }
+    console.timeEnd("Processing data rows");
   } else {
     // Handle vertical headers (column)
     const baseHeaderColIndex = headerPosition !== null ? Number(headerPosition) : (() => {
@@ -73,12 +76,14 @@ function processDataRows(jsonData, headerOrientation='horizontal', headerPositio
       .filter(h => h != null);
     
     // Process data columns
+    console.time("Processing data columns");
     for (let col = headerColIndex + 1; col < jsonData[0].length; col++) {
       const column = jsonData.map(row => Array.isArray(row) ? row[col] : null);
       if (!isRowEmpty(column)) {
         data.push(column);
       }
     }
+    console.timeEnd("Processing data columns");
   }
 
   return { 
@@ -99,12 +104,14 @@ async function headerProcessor(files, headerOrientation='horizontal', headerPosi
     try {
       // Read file from disk
       let workbook;
+      console.time(`Processing ${file.originalname}`);
       if (file.originalname.endsWith(".csv")) {
         const csvData = fs.readFileSync(file.path, "utf8");
         workbook = XLSX.read(csvData, { type: "string", raw: true });
       } else {
         workbook = XLSX.readFile(file.path);
       }
+      console.timeEnd(`Processing ${file.originalname}`);
 
       if(!workbook || !workbook.SheetNames || !workbook.SheetNames.length) {
         throw new Error(`No valid sheets found in ${file.originalname}`);
@@ -115,8 +122,13 @@ async function headerProcessor(files, headerOrientation='horizontal', headerPosi
         if (!worksheet) {
           return null;
         }
+        console.time(`Extracting data from sheet ${sheetName} in ${file.originalname}`);
         const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: null, raw: false});
+        console.timeEnd(`Extracting data from sheet ${sheetName} in ${file.originalname}`);
+        console.time(`Processing data from sheet ${sheetName} in ${file.originalname}`);
         const { headers, data } = processDataRows(jsonData, headerOrientation, headerPosition, isRowSkipped);
+        console.timeEnd(`Processing data from sheet ${sheetName} in ${file.originalname}`);
+        console.log(`Extracted ${headers.length} headers and ${data.length} data rows from sheet ${sheetName} in ${file.originalname}`);
         return {
           sheetName,
           headers,

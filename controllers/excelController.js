@@ -599,7 +599,7 @@ async function getTemplateAndMappings(templateId, mappingTemplateId, isOriginal,
     for (const th of templateHeaders) {
       const mapped = mapHeaders
         .filter(mh => mh.headerId === th.id)
-        .map(mh => mh.name.toLowerCase());
+        .map(mh => mh.name.trim().toLowerCase());
       headerMap.set(th.name.toLowerCase(), mapped);
     }
   } else {
@@ -612,40 +612,106 @@ async function getTemplateAndMappings(templateId, mappingTemplateId, isOriginal,
 }
 
 
+// function detectCommonHeaderAcrossSheets(allSheets, templateHeaders, headerMap) {
+//   const normalize = str => str.trim().toLowerCase();
+  
+//   // Create a set of ALL possible header names (template names + all mapped names)
+//   const allPossibleHeaders = new Set();
+//   for (const templateHeader of templateHeaders) {
+//     const templateName = normalize(templateHeader.name);
+//     const mappedNames = headerMap.get(templateName) || [];
+    
+//     // Add template name and all mapped names
+//     allPossibleHeaders.add(templateName);
+//     mappedNames.forEach(name => allPossibleHeaders.add(name));
+//   }
+
+//   console.log(`All possible headers to match against: ${[...allPossibleHeaders].join(', ')}`);
+
+//   const headerCounts = new Map();
+//   for (const sheet of allSheets) {
+//     const uniqueHeaders = new Set(sheet.headers.map(normalize));
+//     console.log(`Unique headers in sheet "${sheet.sheetName}": ${[...uniqueHeaders].join(', ')}`);
+//     for (const h of uniqueHeaders) {
+//       headerCounts.set(h, (headerCounts.get(h) || 0) + 1);
+//     }
+//   }
+
+//   const commonHeaders = [...headerCounts.entries()]
+//     .filter(([_, count]) => count === allSheets.length)
+//     .map(([h]) => h);
+//   console.log(`Common headers across all sheets: ${commonHeaders.join(', ')}`);
+//   // Check if any common header matches any of our possible headers (template names or mapped names)
+//   for (const commonHeader of commonHeaders) {
+//     if (allPossibleHeaders.has(commonHeader)) {
+//       return commonHeader;
+//     }
+//   }
+
+//   return null; // No valid common header
+// }
+
 function detectCommonHeaderAcrossSheets(allSheets, templateHeaders, headerMap) {
   const normalize = str => str.trim().toLowerCase();
   
-  // Create a set of ALL possible header names (template names + all mapped names)
-  const allPossibleHeaders = new Set();
+  // Create reverse mapping: all possible header variations → template header name
+  const variantToTemplate = new Map();
   for (const templateHeader of templateHeaders) {
     const templateName = normalize(templateHeader.name);
     const mappedNames = headerMap.get(templateName) || [];
     
-    // Add template name and all mapped names
-    allPossibleHeaders.add(templateName);
-    mappedNames.forEach(name => allPossibleHeaders.add(name));
+    // Add template name itself
+    variantToTemplate.set(templateName, templateName);
+    
+    // Add all mapped names
+    mappedNames.forEach(name => {
+      variantToTemplate.set(normalize(name), templateName);
+    });
   }
 
-  const headerCounts = new Map();
+  // For each sheet, determine which template headers are present
+  const sheetTemplateHeaders = [];
   for (const sheet of allSheets) {
-    const uniqueHeaders = new Set(sheet.headers.map(normalize));
-    for (const h of uniqueHeaders) {
-      headerCounts.set(h, (headerCounts.get(h) || 0) + 1);
+    const normalizedSheetHeaders = sheet.headers.map(normalize);
+    
+    // Find which template headers exist in this sheet
+    const presentTemplateHeaders = new Set();
+    for (const sheetHeader of normalizedSheetHeaders) {
+      const templateHeader = variantToTemplate.get(sheetHeader);
+      if (templateHeader) {
+        presentTemplateHeaders.add(templateHeader);
+      }
     }
+    sheetTemplateHeaders.push(presentTemplateHeaders);
   }
 
-  const commonHeaders = [...headerCounts.entries()]
-    .filter(([_, count]) => count === allSheets.length)
-    .map(([h]) => h);
-
-  // Check if any common header matches any of our possible headers (template names or mapped names)
-  for (const commonHeader of commonHeaders) {
-    if (allPossibleHeaders.has(commonHeader)) {
-      return commonHeader;
+  // Find template headers that are present in ALL sheets
+  if (sheetTemplateHeaders.length === 0) return null;
+  
+  const commonTemplateHeaders = [...sheetTemplateHeaders[0]];
+  for (let i = 1; i < sheetTemplateHeaders.length; i++) {
+    const currentSheetHeaders = sheetTemplateHeaders[i];
+    for (let j = 0; j < commonTemplateHeaders.length; j++) {
+      if (!currentSheetHeaders.has(commonTemplateHeaders[j])) {
+        commonTemplateHeaders.splice(j, 1);
+        j--; // Adjust index after removal
+      }
     }
+    if (commonTemplateHeaders.length === 0) break;
   }
 
-  return null; // No valid common header
+  
+  // Return the first common template header (or any that has criticality level 1)
+  if (commonTemplateHeaders.length > 0) {
+    // Optional: Sort by criticality level to pick the most important one
+    const sortedHeaders = templateHeaders
+      .filter(th => commonTemplateHeaders.includes(normalize(th.name)))
+      .sort((a, b) => parseInt(a.criticalityLevel) - parseInt(b.criticalityLevel));
+    
+    return sortedHeaders.length > 0 ? sortedHeaders[0].name : commonTemplateHeaders[0];
+  }
+  
+  return null;
 }
 
 function processSheetsAndMergeData(allSheets, commonHeader, templateHeaders, headerMap) {
@@ -717,27 +783,34 @@ async function saveFileAndDataOptimized(processedFiles, templateId, mappingTempl
       data: sheet.data
     }))
   );
+  console.time("Get Template and Mappings");
   const { templateHeaders, headerMap } = await getTemplateAndMappings(templateId, mappingTemplateId, isOriginal, transaction);
-
+  console.timeEnd("Get Template and Mappings");
+  console.time("Detect Common Header");
   const commonHeader = detectCommonHeaderAcrossSheets(allSheets, templateHeaders, headerMap);
+  console.timeEnd("Detect Common Header");
   if (!commonHeader) throw new Error("❌ No valid common header found across all sheets");
+  console.log(`✅ Common header detected: "${commonHeader}"`);
+  console.time("Process Sheets and Merge Data");
   const mergedData = processSheetsAndMergeData(allSheets, commonHeader, templateHeaders, headerMap);
+  console.timeEnd("Process Sheets and Merge Data");
+  // console.log(`Total unique IDs after merging: ${mergedData.size}`);
   // Save to DB
-  const bulkRows = [];
-  for (const [rowIndex, [id, rowData]] of [...mergedData.entries()].entries()) {
-    for (const [headerId, value] of Object.entries(rowData)) {
-      bulkRows.push({
-        id: uuidv4(),
-        rowIndex,
-        value,
-        headerId,
-        sheetId
-      })
-    }
-  }
-  if (bulkRows.length !== 0) {
-    await SheetData.bulkCreate(bulkRows, { transaction, updateOnDuplicate: ["value", "updatedAt"] });
-  }
+  // const bulkRows = [];
+  // for (const [rowIndex, [id, rowData]] of [...mergedData.entries()].entries()) {
+  //   for (const [headerId, value] of Object.entries(rowData)) {
+  //     bulkRows.push({
+  //       id: uuidv4(),
+  //       rowIndex,
+  //       value,
+  //       headerId,
+  //       sheetId
+  //     })
+  //   }
+  // }
+  // if (bulkRows.length !== 0) {
+  //   await SheetData.bulkCreate(bulkRows, { transaction, updateOnDuplicate: ["value", "updatedAt"] });
+  // }
   return { success: true };
 }
 
@@ -801,7 +874,9 @@ async function processAndSaveSelectedSheets(req, res) {
 
     let processedFiles;
     try {
+      console.time("Header Processing");
       processedFiles = await headerProcessor(files);
+      console.timeEnd("Header Processing");
     } catch (error) {
       throw new Error(`Failed to process files: ${error.message}`);
     }

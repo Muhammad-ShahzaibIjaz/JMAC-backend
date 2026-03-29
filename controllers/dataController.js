@@ -146,7 +146,6 @@ function sortHeadersFlexibleMatch(headers) {
 async function getHeadersWithValidatedData(req, res) {
   try {
     const { templateId, sheetId, currentPage, pageSize, sortHeader = null, sortOrder = 'ASC' } = req.query;
-
     // Validation checks
     if (!templateId) {
       return res.status(400).json({ error: 'templateId is required' });
@@ -163,7 +162,6 @@ async function getHeadersWithValidatedData(req, res) {
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sheetId)) {
       return res.status(400).json({ error: 'sheetId must be a valid UUID' });
     }
-
     const page = parseInt(currentPage);
     const size = parseInt(pageSize);
     if (isNaN(page) || page < 1 || isNaN(size) || size < 1) {
@@ -171,25 +169,22 @@ async function getHeadersWithValidatedData(req, res) {
     }
 
     const offset = (page - 1) * size;
-
     // Fetch header definitions
     const headers = await Header.findAll({
       where: { templateId },
       attributes: ['id', 'name', 'criticalityLevel', 'columnType'],
       order: [['createdAt', 'ASC']],
     });
-
     if (!headers?.length) {
       return res.status(404).json({ error: `No headers found for templateId ${templateId}` });
     }
-
     const sortedHeaders = sortHeadersFlexibleMatch(headers);
     const headerMap = new Map(sortedHeaders.map(h => [h.id, h]));
+    const headerIds = sortedHeaders.map(h => h.id);
     let distinctRowIndices;
     if (!sortHeader) {
       distinctRowIndices = await SheetData.findAll({
-        where: { sheetId },
-        include: [{ model: Header, where: { templateId }, attributes: [] }],
+        where: { sheetId, headerId: headerIds },
         attributes: ['rowIndex'],
         group: ['rowIndex'],
         order: [['rowIndex', 'ASC']],
@@ -203,9 +198,8 @@ async function getHeadersWithValidatedData(req, res) {
           -- Get all distinct rowIndices for this sheet
           SELECT DISTINCT sd."rowIndex"
           FROM "SheetData" sd
-          INNER JOIN "Header" h ON sd."headerId" = h.id
           WHERE sd."sheetId" = :sheetId 
-            AND h."templateId" = :templateId
+            AND sd."headerId" = ANY(:headerIds)
         ),
         SortedRows AS (
           -- Join with sort column values
@@ -235,7 +229,7 @@ async function getHeadersWithValidatedData(req, res) {
       distinctRowIndices = await sequelize.query(query, {
         replacements: { 
           sheetId, 
-          templateId,
+          headerIds,
           sortHeader, 
           limit: size, 
           offset 
@@ -244,28 +238,22 @@ async function getHeadersWithValidatedData(req, res) {
       });
     }
 
-    
-
     const rowIndexList = distinctRowIndices.map(r => r.rowIndex);
-
     const paginatedData = await SheetData.findAll({
-      include: [{ model: Header, where: { templateId }, attributes: [] }],
       attributes: ['id', 'rowIndex', 'value', 'headerId'],
       where: { 
         rowIndex: rowIndexList,
-        sheetId
+        sheetId,
+        headerId: headerIds
       }
     });
-
     const rowIndexOrder = new Map(rowIndexList.map((rowIndex, index) => [rowIndex, index]));
     paginatedData.sort((a, b) => {
       return rowIndexOrder.get(a.rowIndex) - rowIndexOrder.get(b.rowIndex);
     });
-
     // Count total rows efficiently
     const totalRows = await SheetData.count({
-      where: { sheetId },
-      include: [{ model: Header, where: { templateId }, attributes: [] }],
+      where: { sheetId, headerId: headerIds },
       distinct: true,
       col: 'rowIndex',
     });
@@ -302,7 +290,6 @@ async function getHeadersWithValidatedData(req, res) {
         errorPages.add(Math.floor(data.rowIndex / size) + 1);
       }
     }
-    
     const responseHeaders = sortedHeaders.map(header => ({
       id: header.id,
       name: header.name,
@@ -310,7 +297,6 @@ async function getHeadersWithValidatedData(req, res) {
       columnType: header.columnType,
       data: paginatedDataByHeader[header.id],
     }));
-
     res.status(200).json({
       headers: responseHeaders,
       totalErrorRows: errorRows.size,
@@ -5956,9 +5942,7 @@ async function calculateAwardInfo(req, res) {
       attributes: ['rowIndex'],
     });
     const maxRow = maxRowIndex?.rowIndex ?? 0;
-    console.time('calculateAwardInfo');
     const fnflSums = await calculateAwards(templateId, sheetId, acceptedStatuses, transaction);
-    console.timeEnd('calculateAwardInfo');
 
     await calculateFurtherMetrics(templateId, sheetId, maxRow, fnflSums);
     await createLog({ action: 'CALCULATE_AWARD_INFO', username, performedBy: req.userRole, details: `Calculated award info for templateId: ${templateId}, sheetId: ${sheetId}` });
@@ -6730,20 +6714,17 @@ async function clearHeaderData(req, res) {
       return res.status(400).json({ message: 'templateId, sheetId, and headerName are required.' });
     }
 
-    console.time('fetch header');
     const header = await Header.findOne({ where: { templateId, name: headerName }, transaction });
     if (!header) {
       await transaction.rollback();
       return res.status(404).json({ message: `Header "${headerName}" not found for the given templateId.` });
     }
-    console.timeEnd('fetch header');
 
-    console.time('get row count');
     const [countResult] = await sequelize.query(
       `SELECT COUNT(*)::int AS count FROM "SheetData" WHERE "sheetId" = :sheetId AND "headerId" = :headerId`,
       { replacements: { sheetId, headerId: header.id }, type: QueryTypes.SELECT, transaction }
     );
-    console.timeEnd('get row count');
+
 
     if (countResult.count === 0) {
       await transaction.rollback();
@@ -6757,16 +6738,13 @@ async function clearHeaderData(req, res) {
       operationType: 'CALCULATION',
     }, { transaction });
 
-    console.time('fetch rows');
     const rows = await SheetData.findAll({
       where: { sheetId, headerId: header.id },
       attributes: ['rowIndex', 'value'],
       raw: true,
       transaction
     });
-    console.timeEnd('fetch rows');
 
-    console.time('bulk insert snapshots');
     const snapshots = rows.map(row => ({
       operationLogId: operationLog.id,
       headerId: header.id,
@@ -6778,14 +6756,10 @@ async function clearHeaderData(req, res) {
     }));
 
     await SheetDataSnapshot.bulkCreate(snapshots, { transaction });
-    console.timeEnd('bulk insert snapshots');
-
-    console.time('bulk update values');
     await SheetData.update(
       { value: '' },
       { where: { sheetId, headerId: header.id }, transaction }
     );
-    console.timeEnd('bulk update values');
 
     await transaction.commit();
 
