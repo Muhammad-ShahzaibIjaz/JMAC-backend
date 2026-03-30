@@ -4214,6 +4214,7 @@ async function calculateAwards(templateId, sheetId, acceptedStatuses, transactio
       Object.keys(awardTypePatterns).map(name => [name, 0])
     );
     let fnflTotal = 0;
+    let hasFNFLFlag = false;
     for (let i = 1; i <= 20; i++) {
       const cd = rowData[headerMap[`Awd_CR${i}`]];
       const amtRaw = rowData[headerMap[`Awd_Amt${i}`]];
@@ -4231,10 +4232,14 @@ async function calculateAwards(templateId, sheetId, acceptedStatuses, transactio
       }
 
       if (/^FNFL$/.test(cd)) {
+        console.log(`Current CD value: ${cd}, Status: ${status}`); 
         fnflTotal += amt;
+        hasFNFLFlag = true;
       }
-
+    }
+    if (hasFNFLFlag) {
       fnflSums.push({rowIndex: parseInt(rowIndex), amount: fnflTotal });
+      hasFNFLFlag = false;
     }
 
     // Collect updates + snapshots
@@ -5054,39 +5059,71 @@ async function processNeed(templateId, sheetId, maxRowIndex) {
       operationType: 'CALCULATION'
     }, { transaction });
 
-    // Step 5: Prepare payloads
+    // Step 5: Fetch ALL existing records that will be affected to avoid race conditions
+    const existingNeedRecords = await SheetData.findAll({
+      where: {
+        headerId: headerMap['Student_Financial_Need'],
+        sheetId: sheetId
+      },
+      transaction
+    });
+
+    const existingNeedMap = new Map();
+    existingNeedRecords.forEach(record => {
+      existingNeedMap.set(record.rowIndex, record);
+    });
+
+    let existingMeritPercentMap = null;
+    if (headerMap['Institutional_Merit_As_%_Of_Need_Met']) {
+      const existingMeritPercentRecords = await SheetData.findAll({
+        where: {
+          headerId: headerMap['Institutional_Merit_As_%_Of_Need_Met'],
+          sheetId: sheetId
+        },
+        transaction
+      });
+      existingMeritPercentMap = new Map();
+      existingMeritPercentRecords.forEach(record => {
+        existingMeritPercentMap.set(record.rowIndex, record);
+      });
+    }
+
+    // Step 6: Prepare payloads
     const insertPayload = [];
+    const updatePayload = [];
     const snapshotPayload = [];
 
     for (let rowIndex = 0; rowIndex <= maxRowIndex; rowIndex++) {
       const values = grouped[rowIndex] || {};
-      const COA = values[headerMap['2_Semester_COA']] || 0;
-      const SAI = values[headerMap['SAI']] || 0;
+      const COA = values[headerMap['2_Semester_COA']] || 'blank';
+      const SAI = values[headerMap['SAI']] || 'blank';
 
-      const need = calculateNeed(COA, SAI);
+      let need = 0;
+      if (SAI !== 'blank' && COA !== 'blank' && !isNaN(SAI) && !isNaN(COA)) {
+        need = calculateNeed(COA, SAI);
+      } else {
+        need = 0;
+      }
 
-      const existing = await SheetData.findOne({
-        where: {
-          headerId: headerMap['Student_Financial_Need'],
-          sheetId: sheetId,
-          rowIndex: parseInt(rowIndex)
-        },
-        transaction
-      });
-
-      if (existing) {
+      // Handle Student Financial Need
+      const existingNeed = existingNeedMap.get(rowIndex);
+      
+      if (existingNeed) {
         snapshotPayload.push({
           operationLogId: operationLog.id,
           headerId: headerMap['Student_Financial_Need'],
           sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
-          originalValue: existing.value,
+          originalValue: existingNeed.value,
           newValue: need.toString(),
           changeType: 'UPDATE'
         });
 
-        existing.value = need.toString();
-        await existing.save({ transaction });
+        // Store for batch update instead of saving individually
+        updatePayload.push({
+          id: existingNeed.id,
+          value: need.toString()
+        });
       } else {
         snapshotPayload.push({
           operationLogId: operationLog.id,
@@ -5102,63 +5139,144 @@ async function processNeed(templateId, sheetId, maxRowIndex) {
           headerId: headerMap['Student_Financial_Need'],
           sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
-          value: need.toString()
+          value: need.toString(),
+          createdAt: new Date(),
+          updatedAt: new Date()
         });
       }
-
+      // Handle Institutional Merit Percent
       if (headerMap['Institutional_Merit_As_%_Of_Need_Met']) {
-        const existingMeritPercent = await SheetData.findOne({
-          where: {
-            headerId: headerMap['Institutional_Merit_As_%_Of_Need_Met'],
-            sheetId: sheetId,
-            rowIndex: parseInt(rowIndex)
-          },
-          transaction
-        });
-
-        if (existingMeritPercent) {
-          let meritPercent = need === 0 ? 0 : (parseFloat(existingMeritPercent?.value) / need);
-          meritPercent = meritPercent.toFixed(2);
-          if (meritPercent !== 0) {
-            existingMeritPercent.value = meritPercent.toString();
-            await existingMeritPercent.save({ transaction });
+        const existingMeritPercent = existingMeritPercentMap?.get(rowIndex);
+        let meritPercent = 0;
+        
+        // If need is 0, set merit percent to 0 regardless of existing value
+        if (need === 0) {
+          meritPercent = 0;
+          
+          if (existingMeritPercent) {
+            // Update existing record to 0
+            if (existingMeritPercent.value !== '0') {
+              snapshotPayload.push({
+                operationLogId: operationLog.id,
+                headerId: headerMap['Institutional_Merit_As_%_Of_Need_Met'],
+                sheetId: sheetId,
+                rowIndex: parseInt(rowIndex),
+                originalValue: existingMeritPercent.value,
+                newValue: '0',
+                changeType: 'UPDATE'
+              });
+              
+              updatePayload.push({
+                id: existingMeritPercent.id,
+                value: '0'
+              });
+            }
+          } else {
+            // Insert new record with 0
             snapshotPayload.push({
               operationLogId: operationLog.id,
               headerId: headerMap['Institutional_Merit_As_%_Of_Need_Met'],
               sheetId: sheetId,
               rowIndex: parseInt(rowIndex),
-              originalValue: existingMeritPercent.value,
-              newValue: meritPercent.toString(),
-              changeType: 'UPDATE'
+              originalValue: null,
+              newValue: '0',
+              changeType: 'INSERT'
+            });
+            
+            insertPayload.push({
+              headerId: headerMap['Institutional_Merit_As_%_Of_Need_Met'],
+              sheetId: sheetId,
+              rowIndex: parseInt(rowIndex),
+              value: '0',
+              createdAt: new Date(),
+              updatedAt: new Date()
             });
           }
-        } else {
-          insertPayload.push({
-            headerId: headerMap['Institutional_Merit_As_%_Of_Need_Met'],
-            sheetId: sheetId,
-            rowIndex: parseInt(rowIndex),
-            value: '0'
-          });
+        } 
+        // If need is not 0, calculate percentage normally
+        else if (existingMeritPercent && existingMeritPercent.value && existingMeritPercent.value !== '' && 
+                !isNaN(existingMeritPercent.value) && existingMeritPercent.value !== '0') {
+          
+          // This is an existing record with a value - calculate percentage
+          const meritValue = parseFloat(existingMeritPercent.value);
+          meritPercent = (meritValue / need) * 100;
+          meritPercent = parseFloat(meritPercent.toFixed(2));
+          
           snapshotPayload.push({
             operationLogId: operationLog.id,
             headerId: headerMap['Institutional_Merit_As_%_Of_Need_Met'],
             sheetId: sheetId,
             rowIndex: parseInt(rowIndex),
-            originalValue: '',
+            originalValue: existingMeritPercent.value,
+            newValue: meritPercent.toString(),
+            changeType: 'UPDATE'
+          });
+          
+          updatePayload.push({
+            id: existingMeritPercent.id,
+            value: meritPercent.toString()
+          });
+        } 
+        else if (existingMeritPercent && (!existingMeritPercent.value || existingMeritPercent.value === '')) {
+          // Existing record but empty value - update it to 0
+          snapshotPayload.push({
+            operationLogId: operationLog.id,
+            headerId: headerMap['Institutional_Merit_As_%_Of_Need_Met'],
+            sheetId: sheetId,
+            rowIndex: parseInt(rowIndex),
+            originalValue: existingMeritPercent.value,
+            newValue: '0',
+            changeType: 'UPDATE'
+          });
+          
+          updatePayload.push({
+            id: existingMeritPercent.id,
+            value: '0'
+          });
+        } 
+        else if (!existingMeritPercent) {
+          // No existing record - insert 0
+          snapshotPayload.push({
+            operationLogId: operationLog.id,
+            headerId: headerMap['Institutional_Merit_As_%_Of_Need_Met'],
+            sheetId: sheetId,
+            rowIndex: parseInt(rowIndex),
+            originalValue: null,
             newValue: '0',
             changeType: 'INSERT'
           });
+          
+          insertPayload.push({
+            headerId: headerMap['Institutional_Merit_As_%_Of_Need_Met'],
+            sheetId: sheetId,
+            rowIndex: parseInt(rowIndex),
+            value: '0',
+            createdAt: new Date(),
+            updatedAt: new Date()
+          });
         }
-
       }
     }
 
-    // Step 6: Bulk insert new SheetData
-    if (insertPayload.length > 0) {
-      await SheetData.bulkCreate(insertPayload, { transaction });
+    // Step 7: Perform batch updates
+    if (updatePayload.length > 0) {
+      await Promise.all(updatePayload.map(record => 
+        SheetData.update(
+          { value: record.value, updatedAt: new Date() },
+          { where: { id: record.id }, transaction }
+        )
+      ));
     }
 
-    // Step 7: Bulk insert SheetDataSnapshot
+    // Step 8: Bulk insert new SheetData (use ignoreDuplicates to prevent race condition issues)
+    if (insertPayload.length > 0) {
+      await SheetData.bulkCreate(insertPayload, { 
+        transaction,
+        ignoreDuplicates: true  // This prevents errors from duplicate keys
+      });
+    }
+
+    // Step 9: Bulk insert SheetDataSnapshot
     if (snapshotPayload.length > 0) {
       await SheetDataSnapshot.bulkCreate(snapshotPayload, { transaction });
     }
@@ -5166,10 +5284,13 @@ async function processNeed(templateId, sheetId, maxRowIndex) {
     await transaction.commit();
     return {
       message: 'Processed Need with logging and snapshots.',
-      rowsAffected: insertPayload.length + snapshotPayload.length
+      rowsAffected: insertPayload.length + updatePayload.length + snapshotPayload.length
     };
   } catch (error) {
-    await transaction.rollback();
+    // Check if transaction is still active before rolling back
+    if (transaction && transaction.finished !== 'commit' && transaction.finished !== 'rollback') {
+      await transaction.rollback();
+    }
     console.error('Error processing Need:', error);
     throw error;
   }
@@ -5349,6 +5470,9 @@ async function processGap(templateId, sheetId, maxRowIndex, fnflSums) {
       const gift = values[headerMap['Total_Institutional_Gift']] || 0;
       const directCosts = values[headerMap['Total_Direct_Costs']] || 0;
       const fnflValue = fnflSums[rowIndex] || { rowIndex: parseInt(rowIndex), amount: 0 };
+      if (fnflSums[rowIndex]) {
+        console.log(`Row ${rowIndex} - Direct Costs: ${directCosts}, Gift: ${gift}, FNFL: ${fnflValue.amount}`);
+      }
       
       const gap = calculateGap(directCosts, gift, fnflValue.amount);
 
@@ -5905,6 +6029,137 @@ async function processCampusDiscount(templateId, sheetId, maxRowIndex) {
   }
 }
 
+async function processCOA(templateId, sheetId, maxRowIndex) {
+  console.log('Processing 2_Semester COA...');
+  const transaction = await sequelize.transaction();
+  try {
+    // Step 1: Fetch headers
+    const headers = await Header.findAll({
+      where: {
+        templateId,
+        name: ['2_Semester_COA', '2_Semester_Tuition', '2_Semester_Fees', '2_Semester_Room', '2_Semester_Meals' , '2_Semester_Books_Supplies', '2_Semester_Transportation', '2_Semester_Other_Indirect_Charges']
+      },
+      transaction
+    });
+
+    const headerMap = Object.fromEntries(headers.map(h => [h.name, h.id]));
+    const tuitionId = headerMap['2_Semester_Tuition'];
+    const feesId = headerMap['2_Semester_Fees'];
+    const roomId = headerMap['2_Semester_Room'];
+    const mealsId = headerMap['2_Semester_Meals'];
+    const booksId = headerMap['2_Semester_Books_Supplies'];
+    const transportationId = headerMap['2_Semester_Transportation'];
+    const otherId = headerMap['2_Semester_Other_Indirect_Charges'];
+    const coaId = headerMap['2_Semester_COA'];
+
+    if (!coaId) {
+      await transaction.rollback();
+      return { message: '2_Semester_COA header not found.' };
+    }
+
+    // Step 2: Fetch relevant SheetData
+    const sheetData = await SheetData.findAll({
+      where: {
+        headerId: [tuitionId, feesId, roomId, mealsId, booksId, transportationId, otherId],
+        sheetId: sheetId
+      },
+      transaction
+    });
+
+    // Step 3: Group by rowIndex
+    const grouped = {};
+    sheetData.forEach(data => {
+      if (!grouped[data.rowIndex]) grouped[data.rowIndex] = {};
+      grouped[data.rowIndex][data.headerId] = parseFloat(data.value) || 0;
+    });
+
+    // Step 4: Create OperationLog
+    const operationLog = await OperationLog.create({
+      templateId,
+      sheetId,
+      operationType: 'CALCULATION'
+    }, { transaction });
+
+    // Step 5: Prepare payloads
+    const insertPayload = [];
+    const snapshotPayload = [];
+
+    for (let rowIndex = 0; rowIndex <= maxRowIndex; rowIndex++) {
+      const values = grouped[rowIndex] || {};
+      const tuition = values[headerMap['2_Semester_Tuition']] || 0;
+      const fees = values[headerMap['2_Semester_Fees']] || 0;
+      const room = values[headerMap['2_Semester_Room']] || 0;
+      const meals = values[headerMap['2_Semester_Meals']] || 0;
+      const books = values[headerMap['2_Semester_Books_Supplies']] || 0;
+      const transportation = values[headerMap['2_Semester_Transportation']] || 0;
+      const other = values[headerMap['2_Semester_Other_Indirect_Charges']] || 0;
+      
+      const coa = tuition + fees + room + meals + books + transportation + other;
+
+      const existing = await SheetData.findOne({
+        where: {
+          headerId: headerMap['2_Semester_COA'],
+          sheetId: sheetId,
+          rowIndex: parseInt(rowIndex)
+        },
+        transaction
+      });
+
+      if (existing) {
+        snapshotPayload.push({
+          operationLogId: operationLog.id,
+          headerId: headerMap['2_Semester_COA'],
+          sheetId: sheetId,
+          rowIndex: parseInt(rowIndex),
+          originalValue: existing.value,
+          newValue: coa.toString(),
+          changeType: 'UPDATE'
+        });
+
+        existing.value = coa.toString();
+        await existing.save({ transaction });
+      } else {
+        snapshotPayload.push({
+          operationLogId: operationLog.id,
+          headerId: headerMap['2_Semester_COA'],
+          sheetId: sheetId,
+          rowIndex: parseInt(rowIndex),
+          originalValue: null,
+          newValue: coa.toString(),
+          changeType: 'INSERT'
+        });
+
+        insertPayload.push({
+          headerId: headerMap['2_Semester_COA'],
+          sheetId: sheetId,
+          rowIndex: parseInt(rowIndex),
+          value: coa.toString()
+        });
+      }
+    }
+
+    // Step 6: Bulk insert new SheetData
+    if (insertPayload.length > 0) {
+      await SheetData.bulkCreate(insertPayload, { transaction });
+    }
+
+    // Step 7: Bulk insert SheetDataSnapshot
+    if (snapshotPayload.length > 0) {
+      await SheetDataSnapshot.bulkCreate(snapshotPayload, { transaction });
+    }
+
+    await transaction.commit();
+    return {
+      message: 'Processed 2_Semester_COA with logging and snapshots.',
+      rowsAffected: insertPayload.length + snapshotPayload.length
+    };
+  } catch (error) {
+    await transaction.rollback();
+    console.error('Error processing 2_Semester_COA:', error);
+    throw error;
+  }
+}
+
 
 async function calculateFurtherMetrics(templateId, sheetId, maxRowIndex, fnflSums) {
   await processNACUBODiscountRates(templateId, sheetId, maxRowIndex);
@@ -5917,6 +6172,7 @@ async function calculateFurtherMetrics(templateId, sheetId, maxRowIndex, fnflSum
   await processNeedMet(templateId, sheetId, maxRowIndex, fnflSums);
   await processGap(templateId, sheetId, maxRowIndex, fnflSums);
   await processTotalNeedMet(templateId, sheetId, maxRowIndex, fnflSums);
+  await processCOA(templateId, sheetId, maxRowIndex);
   await processTotalNeedMet_W(templateId, sheetId, maxRowIndex);
   await processTuitionDiscountRates(templateId, sheetId, maxRowIndex);
   await processCampusDiscount(templateId, sheetId, maxRowIndex);

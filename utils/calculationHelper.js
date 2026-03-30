@@ -33,6 +33,9 @@ function calculateTotalDirectCost(tuition, fees, housingCost, food) {
 }
 
 function calculateNeed(COA, SAI) {
+  if (SAI < 0) {
+    SAI = 0;
+  }
   const need = COA - SAI;
   return need > 0 ? need : 0;
 }
