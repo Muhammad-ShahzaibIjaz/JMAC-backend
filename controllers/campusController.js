@@ -157,84 +157,98 @@ const updateCampus = async (req, res) => {
   const username = await getUserName(req.userId);
 
   try {
+    // Find the campus
     const campus = await Campus.findByPk(campusId);
     if (!campus) {
-      return res.status(404).json({ message: "Campus not found." });
+      return res.status(404).json({ 
+        success: false,
+        message: "Campus not found." 
+      });
     }
 
-    // Update campus in one go
+    // Update campus basic information
     await campus.update({
-      campusName: campusName ?? campus.campusName,
-      address: address ?? campus.address,
-      city: city ?? campus.city,
-      state: state ?? campus.state,
-      zipCode: zipCode ?? campus.zipCode,
-      campusMainNumber: campusMainNumber ?? campus.campusMainNumber,
-      presidentEmail: presidentEmail ?? campus.presidentEmail,
-      undergradStudents:
-        undergradStudents !== undefined
-          ? undergradStudents
-          : campus.undergradStudents,
-      gradStudents:
-        gradStudents !== undefined ? gradStudents : campus.gradStudents,
-      presidentName: presidentName ?? campus.presidentName,
-      schoolType: schoolType ?? campus.schoolType,
+      campusName: campusName !== undefined ? campusName : campus.campusName,
+      address: address !== undefined ? address : campus.address,
+      city: city !== undefined ? city : campus.city,
+      state: state !== undefined ? state : campus.state,
+      zipCode: zipCode !== undefined ? zipCode : campus.zipCode,
+      campusMainNumber: campusMainNumber !== undefined ? campusMainNumber : campus.campusMainNumber,
+      presidentEmail: presidentEmail !== undefined ? presidentEmail : campus.presidentEmail,
+      undergradStudents: undergradStudents !== undefined ? undergradStudents : campus.undergradStudents,
+      gradStudents: gradStudents !== undefined ? gradStudents : campus.gradStudents,
+      presidentName: presidentName !== undefined ? presidentName : campus.presidentName,
+      schoolType: schoolType !== undefined ? schoolType : campus.schoolType,
     });
 
-    // Faster handling of customFields
-    if (customFields.length) {
-      // Separate updates vs new inserts
-      const fieldsToUpdate = customFields.filter(f => f.id);
-      const fieldsToCreate = customFields.filter(f => !f.id);
+    // Delete all existing custom fields for this campus
+    const deletedCount = await CustomField.destroy({
+      where: { campusId: campus.id }
+    });
 
-      // Bulk update existing fields
-      if (fieldsToUpdate.length) {
-        const existingFields = await CustomField.findAll({
-          where: { id: fieldsToUpdate.map(f => f.id) },
-        });
+    // Create new custom fields
+    if (customFields.length > 0) {
+      // Filter out any fields that might have empty/null values
+      const validCustomFields = customFields.filter(field => 
+        field.label && field.label.trim() !== ""
+      );
 
-        await Promise.all(
-          existingFields.map(existingField => {
-            const updatedData = fieldsToUpdate.find(f => f.id === existingField.id);
-            return existingField.update(updatedData);
-          })
-        );
-      }
-
-      // Bulk create new fields
-      if (fieldsToCreate.length) {
-        const newFields = fieldsToCreate.map(f => ({
-          label: f.label,
-          value: f.value,
-          type: f.type,
-          campusId,
+      if (validCustomFields.length > 0) {
+        const newFields = validCustomFields.map(field => ({
+          label: field.label,
+          value: field.value || "",
+          type: field.type || "text",
+          campusId: campus.id,
         }));
-        await CustomField.bulkCreate(newFields);
+        
+        const createdFields = await CustomField.bulkCreate(newFields, {
+          returning: true // This will return the created records with their new IDs
+        });
       }
     }
 
+    // Create audit log
     await createLog({
       action: "UPDATE_CAMPUS",
       username,
       performedBy: req.userRole,
-      details: `Updated campus ID: ${campusId}`,
+      details: `Updated campus ID: ${campusId} with ${customFields.length} custom fields`,
     });
 
-    // Return campus with updated customFields in one object
-    const updatedCampus = {
-      ...campus.toJSON(),
-      customFields: await CustomField.findAll({ where: { campusId } }),
+    // Fetch the updated campus data with all custom fields
+    const updatedCampus = await Campus.findByPk(campus.id);
+    
+    // Fetch all custom fields for this campus
+    const finalCustomFields = await CustomField.findAll({
+      where: { campusId: campus.id },
+      attributes: ['id', 'label', 'value', 'type'],
+      order: [['createdAt', 'ASC']]
+    });
+
+    // Format response
+    const responseData = {
+      ...updatedCampus.toJSON(),
+      customFields: finalCustomFields
     };
 
-    res.status(200).json(updatedCampus);
+    res.status(200).json(responseData);
+    
   } catch (error) {
+    console.error("Error updating campus:", error);
+    
+    // Create error log
     await createLog({
       action: "UPDATE_CAMPUS_FAILED",
       username,
       performedBy: req.userRole,
       details: `Failed to update campus ID: ${campusId}. Error: ${error.message}`,
     });
-    res.status(500).json({ message: "Error updating campus." });
+    
+    res.status(500).json({ 
+      success: false,
+      message: "Error updating campus",
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 };
 

@@ -1046,7 +1046,7 @@ const awardTypePatterns = {
   "Total_Outside_Work_Aid": /^O..W$/,
   "Total_Private_Aid_G+W+L": /^P...$/,
   "Total_Private_Gift_Aid": /^P..G$/,
-  "Total_Private_Loan_Aid": /^P..L$/,
+  "Total_Private_Loan_Aid": /^P..[LO]$/,
   "Total_Private_Work_Aid": /^P..W$/,
   "Total_Federal_Aid_G+W+L": /^F...$/,
   "Total_Federal_Gift_Aid": /^F..G$/,
