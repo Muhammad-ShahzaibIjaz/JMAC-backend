@@ -11,9 +11,9 @@ const sequelize = new Sequelize(
     logging: false,
     pool: {
       max: 20,
-      min: 0,
-      acquire: 30000,
-      idle: 10000,
+      min: 5,
+      acquire: 120000,
+      idle: 30000,
     },
   },
 );

@@ -3976,7 +3976,6 @@ async function evaluateSheetDataAndDelete(req, res) {
 async function applyReferenceOnData(inputHeaderId, outputHeaderId, mappings, sheetId, templateId) {
   const transaction = await sequelize.transaction();
   try {
-
     const operationLog = await OperationLog.create({
       id: uuidv4(),
       templateId,
@@ -4056,19 +4055,44 @@ async function applyReferenceOnData(inputHeaderId, outputHeaderId, mappings, she
       }
     }
 
+    // BATCH UPDATES - Fix #1: Use bulkCreate for updates
     if (updates.length > 0) {
-      await Promise.all(updates.map(({ id, value }) =>
-        SheetData.update({ value }, { where: { id, sheetId } }, { transaction })
-      ));
+      // Instead of individual updates, use a single bulk update
+      // For PostgreSQL, you can use raw query for better performance
+      const updatePromises = [];
+      const BATCH_SIZE = 500;
+      
+      for (let i = 0; i < updates.length; i += BATCH_SIZE) {
+        const batch = updates.slice(i, i + BATCH_SIZE);
+        updatePromises.push(
+          sequelize.query(
+            `UPDATE "SheetData" SET value = data.value 
+             FROM (VALUES ${batch.map((_, idx) => `($${idx * 2 + 1}::uuid, $${idx * 2 + 2}::text)`).join(', ')}) 
+             AS data(id, value) WHERE "SheetData".id = data.id AND "SheetData"."sheetId" = $${batch.length * 2 + 1}`,
+            {
+              bind: [...batch.flatMap(u => [u.id, u.value]), sheetId],
+              transaction
+            }
+          )
+        );
+      }
+      await Promise.all(updatePromises);
     }
 
+    // FIX #2: Correct bulkCreate usage
     if (inserts.length > 0) {
       await SheetData.bulkCreate(inserts, { transaction });
     }
 
+    // FIX #3: Bulk create snapshots in batches
     if (snapshots.length > 0) {
-      await SheetDataSnapshot.bulkCreate(snapshots, { transaction });
+      const BATCH_SIZE = 1000;
+      for (let i = 0; i < snapshots.length; i += BATCH_SIZE) {
+        const batch = snapshots.slice(i, i + BATCH_SIZE);
+        await SheetDataSnapshot.bulkCreate(batch, { transaction });
+      }
     }
+    
     await transaction.commit();
     return unmappedValues;
 
