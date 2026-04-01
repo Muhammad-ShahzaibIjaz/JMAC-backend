@@ -6163,6 +6163,7 @@ async function processCOA(templateId, sheetId, maxRowIndex) {
 
 async function calculateFurtherMetrics(templateId, sheetId, maxRowIndex, fnflSums) {
   await processNACUBODiscountRates(templateId, sheetId, maxRowIndex);
+  await processCOA(templateId, sheetId, maxRowIndex);
   await processNetCharges(templateId, sheetId, maxRowIndex);
   await processTotalDirectCost(templateId, sheetId, maxRowIndex);
   await processNetTuition(templateId, sheetId, maxRowIndex);
@@ -6172,7 +6173,6 @@ async function calculateFurtherMetrics(templateId, sheetId, maxRowIndex, fnflSum
   await processNeedMet(templateId, sheetId, maxRowIndex, fnflSums);
   await processGap(templateId, sheetId, maxRowIndex, fnflSums);
   await processTotalNeedMet(templateId, sheetId, maxRowIndex, fnflSums);
-  await processCOA(templateId, sheetId, maxRowIndex);
   await processTotalNeedMet_W(templateId, sheetId, maxRowIndex);
   await processTuitionDiscountRates(templateId, sheetId, maxRowIndex);
   await processCampusDiscount(templateId, sheetId, maxRowIndex);

@@ -19,7 +19,7 @@ const Header = sequelize.define(
       defaultValue: '3',
     },
     columnType: {
-      type: DataTypes.ENUM('text', 'integer', 'decimal', 'Date', 'Y/N', 'character'),
+      type: DataTypes.ENUM('text', 'integer', 'decimal', 'Date', 'Y/N', 'character', 'percentage'),
       allowNull: false,
       defaultValue: 'text',
     },

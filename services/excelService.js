@@ -273,6 +273,9 @@ async function exportHeader(templateName, headers) {
           structureSheet[cellAddress].z = "0";
           break;
         case "decimal":
+          structureSheet[cellAddress].z = "0.0000";
+          break;
+        case "percentage":
           structureSheet[cellAddress].z = "0.00";
           break;
         case "Y/N":
@@ -306,6 +309,13 @@ async function exportHeader(templateName, headers) {
               return (99.99 + rowIndex * 10).toFixed(4);
             if (col.name.toLowerCase().includes("change")) return (0.1 + rowIndex * 0.05).toFixed(4);
             return (rowIndex + 1 + 0.5).toFixed(4);
+          case "percentage":
+            if (col.name.toLowerCase().includes("cgpa") || col.name.toLowerCase().includes("gpa"))
+              return (3.5 + rowIndex * 0.1).toFixed(2);
+            if (col.name.toLowerCase().includes("price") || col.name.toLowerCase().includes("cost"))
+              return (99.99 + rowIndex * 10).toFixed(2);
+            if (col.name.toLowerCase().includes("change")) return (0.1 + rowIndex * 0.05).toFixed(2);
+            return (rowIndex + 1 + 0.5).toFixed(2);
           case "character":
             if (col.name.toLowerCase().includes("grade")) return String.fromCharCode(65 + rowIndex % 5);
             if (col.name.toLowerCase().includes("flag") || col.name.toLowerCase().includes("status"))
@@ -342,7 +352,7 @@ async function exportHeader(templateName, headers) {
 
 
     headers.forEach((col, colIndex) => {
-      if (col.columnType === "number" || col.columnType === "decimal") {
+      if (col.columnType === "number" || col.columnType === "decimal" || col.columnType === "percentage") {
         for (let row = 1; row <= 5; row++) {
           const cellAddress = XLSX.utils.encode_cell({ c: colIndex, r: row });
           if (!previewSheet[cellAddress]) previewSheet[cellAddress] = {};
@@ -381,6 +391,7 @@ async function exportHeader(templateName, headers) {
       ["integer", "Integer values"],
       ["number", "Float/decimal values"],
       ["decimal", "Decimal values (alias for float)"],
+      ["percentage", "Percentage values"],
       ["character", "Single character (e.g., A, Y, N)"],
       ["Date", "Date (DD-MM-YYYY)"],
       ["Y/N", "Yes/No values"],

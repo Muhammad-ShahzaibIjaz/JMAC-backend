@@ -41,8 +41,10 @@ async function generateExcelFile({ headers, maxRowIndex, totalErrorRows, errorRo
         return isNaN(parsedDate.getTime()) ? '' : parsedDate;
       } else if(header.columnType === 'integer' || header.columnType === 'decimal') {
         return isNaN(Number(value)) ? '' : Number(value);
-      } else if (header.columnType === 'Boolean') {
+      }  else if (header.columnType === 'Boolean') {
         return value === true || value === 'true' ? 'Yes' : value === false || value === 'false' ? 'No' : '';
+      } else if (header.columnType === 'percentage') {
+        return isNaN(Number(value)) ? '' : Number(value).toFixed(2);
       }
       return value;
     });
