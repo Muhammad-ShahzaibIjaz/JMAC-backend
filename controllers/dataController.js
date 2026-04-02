@@ -5377,7 +5377,9 @@ async function processNeedMet(templateId, sheetId, maxRowIndex, fnflSums) {
       const work = values[headerMap['Total_Work_Aid']] || 0;
 
       const needMet = calculateNeedMet(need, gift, work, fnflValue.amount);
-
+      if (fnflValue.amount > 0) {
+        console.log(`Row ${rowIndex}: Need=${need}, Gift=${gift}, Work=${work}, FNFL=${fnflValue.amount} => Need Met=${needMet}`);
+      }
       const existing = await SheetData.findOne({
         where: {
           headerId: headerMap['Total_Need_Met'],
