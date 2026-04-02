@@ -7510,13 +7510,13 @@ async function updateInstitutionalCode(req, res) {
       return res.status(400).json({ message: 'templateId, sheetId, and value are required.' });
     }
 
-    // 1. Find the Institution_Code header for the given templateId
+    // 1. Find the Institution_Code header
     const header = await Header.findOne({ where: { templateId, name: 'Institution_Code' } });
     if (!header) {
       return res.status(404).json({ message: 'Header "Institution_Code" not found for the given templateId.' });
     }
 
-    // 2. Get the max rowIndex from SheetData for this sheetId
+    // 2. Get max rowIndex from SheetData for this sheetId (across any header)
     const maxRowData = await SheetData.findOne({
       where: { sheetId },
       order: [['rowIndex', 'DESC']],
@@ -7528,29 +7528,31 @@ async function updateInstitutionalCode(req, res) {
     }
 
     const maxRowIndex = maxRowData.rowIndex;
+    console.log(`Max row index for sheetId ${sheetId}: ${maxRowIndex}`);
 
-    // 3. Update all rows (1 through maxRowIndex) for this headerId + sheetId
-    const result = await SheetData.update(
-      { value },
-      {
-        where: {
-          headerId: header.id,
-          sheetId,
-          rowIndex: { [Op.between]: [1, maxRowIndex] },
-        },
-      }
-    );
+    // 3. Build rows for all rowIndex 1 to maxRowIndex
+    const rows = Array.from({ length: maxRowIndex }, (_, i) => ({
+      headerId: header.id,
+      sheetId,
+      rowIndex: i + 1,
+      value,
+    }));
+
+    // 4. Bulk upsert — insert if not exists, update value if exists
+    const result = await SheetData.bulkCreate(rows, {
+      updateOnDuplicate: ['value', 'updatedAt'],  // unique index: [headerId, rowIndex, sheetId]
+    });
 
     await createLog({
       action: 'UPDATE_INSTITUTION_CODE',
       username,
       performedBy: req.userRole,
-      details: `Updated Institution_Code for templateId: ${templateId}, sheetId: ${sheetId}, rows: 1 to ${maxRowIndex}`,
+      details: `Upserted Institution_Code for templateId: ${templateId}, sheetId: ${sheetId}, rows: 1 to ${maxRowIndex}`,
     });
 
     return res.status(200).json({
       message: 'Institution code updated successfully.',
-      rowsAffected: result[0],
+      rowsAffected: result.length,
       maxRowIndex,
     });
 
@@ -7578,18 +7580,21 @@ async function getFICECodes(req, res) {
 
 
 async function updateFICEInstitutionalCode(req, res) {
-  const { templateId, sheetId, value} = req.body;
+  const { templateId, sheetId, value } = req.body;
   const username = await getUserName(req.userId);
+
   try {
     if (!templateId || !sheetId || !value) {
       return res.status(400).json({ message: 'templateId, sheetId, and value are required.' });
     }
+
+    // 1. Find the Institution_FICE_Code header
     const header = await Header.findOne({ where: { templateId, name: 'Institution_FICE_Code' } });
     if (!header) {
       return res.status(404).json({ message: 'Header "Institution_FICE_Code" not found for the given templateId.' });
     }
 
-    // 2. Get the max rowIndex from SheetData for this sheetId
+    // 2. Get max rowIndex from SheetData for this sheetId (across any header)
     const maxRowData = await SheetData.findOne({
       where: { sheetId },
       order: [['rowIndex', 'DESC']],
@@ -7602,21 +7607,40 @@ async function updateFICEInstitutionalCode(req, res) {
 
     const maxRowIndex = maxRowData.rowIndex;
 
-    // 3. Update all rows (1 through maxRowIndex) for this headerId + sheetId
-    const result = await SheetData.update(
-      { value },
-      {
-        where: {
-          headerId: header.id,
-          sheetId,
-          rowIndex: { [Op.between]: [1, maxRowIndex] },
-        },
-      }
-    );
-    await createLog({ action: 'UPDATE_INSTITUTION_FICE_CODE', username, performedBy: req.userRole, details: `Updated Institution_FICE_Code for templateId: ${templateId}, sheetId: ${sheetId}` });
-    return res.status(200).json({ message: 'Institution FICE code updated successfully.', details: result });
+    // 3. Build rows for all rowIndex 1 to maxRowIndex
+    const rows = Array.from({ length: maxRowIndex }, (_, i) => ({
+      headerId: header.id,
+      sheetId,
+      rowIndex: i + 1,
+      value,
+    }));
+
+    // 4. Bulk upsert — insert if not exists, update value if exists
+    const result = await SheetData.bulkCreate(rows, {
+      updateOnDuplicate: ['value', 'updatedAt'],
+    });
+    console.log(`bulkCreate result length: ${result.length}`);
+
+    await createLog({
+      action: 'UPDATE_INSTITUTION_FICE_CODE',
+      username,
+      performedBy: req.userRole,
+      details: `Upserted Institution_FICE_Code for templateId: ${templateId}, sheetId: ${sheetId}, rows: 1 to ${maxRowIndex}`,
+    });
+
+    return res.status(200).json({
+      message: 'Institution FICE code updated successfully.',
+      rowsAffected: result.length,
+      maxRowIndex,
+    });
+
   } catch (error) {
-    await createLog({ action: 'UPDATE_INSTITUTION_FICE_CODE_FAILED', username, performedBy: req.userRole, details: `Failed to update Institution_FICE_Code for templateId: ${req.body.templateId}, sheetId: ${req.body.sheetId}. Error: ${error.message}` });
+    await createLog({
+      action: 'UPDATE_INSTITUTION_FICE_CODE_FAILED',
+      username,
+      performedBy: req.userRole,
+      details: `Failed to update Institution_FICE_Code for templateId: ${req.body.templateId}, sheetId: ${req.body.sheetId}. Error: ${error.message}`,
+    });
     console.error('Error in updateFICEInstitutionalCode:', error);
     return res.status(500).json({ message: 'Internal server error.', details: error.message });
   }
