@@ -1,5 +1,6 @@
 const desiredOrder = [
   "Institution_Code",
+  "Institution_FICE_Code",
   "Student_ID",
   "Alternate_Student_ID",
   "Last_Name",
@@ -466,6 +467,7 @@ const desiredOrder = [
 
 
 const desiredOrderType = [
+  "text",
   "text",
   "text",
   "text",

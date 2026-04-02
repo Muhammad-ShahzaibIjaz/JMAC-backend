@@ -42,5 +42,7 @@ router.put('/update-institutional-code', verifyToken, verifyUserActive, dataCont
 router.put('/clear-column-data', verifyToken, verifyUserActive, dataController.clearHeaderData);
 router.put('/clear-empty-columns', verifyToken, verifyUserActive, dataController.clearEmptyHeaderColumns);
 router.put('/normalize-null-values', verifyToken, verifyUserActive, dataController.normalizeNullValues);
+router.put('/update-fice-institutional-code', verifyToken, verifyUserActive, dataController.updateFICEInstitutionalCode);
+router.get('/fice-codes', verifyToken, verifyUserActive, dataController.getFICECodes);
 
 module.exports = router;

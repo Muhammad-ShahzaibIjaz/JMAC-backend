@@ -19,6 +19,7 @@ const { evaluateConditions, evaluateBound } = require('../services/evaluation');
 const { createLog } = require("../utils/auditLogger");
 const { getUserName } = require('./userController');
 const fs = require('fs');
+const { extractUniversities } = require('../services/ficeCodeService');
 
 async function deleteSheetData(req, res) {
   const username = await getUserName(req.userId);
@@ -5494,9 +5495,6 @@ async function processGap(templateId, sheetId, maxRowIndex, fnflSums) {
       const gift = values[headerMap['Total_Institutional_Gift']] || 0;
       const directCosts = values[headerMap['Total_Direct_Costs']] || 0;
       const fnflValue = fnflSums[rowIndex] || { rowIndex: parseInt(rowIndex), amount: 0 };
-      if (fnflSums[rowIndex]) {
-        console.log(`Row ${rowIndex} - Direct Costs: ${directCosts}, Gift: ${gift}, FNFL: ${fnflValue.amount}`);
-      }
       
       const gap = calculateGap(directCosts, gift, fnflValue.amount);
 
@@ -7527,6 +7525,42 @@ async function updateInstitutionalCode(req, res) {
   }
 }
 
+async function getFICECodes(req, res) {
+  try {
+    const ficeCodes = await extractUniversities();
+    return res.status(200).json({ ficeCodes });
+  } catch (error) {
+    console.error('Error in getFICECodes:', error);
+    return res.status(500).json({ message: 'Internal server error.', details: error.message });
+  }
+}
+
+
+async function updateFICEInstitutionalCode(req, res) {
+  const { templateId, sheetId, value} = req.body;
+  const username = await getUserName(req.userId);
+  try {
+    if (!templateId || !sheetId || !value) {
+      return res.status(400).json({ message: 'templateId, sheetId, and value are required.' });
+    }
+    const header = await Header.findOne({ where: { templateId, name: 'Institution_FICE_Code' } });
+    if (!header) {
+      return res.status(404).json({ message: 'Header "Institution_FICE_Code" not found for the given templateId.' });
+    }
+    const result = await SheetData.update(
+      { value },
+      { where: { headerId: header.id, sheetId } }
+    );
+    await createLog({ action: 'UPDATE_INSTITUTION_FICE_CODE', username, performedBy: req.userRole, details: `Updated Institution_FICE_Code for templateId: ${templateId}, sheetId: ${sheetId}` });
+    return res.status(200).json({ message: 'Institution FICE code updated successfully.', details: result });
+  } catch (error) {
+    await createLog({ action: 'UPDATE_INSTITUTION_FICE_CODE_FAILED', username, performedBy: req.userRole, details: `Failed to update Institution_FICE_Code for templateId: ${req.body.templateId}, sheetId: ${req.body.sheetId}. Error: ${error.message}` });
+    console.error('Error in updateFICEInstitutionalCode:', error);
+    return res.status(500).json({ message: 'Internal server error.', details: error.message });
+  }
+}
+
+
 module.exports = {
   deleteSheetData, 
   getMatrixPop, 
@@ -7572,5 +7606,7 @@ module.exports = {
   normalizeNullValues,
   evaluateSheetDataAndDelete,
   getAllStatusValues,
-  evaluateSheetDataPreview
+  evaluateSheetDataPreview,
+  getFICECodes,
+  updateFICEInstitutionalCode
 };
