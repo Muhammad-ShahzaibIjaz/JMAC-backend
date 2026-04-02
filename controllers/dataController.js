@@ -7502,24 +7502,65 @@ async function evaluateMatrixAndAssignElement(req, res) {
 }
 
 async function updateInstitutionalCode(req, res) {
-  const { templateId, sheetId, value} = req.body;
+  const { templateId, sheetId, value } = req.body;
   const username = await getUserName(req.userId);
+
   try {
     if (!templateId || !sheetId || !value) {
       return res.status(400).json({ message: 'templateId, sheetId, and value are required.' });
     }
+
+    // 1. Find the Institution_Code header for the given templateId
     const header = await Header.findOne({ where: { templateId, name: 'Institution_Code' } });
     if (!header) {
       return res.status(404).json({ message: 'Header "Institution_Code" not found for the given templateId.' });
     }
+
+    // 2. Get the max rowIndex from SheetData for this sheetId
+    const maxRowData = await SheetData.findOne({
+      where: { sheetId },
+      order: [['rowIndex', 'DESC']],
+      attributes: ['rowIndex'],
+    });
+
+    if (!maxRowData) {
+      return res.status(404).json({ message: 'No rows found for the given sheetId.' });
+    }
+
+    const maxRowIndex = maxRowData.rowIndex;
+
+    // 3. Update all rows (1 through maxRowIndex) for this headerId + sheetId
     const result = await SheetData.update(
       { value },
-      { where: { headerId: header.id, sheetId } }
+      {
+        where: {
+          headerId: header.id,
+          sheetId,
+          rowIndex: { [Op.between]: [1, maxRowIndex] },
+        },
+      }
     );
-    await createLog({ action: 'UPDATE_INSTITUTION_CODE', username, performedBy: req.userRole, details: `Updated Institution_Code for templateId: ${templateId}, sheetId: ${sheetId}` });
-    return res.status(200).json({ message: 'Institution code updated successfully.', details: result });
+
+    await createLog({
+      action: 'UPDATE_INSTITUTION_CODE',
+      username,
+      performedBy: req.userRole,
+      details: `Updated Institution_Code for templateId: ${templateId}, sheetId: ${sheetId}, rows: 1 to ${maxRowIndex}`,
+    });
+
+    return res.status(200).json({
+      message: 'Institution code updated successfully.',
+      rowsAffected: result[0],
+      maxRowIndex,
+    });
+
   } catch (error) {
-    await createLog({ action: 'UPDATE_INSTITUTION_CODE_FAILED', username, performedBy: req.userRole, details: `Failed to update Institution_Code for templateId: ${req.body.templateId}, sheetId: ${req.body.sheetId}. Error: ${error.message}` });
+    await createLog({
+      action: 'UPDATE_INSTITUTION_CODE_FAILED',
+      username,
+      performedBy: req.userRole,
+      details: `Failed to update Institution_Code for templateId: ${req.body.templateId}, sheetId: ${req.body.sheetId}. Error: ${error.message}`,
+    });
     console.error('Error in updateInstitutionalCode:', error);
     return res.status(500).json({ message: 'Internal server error.', details: error.message });
   }
@@ -7547,9 +7588,30 @@ async function updateFICEInstitutionalCode(req, res) {
     if (!header) {
       return res.status(404).json({ message: 'Header "Institution_FICE_Code" not found for the given templateId.' });
     }
+
+    // 2. Get the max rowIndex from SheetData for this sheetId
+    const maxRowData = await SheetData.findOne({
+      where: { sheetId },
+      order: [['rowIndex', 'DESC']],
+      attributes: ['rowIndex'],
+    });
+
+    if (!maxRowData) {
+      return res.status(404).json({ message: 'No rows found for the given sheetId.' });
+    }
+
+    const maxRowIndex = maxRowData.rowIndex;
+
+    // 3. Update all rows (1 through maxRowIndex) for this headerId + sheetId
     const result = await SheetData.update(
       { value },
-      { where: { headerId: header.id, sheetId } }
+      {
+        where: {
+          headerId: header.id,
+          sheetId,
+          rowIndex: { [Op.between]: [1, maxRowIndex] },
+        },
+      }
     );
     await createLog({ action: 'UPDATE_INSTITUTION_FICE_CODE', username, performedBy: req.userRole, details: `Updated Institution_FICE_Code for templateId: ${templateId}, sheetId: ${sheetId}` });
     return res.status(200).json({ message: 'Institution FICE code updated successfully.', details: result });
