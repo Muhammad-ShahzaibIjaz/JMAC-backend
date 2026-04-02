@@ -4257,7 +4257,6 @@ async function calculateAwards(templateId, sheetId, acceptedStatuses, transactio
       }
 
       if (/^FNFL$/.test(cd)) {
-        console.log(`Current CD value: ${cd}, Status: ${status}`); 
         fnflTotal += amt;
         hasFNFLFlag = true;
       }
@@ -5377,9 +5376,6 @@ async function processNeedMet(templateId, sheetId, maxRowIndex, fnflMap) {
       const work = values[headerMap['Total_Work_Aid']] || 0;
 
       const needMet = calculateNeedMet(need, gift, work, fnflAmount);
-      if (fnflAmount > 0) {
-        console.log(`Row ${rowIndex}: Need=${need}, Gift=${gift}, Work=${work}, FNFL=${fnflAmount} => Need Met=${needMet}`);
-      }
       const existing = await SheetData.findOne({
         where: {
           headerId: headerMap['Total_Need_Met'],
