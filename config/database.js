@@ -12,9 +12,13 @@ const sequelize = new Sequelize(
     pool: {
       max: 20,
       min: 5,
-      acquire: 120000,
+      acquire: 30000,
       idle: 30000,
     },
+    dialectOptions: {
+      statement_timeout: 120000,
+      idle_in_transaction_session_timeout: 60000,
+    }
   },
 );
 

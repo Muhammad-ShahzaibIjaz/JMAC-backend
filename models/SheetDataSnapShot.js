@@ -42,6 +42,15 @@ const SheetDataSnapshot = sequelize.define('SheetDataSnapshot', {
   indexes: [
     {
       fields: ['id']
+    },
+    {
+      fields: ['operationLogId'],
+    },
+    {
+      fields: ['headerId', 'sheetId'],
+    },
+    {
+      fields: ['sheetId', 'rowIndex'],
     }
   ]
 });

@@ -1471,88 +1471,129 @@ async function updateRows(req, res) {
 
 async function bulkUpdates(headerId, value, templateId, sheetId) {
   const transaction = await sequelize.transaction();
-  const snapshots = [];
-  try {
 
-    const operationLog = await OperationLog.create({
-      id: uuidv4(),
+  try {
+    // 1. Create operation log
+    const operationLogId = uuidv4();
+    await OperationLog.create({
+      id: operationLogId,
       templateId,
       sheetId,
       operationType: 'BULK_UPDATE',
     }, { transaction });
 
-    const currentRecords = await SheetData.findAll({
-      where: { headerId, sheetId },
-      attributes: ['id', 'rowIndex', 'value'],
-      transaction
-    });
-
-    const maxRowIndexRecord = await SheetData.findOne({
-      where: { sheetId },
-      include: [{
-        model: Header,
-        where: { templateId },
-        attributes: [],
-      }],
-      order: [['rowIndex', 'DESC']],
-      attributes: ['rowIndex'],
-      transaction,
-    });
-    const maxRowIndex = maxRowIndexRecord?.rowIndex ?? 0;
-    const existingRowIndexes = new Set(currentRecords.map(r => r.rowIndex));
-
-    currentRecords.map(record => {
-      snapshots.push({
-        id: uuidv4(),
-        operationLogId: operationLog.id,
-        headerId,
-        sheetId,
-        rowIndex: record.rowIndex,
-        originalValue: record.value,
-        newValue: value
-      });
-    });
-
-    const [affectedRows] = await SheetData.update(
-      { value: value },
-      { where: { headerId: headerId, sheetId: sheetId }, transaction }
+    // 2. Get maxRowIndex via raw SQL
+    const [maxRowResults] = await sequelize.query(
+      `
+      SELECT sd."rowIndex"
+      FROM "SheetData" sd
+      JOIN "Headers" h ON h.id = sd."headerId"
+      WHERE sd."sheetId" = :sheetId
+        AND h."templateId" = :templateId
+      ORDER BY sd."rowIndex" DESC
+      LIMIT 1
+      `,
+      {
+        replacements: { sheetId, templateId },
+        type: QueryTypes.SELECT,
+        transaction,
+      }
     );
 
-    const newRows = [];
-    for (let i = 0; i <= maxRowIndex; i++) {
-      if (i === 0) continue;
-      if (!existingRowIndexes.has(i)) {
-        newRows.push({
-          id: uuidv4(),
-          headerId: headerId,
-          sheetId: sheetId,
-          rowIndex: i,
-          value: value
-        });
+    const maxRowIndex = maxRowResults?.rowIndex ?? 0;
+    if (maxRowIndex === 0) {
+      await transaction.rollback();
+      return { affectedRows: 0 };
+    }
 
-        snapshots.push({
-          id: uuidv4(),
-          operationLogId: operationLog.id,
-          headerId,
-          sheetId,
-          rowIndex: i,
-          originalValue: null,
-          newValue: value
-        });
+    // 3. 🔥 Snapshot inside Postgres with correct changeType per row
+    await sequelize.query(
+      `
+      INSERT INTO "SheetDataSnapshot" (
+        id, "operationLogId", "headerId", "sheetId", "rowIndex",
+        "originalValue", "newValue", "changeType", "createdAt", "updatedAt"
+      )
+
+      -- Existing rows → changeType = 'UPDATE', capture current value before overwrite
+      SELECT
+        gen_random_uuid(),
+        :operationLogId,
+        :headerId,
+        :sheetId,
+        sd."rowIndex",
+        sd.value,       -- originalValue = what's there right now
+        :newValue,
+        'UPDATE',
+        NOW(),
+        NOW()
+      FROM "SheetData" sd
+      WHERE sd."headerId" = :headerId
+        AND sd."sheetId" = :sheetId
+
+      UNION ALL
+
+      -- Missing rows → changeType = 'INSERT', originalValue = NULL
+      SELECT
+        gen_random_uuid(),
+        :operationLogId,
+        :headerId,
+        :sheetId,
+        gs.row_index,
+        NULL,           -- originalValue = null, row didn't exist
+        :newValue,
+        'INSERT',
+        NOW(),
+        NOW()
+      FROM generate_series(0, :maxRowIndex) AS gs(row_index)
+      WHERE NOT EXISTS (
+        SELECT 1 FROM "SheetData" sd
+        WHERE sd."headerId" = :headerId
+          AND sd."sheetId" = :sheetId
+          AND sd."rowIndex" = gs.row_index
+      )
+      `,
+      {
+        replacements: { operationLogId, headerId, sheetId, newValue: value, maxRowIndex },
+        type: QueryTypes.RAW,
+        transaction,
       }
-    }
+    );
 
-    if (newRows.length > 0) {
-      await SheetData.bulkCreate(newRows, { transaction });
-    }
-
-    if (snapshots.length > 0) {
-      await SheetDataSnapshot.bulkCreate(snapshots, { transaction });
-    }
+    // 4. 🔥 Upsert all rows with generate_series — one shot, no JS loop
+    const [countResult] = await sequelize.query(
+      `
+      WITH upsert AS (
+        INSERT INTO "SheetData" (
+          id, "headerId", "sheetId", "rowIndex", value, "createdAt", "updatedAt"
+        )
+        SELECT
+          gen_random_uuid(),
+          :headerId,
+          :sheetId,
+          gs.row_index,
+          :value,
+          NOW(),
+          NOW()
+        FROM generate_series(0, :maxRowIndex) AS gs(row_index)
+        ON CONFLICT ("headerId", "sheetId", "rowIndex")
+        DO UPDATE SET
+          value       = EXCLUDED.value,
+          "updatedAt" = NOW()
+        RETURNING id
+      )
+      SELECT COUNT(*) AS "affectedRows" FROM upsert
+      `,
+      {
+        replacements: { headerId, sheetId, value, maxRowIndex },
+        type: QueryTypes.SELECT,
+        transaction,
+      }
+    );
 
     await transaction.commit();
 
-    return { affectedRows };
+    return { affectedRows: parseInt(countResult.affectedRows) };
+
   } catch (error) {
     await transaction.rollback();
     throw new Error(`Failed to perform bulk update: ${error.message}`);
@@ -6811,172 +6852,177 @@ async function getAcceptanceStatusValues(req, res) {
 
 async function bulkUpdateYesNo(req, res) {
   const { templateId, sheetId } = req.body;
-  const username = await getUserName(req.userId);
-  const transaction = await sequelize.transaction();
-  try {
-    if (!templateId || !sheetId) {
-      return res.status(400).json({ error: 'templateId and sheetId are required' });
-    }
 
-    // 🔹 Step 1: Fetch headers from DB
+  if (!templateId || !sheetId) {
+    return res.status(400).json({ error: 'templateId and sheetId are required' });
+  }
+
+  const username = await getUserName(req.userId);
+
+  try {
     const allHeaders = await Header.findAll({
-      where: { templateId },
+      where: { templateId, name: { [Op.in]: ynFlags } },
+      attributes: ['id', 'name'],
       raw: true,
     });
-
     if (allHeaders.length === 0) {
-      return res.status(404).json({ error: 'No headers found for the template' });
-    }
-
-    // Filter only requested headers that exist in DB
-    const evaluationHeaders = allHeaders.filter(h => ynFlags.includes(h.name));
-    const evaluationHeaderIds = evaluationHeaders.map(h => h.id);
-
-    if (evaluationHeaders.length === 0) {
-      await transaction.rollback();
       return res.status(404).json({ error: 'No matching headers found for Yes/No flags' });
     }
 
-    // 🔹 Step 2: Get max row index
-    const [result] = await sequelize.query(`
-      SELECT MAX("rowIndex") AS "maxRow"
-      FROM "SheetData"
-      WHERE "sheetId" = :sheetId
-        AND "headerId" IN (
-          SELECT "id" FROM "Header" WHERE "templateId" = :templateId
-        )
-    `, {
-      replacements: { sheetId, templateId },
-      type: QueryTypes.SELECT
-    });
+    const headerIdsArray = `{${allHeaders.map(h => h.id).join(',')}}`;
+    const headerIds = allHeaders.map(h => h.id);
 
-    const maxRowIndex = result.maxRow ?? 0;
+    const [maxResult] = await sequelize.query(
+      `SELECT MAX("rowIndex") AS "maxRow" FROM "SheetData" WHERE "sheetId" = :sheetId::uuid`,
+      { replacements: { sheetId }, type: QueryTypes.SELECT }
+    );
 
-    // 🔹 Step 3: Fetch EXISTING data for relevant headers
-    const sheetData = await SheetData.findAll({
-      where: {
-        sheetId,
-        headerId: { [Op.in]: evaluationHeaderIds }
-      },
-      raw: true,
-    });
-
-    // 🔹 Step 4: Organize row-wise (ONLY EXISTING DATA)
-    const existingDataMap = new Map(); // rowIndex -> { headerName -> { value, id, headerId } }
-    sheetData.forEach(entry => {
-      const header = evaluationHeaders.find(h => h.id === entry.headerId);
-      const normalizedName = normalizeKey(header.name);
-      const row = existingDataMap.get(entry.rowIndex) || {};
-      row[normalizedName] = { 
-        value: entry.value, 
-        id: entry.id, 
-        headerId: entry.headerId,
-        exists: true 
-      };
-      existingDataMap.set(entry.rowIndex, row);
-    });
-
-    // 🔹 Step 5: Create operation log
-    const operationLog = await OperationLog.create({
-      templateId,
-      sheetId,
-      operationType: 'BULK_UPDATE',
-    }, { transaction });
-
-    const updates = [];
-    const inserts = [];
-    const snapshots = [];
-
-    // 🔹 Step 6: Iterate ALL rows (1 to maxRowIndex) and handle both existing and missing data
-    for (let rowIndex = 1; rowIndex <= maxRowIndex; rowIndex++) {
-      const rowData = existingDataMap.get(rowIndex) || {};
-
-      for (const headerObj of evaluationHeaders) {
-        const normalized = normalizeKey(headerObj.name);
-        const existingEntry = rowData[normalized];
-        
-        let currentValue = existingEntry?.value ?? null;
-        const newValue = (!currentValue || (currentValue !== "Yes" && currentValue !== "No")) ? "No" : currentValue;
-
-        // Skip if value is already correct
-        if (currentValue === newValue) continue;
-
-        // Prepare snapshot
-        snapshots.push({
-          operationLogId: operationLog.id,
-          headerId: headerObj.id,
-          sheetId,
-          rowIndex,
-          originalValue: currentValue,
-          newValue,
-          changeType: existingEntry ? 'UPDATE' : 'INSERT',
-        });
-
-        // Prepare data for bulk operation
-        if (existingEntry) {
-          // UPDATE existing record
-          updates.push({
-            id: existingEntry.id,
-            value: newValue
-          });
-        } else {
-          // INSERT new record
-          inserts.push({
-            id: uuidv4(), // Make sure to import uuidv4
-            headerId: headerObj.id,
-            sheetId,
-            rowIndex,
-            value: newValue
-          });
-        }
-      }
+    const maxRowIndex = maxResult?.maxRow ?? 0;
+    if (maxRowIndex === 0) {
+      return res.status(404).json({ error: 'No rows found for the given sheetId' });
     }
 
-    // 🔹 Step 7: Execute all database operations
-    if (updates.length > 0) {
-      // Bulk update existing records
-      await Promise.all(
-        updates.map(update =>
-          SheetData.update(
-            { value: update.value },
+    const operationLog = await OperationLog.create({
+      templateId, sheetId, operationType: 'BULK_UPDATE',
+    });
+    const operationLogId = operationLog.id;
+
+    // ─── UPDATE dirty existing rows ────────────────────────────────────────────
+    const transaction = await sequelize.transaction();
+    let updateCount = 0;
+    try {
+      const [updateResult] = await sequelize.query(
+        `
+        WITH rows_to_update AS (
+          SELECT id, "headerId", "sheetId", "rowIndex", value
+          FROM "SheetData"
+          WHERE "sheetId" = :sheetId::uuid
+            AND "headerId" = ANY(:headerIdsArray::uuid[])
+            AND (value IS NULL OR value NOT IN ('Yes', 'No', 'Y', 'N'))
+        ),
+        snapshot_update AS (
+          INSERT INTO "SheetDataSnapshot" (
+            id, "operationLogId", "headerId", "sheetId", "rowIndex",
+            "originalValue", "newValue", "changeType", "createdAt", "updatedAt"
+          )
+          SELECT
+            gen_random_uuid(), :operationLogId::uuid,
+            "headerId", "sheetId", "rowIndex",
+            value, 'No',
+            'UPDATE'::"enum_SheetDataSnapshot_changeType",
+            NOW(), NOW()
+          FROM rows_to_update
+        ),
+        do_update AS (
+          UPDATE "SheetData"
+          SET value = 'No', "updatedAt" = NOW()
+          WHERE id IN (SELECT id FROM rows_to_update)
+          RETURNING id
+        )
+        SELECT COUNT(*) AS updated FROM do_update
+        `,
+        {
+          replacements: { sheetId, headerIdsArray, operationLogId },
+          type: QueryTypes.SELECT,
+          transaction,
+        }
+      );
+      await transaction.commit();
+      updateCount = parseInt(updateResult.updated);
+    } catch (e) {
+      await transaction.rollback().catch(() => {});
+      throw e;
+    }
+
+    // ─── INSERT missing rows — per header, parallel ────────────────────────────
+    const HEADER_CONCURRENCY = 15; // 53 headers ÷ 15 = 4 rounds
+    let totalInserted = 0;
+
+    for (let i = 0; i < headerIds.length; i += HEADER_CONCURRENCY) {
+      const group = headerIds.slice(i, i + HEADER_CONCURRENCY);
+
+      const results = await Promise.all(
+        group.map(headerId =>
+          sequelize.query(
+            `
+            WITH
+            existing AS (
+              SELECT "rowIndex"
+              FROM "SheetData"
+              WHERE "sheetId"  = :sheetId::uuid
+                AND "headerId" = :headerId::uuid
+            ),
+            missing AS (
+              SELECT gs.row_index
+              FROM generate_series(0, :maxRowIndex) AS gs(row_index)
+              WHERE NOT EXISTS (
+                SELECT 1 FROM existing e WHERE e."rowIndex" = gs.row_index
+              )
+            ),
+            snapshot_insert AS (
+              INSERT INTO "SheetDataSnapshot" (
+                id, "operationLogId", "headerId", "sheetId", "rowIndex",
+                "originalValue", "newValue", "changeType", "createdAt", "updatedAt"
+              )
+              SELECT
+                gen_random_uuid(), :operationLogId::uuid,
+                :headerId::uuid, :sheetId::uuid, row_index,
+                NULL, 'No',
+                'INSERT'::"enum_SheetDataSnapshot_changeType",
+                NOW(), NOW()
+              FROM missing
+            ),
+            do_insert AS (
+              INSERT INTO "SheetData" (
+                id, "headerId", "sheetId", "rowIndex", value, "createdAt", "updatedAt"
+              )
+              SELECT
+                gen_random_uuid(),
+                :headerId::uuid, :sheetId::uuid,
+                row_index, 'No',
+                NOW(), NOW()
+              FROM missing
+              ON CONFLICT ("headerId", "sheetId", "rowIndex") DO NOTHING
+              RETURNING id
+            )
+            SELECT COUNT(*) AS inserted FROM do_insert
+            `,
             {
-              where: { id: update.id },
-              transaction
+              replacements: { sheetId, headerId, operationLogId, maxRowIndex },
+              type: QueryTypes.SELECT,
             }
           )
         )
       );
+
+      totalInserted += results.reduce((sum, [r]) => sum + parseInt(r.inserted), 0);
     }
 
-    if (inserts.length > 0) {
-      // Bulk insert new records
-      await SheetData.bulkCreate(inserts, { transaction, updateOnDuplicate: ["value", "updatedAt"] });
-    }
+    createLog({
+      action: 'BULK_UPDATE_YES_NO',
+      username,
+      performedBy: req.userRole,
+      details: `Bulk updated Yes/No flags for templateId: ${templateId}, sheetId: ${sheetId}`,
+    }).catch(console.error);
 
-    if (snapshots.length > 0) {
-      // Bulk insert snapshots
-      await SheetDataSnapshot.bulkCreate(snapshots, { transaction });
-    }
-
-    await transaction.commit();
-    await createLog({ action: 'BULK_UPDATE_YES_NO', username, performedBy: req.userRole, details: `Bulk updated Yes/No flags for templateId: ${templateId}, sheetId: ${sheetId}` });
     return res.status(200).json({
       message: 'Bulk update completed successfully',
       stats: {
-        updated: updates.length,
-        inserted: inserts.length,
-        totalProcessed: maxRowIndex
-      }
+        updated: updateCount,
+        inserted: totalInserted,
+        totalProcessed: maxRowIndex,
+      },
     });
 
   } catch (error) {
-    await transaction.rollback();
-    await createLog({ action: 'BULK_UPDATE_YES_NO_FAILED', username, performedBy: req.userRole, details: `Failed to bulk update Yes/No flags for templateId: ${req.body.templateId}, sheetId: ${req.body.sheetId}. Error: ${error.message}` });
+    createLog({
+      action: 'BULK_UPDATE_YES_NO_FAILED',
+      username,
+      performedBy: req.userRole,
+      details: `Failed: templateId ${req.body.templateId}, error: ${error.message}`,
+    }).catch(console.error);
     console.error('Error in bulkUpdateYesNo:', error);
-    res.status(500).json({
-      error: 'Internal server error',
-      details: error.message,
-    });
+    return res.status(500).json({ error: 'Internal server error', details: error.message });
   }
 }
 
@@ -7502,66 +7548,77 @@ async function evaluateMatrixAndAssignElement(req, res) {
 
 async function updateInstitutionalCode(req, res) {
   const { templateId, sheetId, value } = req.body;
+
+  if (!templateId || !sheetId || !value) {
+    return res.status(400).json({ message: 'templateId, sheetId, and value are required.' });
+  }
+
   const username = await getUserName(req.userId);
 
   try {
-    if (!templateId || !sheetId || !value) {
-      return res.status(400).json({ message: 'templateId, sheetId, and value are required.' });
-    }
-
-    // 1. Find the Institution_Code header
-    const header = await Header.findOne({ where: { templateId, name: 'Institution_Code' } });
+    const header = await Header.findOne({
+      where: { templateId, name: 'Institution_Code' },
+      attributes: ['id'],
+    });
     if (!header) {
       return res.status(404).json({ message: 'Header "Institution_Code" not found for the given templateId.' });
     }
 
-    // 2. Get max rowIndex from SheetData for this sheetId (across any header)
     const maxRowData = await SheetData.findOne({
       where: { sheetId },
       order: [['rowIndex', 'DESC']],
       attributes: ['rowIndex'],
     });
-
     if (!maxRowData) {
       return res.status(404).json({ message: 'No rows found for the given sheetId.' });
     }
 
     const maxRowIndex = maxRowData.rowIndex;
-    console.log(`Max row index for sheetId ${sheetId}: ${maxRowIndex}`);
 
-    // 3. Build rows for all rowIndex 1 to maxRowIndex
-    const rows = Array.from({ length: maxRowIndex }, (_, i) => ({
-      headerId: header.id,
-      sheetId,
-      rowIndex: i + 1,
-      value,
-    }));
+    await sequelize.query(
+      `
+      INSERT INTO "SheetData" (id, "headerId", "sheetId", "rowIndex", value, "createdAt", "updatedAt")
+      SELECT
+        gen_random_uuid(),
+        :headerId,
+        :sheetId,
+        gs.row_index,
+        :value,
+        NOW(),
+        NOW()
+      FROM generate_series(0, :maxRowIndex) AS gs(row_index)
+      ON CONFLICT ("headerId", "sheetId", "rowIndex")
+      DO UPDATE SET
+        value       = EXCLUDED.value,
+        "updatedAt" = NOW()
+      `,
+      {
+        replacements: { headerId: header.id, sheetId, value, maxRowIndex },
+        type: QueryTypes.RAW,
+      }
+    );
 
-    // 4. Bulk upsert — insert if not exists, update value if exists
-    const result = await SheetData.bulkCreate(rows, {
-      updateOnDuplicate: ['value', 'updatedAt'],  // unique index: [headerId, rowIndex, sheetId]
-    });
-
-    await createLog({
+    createLog({
       action: 'UPDATE_INSTITUTION_CODE',
       username,
       performedBy: req.userRole,
       details: `Upserted Institution_Code for templateId: ${templateId}, sheetId: ${sheetId}, rows: 1 to ${maxRowIndex}`,
-    });
+    }).catch(console.error);
 
     return res.status(200).json({
       message: 'Institution code updated successfully.',
-      rowsAffected: result.length,
+      rowsAffected: maxRowIndex,
       maxRowIndex,
     });
 
   } catch (error) {
-    await createLog({
+    createLog({
       action: 'UPDATE_INSTITUTION_CODE_FAILED',
       username,
       performedBy: req.userRole,
       details: `Failed to update Institution_Code for templateId: ${req.body.templateId}, sheetId: ${req.body.sheetId}. Error: ${error.message}`,
-    });
+    }).catch(console.error);
+
     console.error('Error in updateInstitutionalCode:', error);
     return res.status(500).json({ message: 'Internal server error.', details: error.message });
   }
@@ -7581,14 +7638,17 @@ async function getFICECodes(req, res) {
 async function updateFICEInstitutionalCode(req, res) {
   const { templateId, sheetId, value } = req.body;
   const username = await getUserName(req.userId);
-
+  
   try {
     if (!templateId || !sheetId || !value) {
       return res.status(400).json({ message: 'templateId, sheetId, and value are required.' });
     }
 
     // 1. Find the Institution_FICE_Code header
-    const header = await Header.findOne({ where: { templateId, name: 'Institution_FICE_Code' } });
+    const header = await Header.findOne({ 
+      where: { templateId, name: 'Institution_FICE_Code' },
+      attributes: ['id'],
+    });
     if (!header) {
       return res.status(404).json({ message: 'Header "Institution_FICE_Code" not found for the given templateId.' });
     }
@@ -7606,19 +7666,33 @@ async function updateFICEInstitutionalCode(req, res) {
 
     const maxRowIndex = maxRowData.rowIndex;
 
-    // 3. Build rows for all rowIndex 1 to maxRowIndex
-    const rows = Array.from({ length: maxRowIndex }, (_, i) => ({
-      headerId: header.id,
-      sheetId,
-      rowIndex: i + 1,
-      value,
-    }));
-
-    // 4. Bulk upsert — insert if not exists, update value if exists
-    const result = await SheetData.bulkCreate(rows, {
-      updateOnDuplicate: ['value', 'updatedAt'],
-    });
-    console.log(`bulkCreate result length: ${result.length}`);
+    await sequelize.query(
+      `
+      INSERT INTO "SheetData" (id, "headerId", "sheetId", "rowIndex", value, "createdAt", "updatedAt")
+      SELECT
+        gen_random_uuid(),
+        :headerId,
+        :sheetId,
+        gs.row_index,
+        :value,
+        NOW(),
+        NOW()
+      FROM generate_series(0, :maxRowIndex) AS gs(row_index)
+      ON CONFLICT ("headerId", "sheetId", "rowIndex")
+      DO UPDATE SET
+        value      = EXCLUDED.value,
+        "updatedAt" = NOW()
+      `,
+      {
+        replacements: {
+          headerId: header.id,
+          sheetId,
+          value,
+          maxRowIndex,
+        },
+        type: QueryTypes.RAW,
+      }
+    );
 
     await createLog({
       action: 'UPDATE_INSTITUTION_FICE_CODE',
@@ -7629,7 +7703,6 @@ async function updateFICEInstitutionalCode(req, res) {
 
     return res.status(200).json({
       message: 'Institution FICE code updated successfully.',
-      rowsAffected: result.length,
       maxRowIndex,
     });
 

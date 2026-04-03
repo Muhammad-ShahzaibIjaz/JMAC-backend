@@ -35,7 +35,12 @@ const SheetData = sequelize.define(
         fields: ['headerId', 'rowIndex', 'sheetId'],
       },
       {
-        // Add this for sorting performance
+        fields: ['sheetId', 'headerId'],        // ← ADD: for UPDATE path
+      },
+      {
+        fields: ['headerId', 'sheetId', 'rowIndex'],  // ← ADD: for INSERT LEFT JOIN
+      },
+      {
         fields: ['sheetId', 'headerId', 'value'],
       },
     ],
