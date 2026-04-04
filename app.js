@@ -45,9 +45,6 @@ const ipedRoutes = require("./routes/ipedRoutes");
 
 
 
-
-
-
 app.use("/api", ipedRoutes);
 app.use("/api", campusRoutes);
 app.use("/api", faafRoute);
@@ -71,5 +68,8 @@ app.use("/api", populationStatusRoutes);
 app.use("/api", treeRoutes);
 app.use("/api", userRoutes);
 app.use("/api", projectionRoutes);
+
+
+
 
 module.exports = app;

@@ -7,7 +7,6 @@ const {generateExcelFile} = require('../services/SheetService');
 const { processFiles } = require('./fileController');
 const { getMapHeaders, getHeaderID } = require('./headerController');
 const { v4: uuidv4 } = require('uuid');
-const { processAddress } = require('../services/addressService');
 const math = require('mathjs');
 const { OperationLog, SheetDataSnapshot } = require('../models');
 const { convertScore } = require('../services/conversion');
@@ -20,6 +19,7 @@ const { createLog } = require("../utils/auditLogger");
 const { getUserName } = require('./userController');
 const fs = require('fs');
 const { extractUniversities } = require('../services/ficeCodeService');
+const { processAddress, flushAddressWrites, validateAndCleanAddress } = require('../utils/addressHelper');
 
 async function deleteSheetData(req, res) {
   const username = await getUserName(req.userId);
@@ -2197,212 +2197,244 @@ const addRow = async (req, res) => {
   }
 };
 
-// Helper function to process API calls in batches with retries
-const processBatch = async (batch, maxRetries = 3) => {
-  const results = [];
-  for (const row of batch) {
-    let retries = 0;
-    let success = false;
-    let result = null;
-    let error = null;
 
-    while (retries < maxRetries && !success) {
-      try {
-        // Call addressAPI with individual parameters
-        result = await processAddress(row.streetAddress, row.city, row.state);
-        // Validate response: expect { ZipCode: string }
-        if (result && result !== "") {
-          success = true;
-        } else {
-          throw new Error('Invalid API response: Missing or invalid zip code');
-        }
-      } catch (err) {
-        retries++;
-        error = err;
-        // Exponential backoff: wait 100ms * 2^retries
-        if (retries < maxRetries) {
-          await new Promise((resolve) => setTimeout(resolve, 100 * Math.pow(2, retries)));
-        }
+// ─── Configuration ────────────────────────────────────────────────────────────
+const BATCH_SIZE        = 20; // Addresses per parallel batch
+const CONCURRENT_BATCHES = 5; // Batches running at the same time (20×5 = 100 concurrent)
+
+// ─── Process a single row with retries ───────────────────────────────────────
+async function processRow(row, maxRetries = 3) {
+  let lastError = null;
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      // row.streetAddress/city/state are already cleaned by validateAndCleanAddress
+      const result = await processAddress(row.streetAddress, row.city, row.state);
+
+      if (result && result.trim() !== '') {
+        return { rowIndex: row.rowIndex, zipCode: result }; // result is a plain string e.g. "627011234"
+      }
+
+      throw new Error('Missing or invalid zip code in API response');
+    } catch (err) {
+      lastError = err;
+      if (attempt < maxRetries - 1) {
+        await new Promise((r) => setTimeout(r, 200 * Math.pow(2, attempt))); // 200ms, 400ms, 800ms
       }
     }
-
-    if (success) {
-      results.push({
-        rowIndex: row.rowIndex,
-        zipCode: result.ZipCode,
-      });
-    } else {
-      console.error(`Failed to fetch zip code for row ${row.rowIndex} after ${maxRetries} retries:`, error);
-      results.push({
-        rowIndex: row.rowIndex,
-        error: error.message || 'Failed to fetch zip code',
-      });
-    }
   }
-  return results;
-};
 
+  console.error(`Failed to fetch zip code for row ${row.rowIndex} after ${maxRetries} retries:`, lastError?.message);
+  return { rowIndex: row.rowIndex, error: lastError?.message || 'Failed to fetch zip code' };
+}
+
+// ─── Process a batch of rows fully in parallel ────────────────────────────────
+async function processBatch(batch) {
+  const results = await Promise.allSettled(batch.map((row) => processRow(row)));
+  return results.map((outcome, idx) => {
+    if (outcome.status === 'fulfilled') return outcome.value;
+    return { rowIndex: batch[idx].rowIndex, error: outcome.reason?.message || 'Unexpected error' };
+  });
+}
+
+// ─── Run multiple batches concurrently with a concurrency limit ───────────────
+async function processAllRows(validRows) {
+  const allResults = [];
+  const totalBatches = Math.ceil(validRows.length / BATCH_SIZE);
+
+  for (let i = 0; i < totalBatches; i += CONCURRENT_BATCHES) {
+    const concurrentSlice = [];
+
+    for (let j = 0; j < CONCURRENT_BATCHES && i + j < totalBatches; j++) {
+      const batchIndex = i + j;
+      const start = batchIndex * BATCH_SIZE;
+      const batch = validRows.slice(start, start + BATCH_SIZE);
+      concurrentSlice.push(processBatch(batch));
+      console.log(`Queued batch ${batchIndex + 1}/${totalBatches} (rows ${start}–${start + batch.length - 1})`);
+    }
+
+    const groupResults = await Promise.all(concurrentSlice);
+    groupResults.forEach((batchResult) => allResults.push(...batchResult));
+    console.log(`Completed batches ${i + 1}–${Math.min(i + CONCURRENT_BATCHES, totalBatches)} of ${totalBatches}`);
+  }
+
+  return allResults;
+}
+
+// ─── Main Controller ──────────────────────────────────────────────────────────
 const findZipCodes = async (req, res) => {
   const username = await getUserName(req.userId);
   const transaction = await sequelize.transaction();
+
   try {
     const { templateId, sheetId, streetAddress, city, state, zipcode } = req.body;
-    
-    // Validate request body
+
     if (!templateId || !sheetId || !streetAddress || !city || !state || !zipcode) {
       await transaction.rollback();
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
-    const operationLog = await OperationLog.create({
-      id: uuidv4(),
-      templateId,
-      sheetId,
-      operationType: 'ZIPCODE'
-    }, { transaction });
+    const operationLog = await OperationLog.create(
+      { id: uuidv4(), templateId, sheetId, operationType: 'ZIPCODE' },
+      { transaction }
+    );
 
-    // Find header IDs
-    const streetAddressHeader = await Header.findOne({
-      where: { templateId, name: streetAddress }, transaction
-    });
-    const cityHeader = await Header.findOne({
-      where: { templateId, name: city }, transaction
-    });
-    const stateHeader = await Header.findOne({
-      where: { templateId, name: state }, transaction
-    });
-    const zipcodeHeader = await Header.findOne({
-      where: { templateId, name: zipcode }, transaction
-    });
+    // ── Find header IDs in parallel ──────────────────────────────────────────
+    const [streetAddressHeader, cityHeader, stateHeader, zipcodeHeader] = await Promise.all([
+      Header.findOne({ where: { templateId, name: streetAddress }, transaction }),
+      Header.findOne({ where: { templateId, name: city },          transaction }),
+      Header.findOne({ where: { templateId, name: state },         transaction }),
+      Header.findOne({ where: { templateId, name: zipcode },       transaction }),
+    ]);
 
     if (!streetAddressHeader || !cityHeader || !stateHeader || !zipcodeHeader) {
       await transaction.rollback();
       return res.status(404).json({ error: 'One or more headers not found' });
     }
 
-    // Fetch data for all relevant headers
+    // ── Fetch all row data in one query ──────────────────────────────────────
     const data = await SheetData.findAll({
       where: {
-        headerId: {
-          [Op.in]: [streetAddressHeader.id, cityHeader.id, stateHeader.id, zipcodeHeader.id],
-        },
+        headerId: { [Op.in]: [streetAddressHeader.id, cityHeader.id, stateHeader.id, zipcodeHeader.id] },
         sheetId,
       },
+      raw: true, // Skips Sequelize model instantiation — faster for large datasets
     });
 
-    // Group data by rowIndex
+    // ── Group by rowIndex ────────────────────────────────────────────────────
     const rows = {};
     const originalZipcodes = new Map();
-    data.forEach((entry) => {
-      const rowIndex = entry.rowIndex;
-      if (!rows[rowIndex]) {
-        rows[rowIndex] = {};
-      }
-      if (entry.headerId === streetAddressHeader.id) {
-        rows[rowIndex].streetAddress = entry.value;
-      } else if (entry.headerId === cityHeader.id) {
-        rows[rowIndex].city = entry.value;
-      } else if (entry.headerId === stateHeader.id) {
-        rows[rowIndex].state = entry.value;
-      } else if (entry.headerId === zipcodeHeader.id) {
-        rows[rowIndex].zipcode = entry.value;
-        originalZipcodes.set(rowIndex, entry.value);
-      }
-    });
 
-    // Prepare valid rows for processing
-    const validRows = [];
+    for (const entry of data) {
+      const ri = entry.rowIndex;
+      if (!rows[ri]) rows[ri] = {};
+      if      (entry.headerId === streetAddressHeader.id) rows[ri].streetAddress = entry.value;
+      else if (entry.headerId === cityHeader.id)          rows[ri].city          = entry.value;
+      else if (entry.headerId === stateHeader.id)         rows[ri].state         = entry.value;
+      else if (entry.headerId === zipcodeHeader.id) {
+        rows[ri].zipcode = entry.value;
+        originalZipcodes.set(ri, entry.value);
+      }
+    }
+
+    // ── Validate and clean each row before sending to APIs ───────────────────
+    // This is where we catch:
+    //   - Literal "NULL" strings stored in the DB
+    //   - ZIP codes stored in the street address column
+    //   - Full state names in the city field (e.g. "Marion Indiana")
+    //   - Empty / whitespace-only values
+    const validRows   = [];
     const skippedRows = [];
-    for (const rowIndex in rows) {
-      const row = rows[rowIndex];
-      // Skip rows with missing streetAddress, city, or state, or if zipcode already exists
-      if (
-        !row.streetAddress ||
-        !row.city ||
-        !row.state 
-      ) {
-        skippedRows.push(parseInt(rowIndex));
+    const skippedDetails = []; // for logging/debugging
+
+    for (const [rowIndexStr, row] of Object.entries(rows)) {
+      const rowIndex = parseInt(rowIndexStr);
+      const cleaned = validateAndCleanAddress(row.streetAddress, row.city, row.state);
+
+      if (!cleaned.valid) {
+        skippedRows.push(rowIndex);
+        skippedDetails.push({ rowIndex, reason: cleaned.reason });
         continue;
       }
+
       validRows.push({
-        rowIndex: parseInt(rowIndex),
-        streetAddress: row.streetAddress,
-        city: row.city,
-        state: row.state,
-        originalZipcode: originalZipcodes.get(parseInt(rowIndex)) || null
+        rowIndex,
+        streetAddress:   cleaned.streetAddress,
+        city:            cleaned.city,
+        state:           cleaned.state,
+        originalZipcode: originalZipcodes.get(rowIndex) || null,
       });
     }
 
-    // Process rows in batches of 5
-    const BATCH_SIZE = 5;
-    const updates = [];
+    if (skippedDetails.length > 0) {
+      console.log(`Skipped ${skippedDetails.length} rows with bad data:`);
+      skippedDetails.slice(0, 20).forEach(({ rowIndex, reason }) => {
+        console.log(`  Row ${rowIndex}: ${reason}`);
+      });
+      if (skippedDetails.length > 20) {
+        console.log(`  ... and ${skippedDetails.length - 20} more`);
+      }
+    }
+
+    console.log(`Starting zip code lookup: ${validRows.length} valid rows, ${skippedRows.length} skipped`);
+
+    // ── Process all valid rows with parallel batching ─────────────────────────
+    const allResults = await processAllRows(validRows);
+
+    // Flush any pending file cache writes before we return
+    await flushAddressWrites();
+
+    // ── Build DB updates and snapshots ────────────────────────────────────────
+    const updates   = [];
     const snapshots = [];
-    const errors = [];
-    for (let i = 0; i < validRows.length; i += BATCH_SIZE) {
-      const batch = validRows.slice(i, i + BATCH_SIZE);
-      console.log(`Processing batch ${i / BATCH_SIZE + 1} of ${Math.ceil(validRows.length / BATCH_SIZE)}`);
-      const batchResults = await processBatch(batch);
-      batchResults.forEach((result) => {
-        if (result.zipCode) {
-          const row = validRows.find(r => r.rowIndex === result.rowIndex);
-          const newZipCode = result.zipCode;
-          const originalZipCode = row.originalZipcode;
+    const errors    = [];
 
-          if (originalZipCode !== newZipCode) {
-            updates.push({
-              id: uuidv4(),
-              headerId: zipcodeHeader.id,
-              sheetId,
-              rowIndex: result.rowIndex,
-              value: result.zipCode,
-            });
+    for (const result of allResults) {
+      if (result.zipCode) {
+        const row = validRows.find((r) => r.rowIndex === result.rowIndex);
+        const newZipCode      = result.zipCode;
+        const originalZipCode = row?.originalZipcode || null;
 
-            snapshots.push({
-              id: uuidv4(),
-              operationLogId: operationLog.id,
-              headerId: zipcodeHeader.id,
-              sheetId,
-              rowIndex: result.rowIndex,
-              originalValue: originalZipCode,
-              newValue: newZipCode,
-              changeType: originalZipCode ? 'UPDATE' : 'INSERT'
-            });
-
-          }
-        } else {
-          errors.push({
+        if (originalZipCode !== newZipCode) {
+          updates.push({
+            id:       uuidv4(),
+            headerId: zipcodeHeader.id,
+            sheetId,
             rowIndex: result.rowIndex,
-            error: result.error,
+            value:    newZipCode,
+          });
+          snapshots.push({
+            id:             uuidv4(),
+            operationLogId: operationLog.id,
+            headerId:       zipcodeHeader.id,
+            sheetId,
+            rowIndex:       result.rowIndex,
+            originalValue:  originalZipCode,
+            newValue:       newZipCode,
+            changeType:     originalZipCode ? 'UPDATE' : 'INSERT',
           });
         }
-      });
+      } else {
+        errors.push({ rowIndex: result.rowIndex, error: result.error });
+      }
     }
 
-    // Apply updates to SheetData table
+    // ── Bulk DB writes ────────────────────────────────────────────────────────
     if (updates.length > 0) {
-
       if (snapshots.length > 0) {
         await SheetDataSnapshot.bulkCreate(snapshots, { transaction });
       }
-
       await SheetData.bulkCreate(updates, {
-        updateOnDuplicate: ['value'], // Update value if rowIndex and headerId already exist
-        transaction
+        updateOnDuplicate: ['value'],
+        transaction,
       });
     }
 
     await transaction.commit();
-    await createLog({ action: 'ZIPCODE', username: username, performedBy: req.userRole, details: `Processed zip codes for templateId: ${templateId}, sheetId: ${sheetId}. Total updated rows: ${updates.length}, skipped rows: ${skippedRows.length}` });
-    return res.status(200).json({
-      message: 'Zip codes processed successfully',
-      updatedRows: updates.length,
-      skippedRows: skippedRows.length,
-      skippedRowIndices: skippedRows,
-      errors: errors.length > 0 ? errors : undefined,
+
+    await createLog({
+      action:      'ZIPCODE',
+      username,
+      performedBy: req.userRole,
+      details:     `Processed zip codes for templateId: ${templateId}, sheetId: ${sheetId}. Updated: ${updates.length}, skipped (bad data): ${skippedRows.length}, API errors: ${errors.length}`,
     });
+
+    return res.status(200).json({
+      message:          'Zip codes processed successfully',
+      updatedRows:      updates.length,
+      skippedRows:      skippedRows.length,
+      skippedRowIndices: skippedRows,
+      errors:           errors.length > 0 ? errors : undefined,
+    });
+
   } catch (error) {
     await transaction.rollback();
-    await createLog({ action: 'ZIPCODE_FAILED', username: username, performedBy: req.userRole, details: `Failed to process zip codes for templateId: ${req.body.templateId}, sheetId: ${req.body.sheetId}. Error: ${error.message}` });
+    await createLog({
+      action:      'ZIPCODE_FAILED',
+      username,
+      performedBy: req.userRole,
+      details:     `Failed to process zip codes for templateId: ${req.body.templateId}, sheetId: ${req.body.sheetId}. Error: ${error.message}`,
+    });
     console.error('Error finding zip codes:', error);
     return res.status(500).json({ error: 'Failed to find zip codes' });
   }

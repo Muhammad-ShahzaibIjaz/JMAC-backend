@@ -16,4 +16,5 @@ module.exports = {
   ENVIRONMENT: process.env.CURRENT_ENVIRONMENT || "dev",
   DB_PATH: process.env.DB_PATH,
   DB_CONNECTION_VALUE: process.env.DB_CONNECTION_VALUE || "DRIVER={Microsoft Access Driver (*.mdb, *.accdb)}",
+  GOOGLE_MAPS_API_KEY: process.env.GOOGLE_MAPS_API_KEY,
 };
