@@ -40,3 +40,9 @@ logs/
 # Dependency lock files (optional, include if you want to commit them)
 package-lock.json
 # yarn.lock
+
+
+
+services/addresses.txt
+uploads/
+exports/

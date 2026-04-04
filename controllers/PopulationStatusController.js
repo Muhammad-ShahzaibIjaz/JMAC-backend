@@ -2355,19 +2355,35 @@ function sum(arr) {
   return arr.reduce((a, b) => a + b, 0);
 }
 
-async function getStudentRows(sheetId, rowIndices) {
+async function getHeaderMap(templateId) {
+  const headers = await Header.findAll({
+    where: { templateId },
+    attributes: ['id', 'name'],
+    raw: true,
+  });
+
+  return headers.reduce((map, h) => {
+    map[h.id] = h.name;
+    return map;
+  }, {});
+}
+
+async function getStudentRows(sheetId, rowIndices, headerMap) {
   const sheetData = await SheetData.findAll({
     where: {
       sheetId,
       rowIndex: { [Op.in]: rowIndices },
     },
-    raw: true, // plain objects, less memory overhead
+    raw: true,
   });
 
   const students = {};
   sheetData.forEach(sd => {
     if (!students[sd.rowIndex]) students[sd.rowIndex] = {};
-    students[sd.rowIndex][sd.headerId] = sd.value;
+    const colName = headerMap[sd.headerId];
+    if (colName) {
+      students[sd.rowIndex][colName] = sd.value;
+    }
   });
 
   return Object.entries(students).map(([rowIndex, values]) => ({
@@ -2379,26 +2395,24 @@ async function getStudentRows(sheetId, rowIndices) {
 
 
 async function calculatePopulationStats(templateId, sheetId) {
-  // Step 1: Fetch consolidated population rules
   const populationRules = await PopulationRule.findAll({
     where: { templateId, populationType: 'consolidated' },
     attributes: ['id', 'ruleName'],
     raw: true,
   });
 
-  // Step 2: Process each rule in parallel
+  const headerMap = await getHeaderMap(templateId);
+
   const resultsArray = await Promise.all(
     populationRules.map(async rule => {
       const { conditions, headers } = await getRuleConditionsAndHeaders(rule.id);
 
-      // Step 3: Get matching row indices
       const matchingRowIndices = await applyPopulationRule(templateId, sheetId, conditions, headers);
       if (!matchingRowIndices || matchingRowIndices.length === 0) {
         return { ruleName: rule.ruleName, stats: { admittedCount: 0, enrolledCount: 0, netconfirmedCount: 0, avgNetRevenue: 0, avgDiscountRate: 0, avgNacuboRate: 0, totalNetCharges: 0, totalFundedGift: 0, totalUnfundedGift: 0 } };
       }
 
-      // Step 4: Fetch student rows
-      const studentRows = await getStudentRows(sheetId, matchingRowIndices);
+      const studentRows = await getStudentRows(sheetId, matchingRowIndices, headerMap);
 
       // Step 5: Compute metrics
       const admittedCount = studentRows.filter(s => {
@@ -2413,7 +2427,7 @@ async function calculatePopulationStats(templateId, sheetId) {
 
       const netconfirmedCount = studentRows.filter(s => {
         const val = s.values['Admissions_Funnel_Stage'];
-        return val && ['deposit', 'matriculated'].includes(val.toLowerCase());
+          return val && ['deposit', 'matriculated'].includes(val.toLowerCase());
       }).length;
 
       const avgNetRevenue = average(studentRows.map(s => parseFloat(s.values['Net_Tuition_Revenue'] || 0)));
@@ -2422,7 +2436,6 @@ async function calculatePopulationStats(templateId, sheetId) {
       const totalNetCharges = sum(studentRows.map(s => parseFloat(s.values['Net_Charges_To_Student'] || 0)));
       const totalFundedGift = sum(studentRows.map(s => parseFloat(s.values['Total_Institutional_Gift'] || 0)));
       const totalUnfundedGift = sum(studentRows.map(s => parseFloat(s.values['Total_Institutional_Unfunded_Gift'] || 0)));
-
       return {
         ruleName: rule.ruleName,
         stats: {
