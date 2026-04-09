@@ -5418,125 +5418,118 @@ async function processNeed(templateId, sheetId, maxRowIndex) {
   }
 }
 
-async function processNeedMet(templateId, sheetId, maxRowIndex, fnflMap) {
-  console.log('Processing Need_Met...');
-  const transaction = await sequelize.transaction();
-  try {
-    // Step 1: Fetch headers
-    const headers = await Header.findAll({
-      where: {
-        templateId,
-        name: ['Student_Financial_Need', 'Total_Gift_Aid', 'Total_Work_Aid', 'Total_Need_Met']
-      },
-      transaction
-    });
+// async function processNeedMet(templateId, sheetId, maxRowIndex, fnflMap) {
+//   console.log('Processing Need_Met...');
+//   const transaction = await sequelize.transaction();
+//   try {
+//     const headers = await Header.findAll({
+//       where: {
+//         templateId,
+//         name: ['Student_Financial_Need', 'Total_Gift_Aid', 'Total_Work_Aid', 'Total_Need_Met']
+//       },
+//       transaction
+//     });
 
-    const headerMap = {};
-    headers.forEach(h => headerMap[h.name] = h.id);
+//     const headerMap = {};
+//     headers.forEach(h => headerMap[h.name] = h.id);
 
-    if (!headerMap['Total_Need_Met']) {
-      await transaction.rollback();
-      return { message: 'Total_Need_Met header not found.' };
-    }
+//     if (!headerMap['Total_Need_Met']) {
+//       await transaction.rollback();
+//       return { message: 'Total_Need_Met header not found.' };
+//     }
 
-    // Step 2: Fetch relevant SheetData
-    const sheetData = await SheetData.findAll({
-      where: {
-        headerId: [headerMap['Student_Financial_Need'], headerMap['Total_Gift_Aid'], headerMap['Total_Work_Aid']],
-        sheetId: sheetId
-      },
-      transaction
-    });
+//     const sheetData = await SheetData.findAll({
+//       where: {
+//         headerId: [headerMap['Student_Financial_Need'], headerMap['Total_Gift_Aid'], headerMap['Total_Work_Aid']],
+//         sheetId: sheetId
+//       },
+//       transaction
+//     });
 
-    // Step 3: Group by rowIndex
-    const grouped = {};
-    sheetData.forEach(data => {
-      if (!grouped[data.rowIndex]) grouped[data.rowIndex] = {};
-      grouped[data.rowIndex][data.headerId] = parseFloat(data.value) || 0;
-    });
+//     const grouped = {};
+//     sheetData.forEach(data => {
+//       if (!grouped[data.rowIndex]) grouped[data.rowIndex] = {};
+//       grouped[data.rowIndex][data.headerId] = parseFloat(data.value) || 0;
+//     });
 
-    // Step 4: Create OperationLog
-    const operationLog = await OperationLog.create({
-      templateId,
-      sheetId,
-      operationType: 'CALCULATION'
-    }, { transaction });
+//     const operationLog = await OperationLog.create({
+//       templateId,
+//       sheetId,
+//       operationType: 'CALCULATION'
+//     }, { transaction });
 
-    // Step 5: Prepare payloads
-    const insertPayload = [];
-    const snapshotPayload = [];
+//     const insertPayload = [];
+//     const snapshotPayload = [];
 
-    for (let rowIndex = 0; rowIndex <= maxRowIndex; rowIndex++) {
-      const values = grouped[rowIndex] || {};
-      const fnflAmount = fnflMap[rowIndex] || 0;
-      const need = values[headerMap['Student_Financial_Need']] || 0;
-      const gift = values[headerMap['Total_Gift_Aid']] || 0;
-      const work = values[headerMap['Total_Work_Aid']] || 0;
+//     for (let rowIndex = 0; rowIndex <= maxRowIndex; rowIndex++) {
+//       const values = grouped[rowIndex] || {};
+//       const fnflAmount = fnflMap[rowIndex] || 0;
+//       const need = values[headerMap['Student_Financial_Need']] || 0;
+//       const gift = values[headerMap['Total_Gift_Aid']] || 0;
+//       const work = values[headerMap['Total_Work_Aid']] || 0;
 
-      const needMet = calculateNeedMet(need, gift, work, fnflAmount);
-      const existing = await SheetData.findOne({
-        where: {
-          headerId: headerMap['Total_Need_Met'],
-          sheetId: sheetId,
-          rowIndex: parseInt(rowIndex)
-        },
-        transaction
-      });
+//       const needMet = calculateNeedMet(need, gift, work, fnflAmount);
+//       const existing = await SheetData.findOne({
+//         where: {
+//           headerId: headerMap['Total_Need_Met'],
+//           sheetId: sheetId,
+//           rowIndex: parseInt(rowIndex)
+//         },
+//         transaction
+//       });
 
-      if (existing) {
-        snapshotPayload.push({
-          operationLogId: operationLog.id,
-          headerId: headerMap['Total_Need_Met'],
-          sheetId: sheetId,
-          rowIndex: parseInt(rowIndex),
-          originalValue: existing.value,
-          newValue: needMet.toString(),
-          changeType: 'UPDATE'
-        });
+//       if (existing) {
+//         snapshotPayload.push({
+//           operationLogId: operationLog.id,
+//           headerId: headerMap['Total_Need_Met'],
+//           sheetId: sheetId,
+//           rowIndex: parseInt(rowIndex),
+//           originalValue: existing.value,
+//           newValue: needMet.toString(),
+//           changeType: 'UPDATE'
+//         });
 
-        existing.value = needMet.toString();
-        await existing.save({ transaction });
-      } else {
-        snapshotPayload.push({
-          operationLogId: operationLog.id,
-          headerId: headerMap['Total_Need_Met'],
-          sheetId: sheetId,
-          rowIndex: parseInt(rowIndex),
-          originalValue: null,
-          newValue: needMet.toString(),
-          changeType: 'INSERT'
-        });
+//         existing.value = needMet.toString();
+//         await existing.save({ transaction });
+//       } else {
+//         snapshotPayload.push({
+//           operationLogId: operationLog.id,
+//           headerId: headerMap['Total_Need_Met'],
+//           sheetId: sheetId,
+//           rowIndex: parseInt(rowIndex),
+//           originalValue: null,
+//           newValue: needMet.toString(),
+//           changeType: 'INSERT'
+//         });
 
-        insertPayload.push({
-          headerId: headerMap['Total_Need_Met'],
-          sheetId: sheetId,
-          rowIndex: parseInt(rowIndex),
-          value: needMet.toString()
-        });
-      }
-    }
+//         insertPayload.push({
+//           headerId: headerMap['Total_Need_Met'],
+//           sheetId: sheetId,
+//           rowIndex: parseInt(rowIndex),
+//           value: needMet.toString()
+//         });
+//       }
+//     }
 
-    // Step 6: Bulk insert new SheetData
-    if (insertPayload.length > 0) {
-      await SheetData.bulkCreate(insertPayload, { transaction });
-    }
+//     if (insertPayload.length > 0) {
+//       await SheetData.bulkCreate(insertPayload, { transaction });
+//     }
 
-    // Step 7: Bulk insert SheetDataSnapshot
-    if (snapshotPayload.length > 0) {
-      await SheetDataSnapshot.bulkCreate(snapshotPayload, { transaction });
-    }
+//     if (snapshotPayload.length > 0) {
+//       await SheetDataSnapshot.bulkCreate(snapshotPayload, { transaction });
+//     }
 
-    await transaction.commit();
-    return {
-      message: 'Processed Total_Need_Met with logging and snapshots.',
-      rowsAffected: insertPayload.length + snapshotPayload.length
-    };
-  } catch (error) {
-    await transaction.rollback();
-    console.error('Error processing Total_Need_Met:', error);
-    throw error;
-  }
-}
+//     await transaction.commit();
+//     return {
+//       message: 'Processed Total_Need_Met with logging and snapshots.',
+//       rowsAffected: insertPayload.length + snapshotPayload.length
+//     };
+//   } catch (error) {
+//     await transaction.rollback();
+//     console.error('Error processing Total_Need_Met:', error);
+//     throw error;
+//   }
+// }
 
 async function processGap(templateId, sheetId, maxRowIndex, fnflMap) {
   console.log('Processing Gap...');
@@ -5546,7 +5539,7 @@ async function processGap(templateId, sheetId, maxRowIndex, fnflMap) {
     const headers = await Header.findAll({
       where: {
         templateId,
-        name: ['Total_Direct_Costs', 'Total_Institutional_Gift', 'GAP/Unmet_Need']
+        name: ['Total_Direct_Costs', 'Total_Institutional_Gift', 'GAP/Unmet_Charges']
       },
       transaction
     });
@@ -5554,9 +5547,9 @@ async function processGap(templateId, sheetId, maxRowIndex, fnflMap) {
     const headerMap = {};
     headers.forEach(h => headerMap[h.name] = h.id);
 
-    if (!headerMap['GAP/Unmet_Need']) {
+    if (!headerMap['GAP/Unmet_Charges']) {
       await transaction.rollback();
-      return { message: 'GAP/Unmet_Need header not found.' };
+      return { message: 'GAP/Unmet_Charges header not found.' };
     }
 
     // Step 2: Fetch relevant SheetData
@@ -5596,7 +5589,7 @@ async function processGap(templateId, sheetId, maxRowIndex, fnflMap) {
 
       const existing = await SheetData.findOne({
         where: {
-          headerId: headerMap['GAP/Unmet_Need'],
+          headerId: headerMap['GAP/Unmet_Charges'],
           sheetId: sheetId,
           rowIndex: parseInt(rowIndex)
         },
@@ -5606,7 +5599,7 @@ async function processGap(templateId, sheetId, maxRowIndex, fnflMap) {
       if (existing) {
         snapshotPayload.push({
           operationLogId: operationLog.id,
-          headerId: headerMap['GAP/Unmet_Need'],
+          headerId: headerMap['GAP/Unmet_Charges'],
           sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
           originalValue: existing.value,
@@ -5619,7 +5612,7 @@ async function processGap(templateId, sheetId, maxRowIndex, fnflMap) {
       } else {
         snapshotPayload.push({
           operationLogId: operationLog.id,
-          headerId: headerMap['GAP/Unmet_Need'],
+          headerId: headerMap['GAP/Unmet_Charges'],
           sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
           originalValue: null,
@@ -5628,7 +5621,7 @@ async function processGap(templateId, sheetId, maxRowIndex, fnflMap) {
         });
 
         insertPayload.push({
-          headerId: headerMap['GAP/Unmet_Need'],
+          headerId: headerMap['GAP/Unmet_Charges'],
           sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
           value: gap === 0 ? "" : gap.toString()
@@ -5659,7 +5652,7 @@ async function processGap(templateId, sheetId, maxRowIndex, fnflMap) {
 }
 
 async function processTotalNeedMet(templateId, sheetId, maxRowIndex, fnflMap) {
-  console.log('Processing Total_Need_Met...');
+  console.log('Processing %_Of_Need_Met...');
   const transaction = await sequelize.transaction();
   try {
     // Step 1: Fetch headers
@@ -6288,7 +6281,7 @@ async function calculateFurtherMetrics(templateId, sheetId, maxRowIndex, fnflMap
   await processNetTuitionFee(templateId, sheetId, maxRowIndex);
   await processTotalDiscountRate(templateId, sheetId, maxRowIndex);
   await processNeed(templateId, sheetId, maxRowIndex);
-  await processNeedMet(templateId, sheetId, maxRowIndex, fnflMap);
+  // await processNeedMet(templateId, sheetId, maxRowIndex, fnflMap);
   await processGap(templateId, sheetId, maxRowIndex, fnflMap);
   await processTotalNeedMet(templateId, sheetId, maxRowIndex, fnflMap);
   await processTotalNeedMet_W(templateId, sheetId, maxRowIndex);
