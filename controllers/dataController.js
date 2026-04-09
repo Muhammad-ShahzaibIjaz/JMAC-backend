@@ -743,6 +743,22 @@ async function getTemplateDataWithExcel(req, res) {
       });
 
     const sortedHeaders = sortHeadersFlexibleMatch(headers);
+
+    // --- Inject duplicate SAI after Income_Level ---
+    const saiHeader = sortedHeaders.find(h => h.name === 'SAI');
+    const incomeLevelIndex = sortedHeaders.findIndex(h => h.name === 'Income_Level');
+    
+    
+    if (saiHeader && incomeLevelIndex !== -1) {
+      const duplicateSAI = {
+        ...saiHeader,
+        id: `${saiHeader.id}_duplicate`,
+        name: 'SAI',
+        _duplicateOf: saiHeader.id,
+      };
+      sortedHeaders.splice(incomeLevelIndex + 1, 0, duplicateSAI);
+    }
+
     const headerMap = new Map(sortedHeaders.map(h => [h.id, h]));
     const validatedDataByHeader = new Map();
     const errorRows = new Map();
@@ -786,6 +802,14 @@ async function getTemplateDataWithExcel(req, res) {
         maxRowIndex = data.rowIndex;
       }
     }
+
+    // Populate duplicate SAI's validatedDataByHeader from the original
+    if (saiHeader) {
+      const originalData = validatedDataByHeader.get(saiHeader.id);
+      validatedDataByHeader.set(`${saiHeader.id}_duplicate`, [...originalData]);
+    }
+
+
     const responseHeaders = sortedHeaders.map(header => {
       const data = validatedDataByHeader.get(header.id);
       return {
@@ -793,6 +817,7 @@ async function getTemplateDataWithExcel(req, res) {
         name: header.name,
         criticalityLevel: header.criticalityLevel,
         columnType: header.columnType,
+        _duplicateOf: header._duplicateOf ?? null,
         data,
       };
     }).filter(headerObj => {
@@ -5996,7 +6021,7 @@ async function processCampusDiscount(templateId, sheetId, maxRowIndex) {
     const headers = await Header.findAll({
       where: {
         templateId,
-        name: ['Net_Tuition_Revenue', 'Total_Institutional_Gift', 'Campus_Discount Rate']
+        name: ['Net_Tuition_Revenue', 'Total_Institutional_Gift', 'Campus_Discount_Rate']
       },
       transaction
     });
@@ -6004,11 +6029,11 @@ async function processCampusDiscount(templateId, sheetId, maxRowIndex) {
     const headerMap = Object.fromEntries(headers.map(h => [h.name, h.id]));
     const netId = headerMap['Net_Tuition_Revenue'];
     const giftId = headerMap['Total_Institutional_Gift'];
-    const discountId = headerMap['Campus_Discount Rate'];
+    const discountId = headerMap['Campus_Discount_Rate'];
 
     if (!discountId) {
       await transaction.rollback();
-      return { message: 'Campus_Discount Rate header not found.' };
+      return { message: 'Campus_Discount_Rate header not found.' };
     }
 
     // Step 2: Fetch all relevant SheetData
@@ -6036,7 +6061,7 @@ async function processCampusDiscount(templateId, sheetId, maxRowIndex) {
       }
     }
 
-    // Step 4: Fetch existing Campus_Discount Rate entries in bulk
+    // Step 4: Fetch existing Campus_Discount_Rate entries in bulk
     const existingDiscounts = await SheetData.findAll({
       where: {
         headerId: discountId,

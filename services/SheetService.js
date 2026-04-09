@@ -16,7 +16,9 @@ async function generateExcelFile({ headers, maxRowIndex, totalErrorRows, errorRo
   // Add headers
   const headerRow = sheet1.addRow(headers.map(h => h.name));
   headers.forEach((header, colIndex) => {
-    if (header.data.some(d => d.valid === false)) {
+    // For duplicate, check validity from original header's data
+    const dataToCheck = header.data;
+    if (dataToCheck.some(d => d.valid === false)) {
       const cell = headerRow.getCell(colIndex + 1);
       cell.fill = {
         type: 'pattern',
@@ -33,14 +35,20 @@ async function generateExcelFile({ headers, maxRowIndex, totalErrorRows, errorRo
   // Add data rows
   for (let rowIndex = 1; rowIndex <= maxRowIndex; rowIndex++) {
     const rowData = headers.map(header => {
-      const cellData = rowBuckets.get(rowIndex)?.get(header.id);
-      let value = cellData ? cellData.value || '' : '';
+      // If this is a duplicate header, read from the original header's id in rowBuckets
+      const lookupId = header._duplicateOf ?? header.id;
+      const cellData = rowBuckets.get(rowIndex)?.get(lookupId);
+      // Fix: use null check instead of || '' to avoid 0 being treated as falsy
+      let value = (cellData && cellData.value !== undefined && cellData.value !== null) 
+        ? cellData.value 
+        : '';
       value = typeof value === 'string' ? value.replace(/[\u0000-\u001F\u007F-\u009F]/g, '') : value;
       if (header.columnType === 'Date' && value) {
         const parsedDate = new Date(value);
         return isNaN(parsedDate.getTime()) ? '' : parsedDate;
       } else if(header.columnType === 'integer' || header.columnType === 'decimal') {
-        return isNaN(Number(value)) ? '' : Number(value);
+        const num = Number(value);
+        return isNaN(num) ? '' : num;
       }  else if (header.columnType === 'Boolean') {
         return value === true || value === 'true' ? 'Yes' : value === false || value === 'false' ? 'No' : '';
       } else if (header.columnType === 'percentage') {
@@ -51,7 +59,9 @@ async function generateExcelFile({ headers, maxRowIndex, totalErrorRows, errorRo
 
     const row = sheet1.addRow(rowData);
     headers.forEach((header, colIndex) => {
-      const cellData = rowBuckets.get(rowIndex)?.get(header.id);
+      // Same lookup: use original id for duplicates
+      const lookupId = header._duplicateOf ?? header.id;
+      const cellData = rowBuckets.get(rowIndex)?.get(lookupId);
       if (cellData && cellData.valid === false) {
         const cell = row.getCell(colIndex + 1);
         if (header.columnType === 'Date') {
@@ -61,6 +71,14 @@ async function generateExcelFile({ headers, maxRowIndex, totalErrorRows, errorRo
             cell.numFmt = 'mm-dd-yyyy';
           } else {
             cell.value = '';
+          }
+        }
+        else if (header.columnType === 'integer' || header.columnType === 'decimal') {
+          const cellValue = Number(cellData.value);
+          if (cellValue !== '' && cellValue !== null && cellValue !== undefined) {
+            // Force ExcelJS to treat it as a number, not text
+            cell.value = Number(cellValue);
+            cell.dataValidation = undefined;
           }
         }
         cell.fill = {
