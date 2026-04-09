@@ -5539,7 +5539,7 @@ async function processGap(templateId, sheetId, maxRowIndex, fnflMap) {
     const headers = await Header.findAll({
       where: {
         templateId,
-        name: ['Total_Direct_Costs', 'Total_Institutional_Gift', 'GAP/Unmet_Charges']
+        name: ['Total_Direct_Costs', 'Total_Gift_Aid', 'GAP/Unmet_Charges']
       },
       transaction
     });
@@ -5555,7 +5555,7 @@ async function processGap(templateId, sheetId, maxRowIndex, fnflMap) {
     // Step 2: Fetch relevant SheetData
     const sheetData = await SheetData.findAll({
       where: {
-        headerId: [headerMap['Total_Direct_Costs'], headerMap['Total_Institutional_Gift']],
+        headerId: [headerMap['Total_Direct_Costs'], headerMap['Total_Gift_Aid']],
         sheetId: sheetId
       },
       transaction
@@ -5581,7 +5581,7 @@ async function processGap(templateId, sheetId, maxRowIndex, fnflMap) {
 
     for (let rowIndex = 0; rowIndex <= maxRowIndex; rowIndex++) {
       const values = grouped[rowIndex] || {};
-      const gift = values[headerMap['Total_Institutional_Gift']] || 0;
+      const gift = values[headerMap['Total_Gift_Aid']] || 0;
       const directCosts = values[headerMap['Total_Direct_Costs']] || 0;
       const fnflAmount = fnflMap[rowIndex] || 0;
 
