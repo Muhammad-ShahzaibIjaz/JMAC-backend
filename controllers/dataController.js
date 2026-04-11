@@ -754,6 +754,7 @@ async function getTemplateDataWithExcel(req, res) {
         ...saiHeader,
         id: `${saiHeader.id}_duplicate`,
         name: 'SAI',
+        columnType: 'integer',
         _duplicateOf: saiHeader.id,
       };
       sortedHeaders.splice(incomeLevelIndex + 1, 0, duplicateSAI);

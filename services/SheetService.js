@@ -55,7 +55,8 @@ async function generateExcelFile({ headers, maxRowIndex, totalErrorRows, errorRo
       }  else if (header.columnType === 'Boolean') {
         return value === true || value === 'true' ? 'Yes' : value === false || value === 'false' ? 'No' : '';
       } else if (header.columnType === 'percentage') {
-        return isNaN(Number(value)) ? '' : Number(value).toFixed(2);
+        const num = Number(value);
+        return isNaN(num) ? '' : parseFloat(num.toFixed(2));
       }
       return value;
     });
@@ -78,7 +79,7 @@ async function generateExcelFile({ headers, maxRowIndex, totalErrorRows, errorRo
         }
         else if (header.columnType === 'integer' || header.columnType === 'decimal') {
           const cellValue = Number(cellData.value);
-          if (cellValue !== '' && cellValue !== null && cellValue !== undefined) {
+          if (!isNaN(cellValue)) {
             // Force ExcelJS to treat it as a number, not text
             cell.value = Number(cellValue);
             cell.dataValidation = undefined;
