@@ -789,7 +789,8 @@ async function getTemplateDataWithExcel(req, res) {
       if (!rowBuckets.has(data.rowIndex)) {
         rowBuckets.set(data.rowIndex, new Map());
       }
-      rowBuckets.get(data.rowIndex).set(data.headerId, { value, valid });
+      const normalizedValue = (value === 'NULL' || value === 'null') ? null : value;
+      rowBuckets.get(data.rowIndex).set(data.headerId, { value: normalizedValue, valid });
 
       if (!valid) {
         if (!errorRows.has(data.rowIndex)) {

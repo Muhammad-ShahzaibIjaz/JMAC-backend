@@ -47,6 +47,9 @@ async function generateExcelFile({ headers, maxRowIndex, totalErrorRows, errorRo
         const parsedDate = new Date(value);
         return isNaN(parsedDate.getTime()) ? '' : parsedDate;
       } else if(header.columnType === 'integer' || header.columnType === 'decimal') {
+        if (value === '' || value === null || value === undefined) {
+          return '';
+        }
         const num = Number(value);
         return isNaN(num) ? '' : num;
       }  else if (header.columnType === 'Boolean') {
