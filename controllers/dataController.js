@@ -6777,7 +6777,7 @@ async function populateAward20Fields(templateId, targetHeaderId, sheetId, target
     const operationLog = await OperationLog.create({
       templateId,
       sheetId,
-      operationType: 'BULK_UPSERT'
+      operationType: 'UPDATE'
     }, { transaction });
 
     // Step 3: Fetch source values from targetHeaderId
