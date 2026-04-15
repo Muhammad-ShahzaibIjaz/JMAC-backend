@@ -35,6 +35,11 @@ const CalculationRule = sequelize.define(
       type: DataTypes.UUID,
       allowNull: false,
     },
+    optionType: {
+      type: DataTypes.ENUM("1", "2", "3"),
+      allowNull: false,
+      defaultValue: "1",
+    }
   },
   {
     tableName: "CalculationRule",

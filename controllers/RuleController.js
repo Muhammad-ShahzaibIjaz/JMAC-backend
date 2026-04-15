@@ -334,7 +334,7 @@ const getBulkRulesByTemplateId = async (req, res) => {
 
 
 const createBulkRule = async (req, res) => {
-  const { headerName, value, name, templateId, isGlobal=false } = req.body;
+  const { headerName, value, name, templateId, isGlobal=false, optionType='1' } = req.body;
   const username = await getUserName(req.userId);
   try{
     // Validate input
@@ -352,10 +352,11 @@ const createBulkRule = async (req, res) => {
       header: headerName,
       assignments: value,
       isGlobal: isGlobal,
-      templateId
+      templateId,
+      optionType: optionType
     });
     await createLog({ action: 'CREATE_BULK_RULE', username, performedBy: req.userId, details: `Bulk Rule '${name}' created with ID: ${rule.id}` });
-    return res.status(201).json({ id: rule.id, name: rule.name, headerName, assignment: value, isGlobal: rule.isGlobal });
+    return res.status(201).json({ id: rule.id, name: rule.name, headerName, assignment: value, isGlobal: rule.isGlobal, optionType: rule.optionType });
   } catch (error) {
     await createLog({ action: 'CREATE_BULK_RULE_FAILED', username, performedBy: req.userId, details: `Failed to create bulk rule '${name}': ${error.message}` });
     console.error("Error creating bulk rule:", error);
@@ -388,8 +389,8 @@ const duplicateBulkRule = async (req, res) => {
       return res.status(409).json({ error: "Duplicate rule already exists" });
     }
 
-    const { header, assignments, isGlobal } = existingRule;
-    const newRule = await CalculationRule.create({ name, header, assignments, isGlobal, templateId });
+    const { header, assignments, isGlobal, optionType } = existingRule;
+    const newRule = await CalculationRule.create({ name, header, assignments, isGlobal, templateId, optionType });
 
     await createLog({
       action: "DUPLICATE_BULK_RULE",
@@ -403,7 +404,8 @@ const duplicateBulkRule = async (req, res) => {
       name: newRule.name,
       headerName: newRule.header,
       assignment: newRule.assignments,
-      isGlobal: newRule.isGlobal
+      isGlobal: newRule.isGlobal,
+      optionType: newRule.optionType
     });
   } catch (error) {
     const username = await getUserName(req.userId); // fallback if Promise.all fails early
@@ -420,7 +422,7 @@ const duplicateBulkRule = async (req, res) => {
 
 const updateBulkRule = async (req, res) => {
   const { id } = req.params;
-  const { headerName, value, name, templateId, isGlobal=false } = req.body;
+  const { headerName, value, name, templateId, isGlobal=false, optionType='1' } = req.body;
   const username = await getUserName(req.userId);
   try {
     const rule = await CalculationRule.findByPk(id);
@@ -432,9 +434,10 @@ const updateBulkRule = async (req, res) => {
     rule.header = headerName;
     rule.assignments = value;
     rule.isGlobal = isGlobal;
+    rule.optionType = optionType;
     await rule.save();
     await createLog({ action: 'UPDATE_BULK_RULE', username, performedBy: req.userId, details: `Bulk Rule '${name}' with ID: ${id} updated` });
-    return res.status(200).json({ id: rule.id, name: rule.name, headerName: rule.header, assignment: rule.assignments });
+    return res.status(200).json({ id: rule.id, name: rule.name, headerName: rule.header, assignment: rule.assignments, isGlobal: rule.isGlobal, optionType: rule.optionType });
   } catch (error) {
     await createLog({ action: 'UPDATE_BULK_RULE_FAILED', username, performedBy: req.userId, details: `Failed to update bulk rule ID '${id}': ${error.message}` });
     console.error("Error updating bulk rule:", error);
@@ -457,7 +460,7 @@ const applyBulkRule = async (req, res) => {
       return res.status(404).json({ error: "Header not found" });
     }
 
-    await bulkUpdates(headerId.id, isBulkRuleExist.assignments, isBulkRuleExist.templateId, sheetId);
+    await bulkUpdates(headerId.id, isBulkRuleExist.assignments, isBulkRuleExist.optionType, isBulkRuleExist.templateId, sheetId);
     await createLog({ action: 'APPLY_BULK_RULE', username, performedBy: req.userId, details: `Bulk Rule with ID: ${id} applied to sheet ID: ${sheetId}` });
     return res.status(200).json({ message: "Bulk rule applied successfully" });
   } catch (error) {

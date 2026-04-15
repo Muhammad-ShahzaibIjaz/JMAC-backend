@@ -1496,7 +1496,7 @@ async function updateRows(req, res) {
 }
 
 
-async function bulkUpdates(headerId, value, templateId, sheetId) {
+async function bulkUpdates(headerId, value, optionType, templateId, sheetId) {
   const transaction = await sequelize.transaction();
 
   try {
@@ -1509,12 +1509,12 @@ async function bulkUpdates(headerId, value, templateId, sheetId) {
       operationType: 'BULK_UPDATE',
     }, { transaction });
 
-    // 2. Get maxRowIndex via raw SQL
+    // 2. Get maxRowIndex
     const [maxRowResults] = await sequelize.query(
       `
       SELECT sd."rowIndex"
       FROM "SheetData" sd
-      JOIN "Headers" h ON h.id = sd."headerId"
+      JOIN "Header" h ON h.id = sd."headerId"
       WHERE sd."sheetId" = :sheetId
         AND h."templateId" = :templateId
       ORDER BY sd."rowIndex" DESC
@@ -1533,7 +1533,25 @@ async function bulkUpdates(headerId, value, templateId, sheetId) {
       return { affectedRows: 0 };
     }
 
-    // 3. 🔥 Snapshot inside Postgres with correct changeType per row
+    // 3. Build WHERE filter clause based on optionType
+    //
+    //  optionType "1" → overwrite ALL rows (existing + missing)
+    //  optionType "2" → only rows where value IS NULL, empty string, '0', 'null', 'NULL'
+    //  optionType "3" → only rows where value IS NULL, empty string, 'null', 'NULL'
+    //                   (excludes '0')
+
+    const existingRowFilter = {
+      '1': ``,                                                            // no filter → all rows
+      '2': `AND (sd.value IS NULL OR TRIM(sd.value) = '' OR TRIM(sd.value) = '0' OR LOWER(TRIM(sd.value)) = 'null')`,
+      '3': `AND (sd.value IS NULL OR TRIM(sd.value) = '' OR LOWER(TRIM(sd.value)) = 'null')`,
+    }[optionType] ?? ``;
+
+    // For missing rows (INSERT path):
+    // optionType 1 → insert into all missing rows
+    // optionType 2 & 3 → also insert into missing rows (they are inherently blank)
+    // So missing row logic is the same for all three — always insert if row doesn't exist.
+
+    // 4. Snapshot — only snapshot rows that will actually be touched
     await sequelize.query(
       `
       INSERT INTO "SheetDataSnapshot" (
@@ -1541,41 +1559,42 @@ async function bulkUpdates(headerId, value, templateId, sheetId) {
         "originalValue", "newValue", "changeType", "createdAt", "updatedAt"
       )
 
-      -- Existing rows → changeType = 'UPDATE', capture current value before overwrite
+      -- Existing rows that match the filter
       SELECT
         gen_random_uuid(),
-        :operationLogId,
-        :headerId,
-        :sheetId,
+        :operationLogId::uuid,
+        :headerId::uuid,
+        :sheetId::uuid,
         sd."rowIndex",
-        sd.value,       -- originalValue = what's there right now
+        sd.value,
         :newValue,
-        'UPDATE',
+        'UPDATE'::"enum_SheetDataSnapshot_changeType",
         NOW(),
         NOW()
       FROM "SheetData" sd
-      WHERE sd."headerId" = :headerId
-        AND sd."sheetId" = :sheetId
+      WHERE sd."headerId" = :headerId::uuid
+        AND sd."sheetId" = :sheetId::uuid
+        ${existingRowFilter}
 
       UNION ALL
 
-      -- Missing rows → changeType = 'INSERT', originalValue = NULL
+      -- Missing rows (always inserted regardless of optionType)
       SELECT
         gen_random_uuid(),
-        :operationLogId,
-        :headerId,
-        :sheetId,
+        :operationLogId::uuid,
+        :headerId::uuid,
+        :sheetId::uuid,
         gs.row_index,
-        NULL,           -- originalValue = null, row didn't exist
+        NULL,
         :newValue,
-        'INSERT',
+        'INSERT'::"enum_SheetDataSnapshot_changeType",
         NOW(),
         NOW()
       FROM generate_series(0, :maxRowIndex) AS gs(row_index)
       WHERE NOT EXISTS (
         SELECT 1 FROM "SheetData" sd
-        WHERE sd."headerId" = :headerId
-          AND sd."sheetId" = :sheetId
+        WHERE sd."headerId" = :headerId::uuid
+          AND sd."sheetId" = :sheetId::uuid
           AND sd."rowIndex" = gs.row_index
       )
       `,
@@ -1586,39 +1605,98 @@ async function bulkUpdates(headerId, value, templateId, sheetId) {
       }
     );
 
-    // 4. 🔥 Upsert all rows with generate_series — one shot, no JS loop
-    const [countResult] = await sequelize.query(
-      `
-      WITH upsert AS (
-        INSERT INTO "SheetData" (
-          id, "headerId", "sheetId", "rowIndex", value, "createdAt", "updatedAt"
+    // 5. Perform the actual upsert based on optionType
+    let countResult;
+
+    if (optionType === '1') {
+      // Overwrite everything — existing rows updated, missing rows inserted
+      [countResult] = await sequelize.query(
+        `
+        WITH upsert AS (
+          INSERT INTO "SheetData" (
+            id, "headerId", "sheetId", "rowIndex", value, "createdAt", "updatedAt"
+          )
+          SELECT
+            gen_random_uuid(),
+            :headerId::uuid,
+            :sheetId::uuid,
+            gs.row_index,
+            :value,
+            NOW(),
+            NOW()
+          FROM generate_series(0, :maxRowIndex) AS gs(row_index)
+          ON CONFLICT ("headerId", "sheetId", "rowIndex")
+          DO UPDATE SET
+            value       = EXCLUDED.value,
+            "updatedAt" = NOW()
+          RETURNING id
         )
-        SELECT
-          gen_random_uuid(),
-          :headerId,
-          :sheetId,
-          gs.row_index,
-          :value,
-          NOW(),
-          NOW()
-        FROM generate_series(0, :maxRowIndex) AS gs(row_index)
-        ON CONFLICT ("headerId", "sheetId", "rowIndex")
-        DO UPDATE SET
-          value       = EXCLUDED.value,
-          "updatedAt" = NOW()
-        RETURNING id
-      )
-      SELECT COUNT(*) AS "affectedRows" FROM upsert
-      `,
-      {
-        replacements: { headerId, sheetId, value, maxRowIndex },
-        type: QueryTypes.SELECT,
-        transaction,
-      }
-    );
+        SELECT COUNT(*) AS "affectedRows" FROM upsert
+        `,
+        {
+          replacements: { headerId, sheetId, value, maxRowIndex },
+          type: QueryTypes.SELECT,
+          transaction,
+        }
+      );
+
+    } else {
+      // optionType 2 or 3:
+      // - UPDATE only existing rows matching the blank/null/zero condition
+      // - INSERT only into rows that don't exist yet (they are blank by nature)
+
+      const updateCondition = optionType === '2'
+        ? `(value IS NULL OR TRIM(value) = '' OR TRIM(value) = '0' OR LOWER(TRIM(value)) = 'null')`
+        : `(value IS NULL OR TRIM(value) = '' OR LOWER(TRIM(value)) = 'null')`;
+
+      [countResult] = await sequelize.query(
+        `
+        WITH
+        updated AS (
+          UPDATE "SheetData"
+          SET
+            value       = :value,
+            "updatedAt" = NOW()
+          WHERE "headerId" = :headerId::uuid
+            AND "sheetId" = :sheetId::uuid
+            AND ${updateCondition}
+          RETURNING id
+        ),
+        inserted AS (
+          INSERT INTO "SheetData" (
+            id, "headerId", "sheetId", "rowIndex", value, "createdAt", "updatedAt"
+          )
+          SELECT
+            gen_random_uuid(),
+            :headerId::uuid,
+            :sheetId::uuid,
+            gs.row_index,
+            :value,
+            NOW(),
+            NOW()
+          FROM generate_series(0, :maxRowIndex) AS gs(row_index)
+          WHERE NOT EXISTS (
+            SELECT 1 FROM "SheetData" sd
+            WHERE sd."headerId" = :headerId::uuid
+              AND sd."sheetId" = :sheetId::uuid
+              AND sd."rowIndex" = gs.row_index
+          )
+          RETURNING id
+        )
+        SELECT (
+          (SELECT COUNT(*) FROM updated) +
+          (SELECT COUNT(*) FROM inserted)
+        ) AS "affectedRows"
+        `,
+        {
+          replacements: { headerId, sheetId, value, maxRowIndex },
+          type: QueryTypes.SELECT,
+          transaction,
+        }
+      );
+    }
 
     await transaction.commit();
-
     return { affectedRows: parseInt(countResult.affectedRows) };
 
   } catch (error) {
@@ -1631,9 +1709,9 @@ async function bulkUpdates(headerId, value, templateId, sheetId) {
 async function bulkUpdateData(req, res) {
   const username = await getUserName(req.userId);
   try{
-    const {headerId, value, templateId, sheetId} = req.body;
+    const {headerId, value, optionType, templateId, sheetId} = req.body;
 
-    const result = await bulkUpdates(headerId, value, templateId, sheetId);
+    const result = await bulkUpdates(headerId, value, optionType, templateId, sheetId);
     await createLog({ action: 'BULK_UPDATE', username: username, performedBy: req.userRole, details: `Bulk updated headerId: ${headerId} for templateId: ${templateId}, sheetId: ${sheetId}. Total affected rows: ${result.affectedRows}` });
     res.status(200).json({ message: "OK" });
   } catch(error) {
