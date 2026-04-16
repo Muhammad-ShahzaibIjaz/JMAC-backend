@@ -76,7 +76,7 @@ const savePopulationSubmissionDate = async (req, res) => {
 
     // Check for any submission within 6 days before this one
     const sixDaysAgo = new Date(submissionDate);
-    sixDaysAgo.setDate(sixDaysAgo.getDate() - 6);
+    sixDaysAgo.setDate(sixDaysAgo.getDate() - 3);
 
     const recentSubmission = await PopulationSubmission.findOne({
       where: {
