@@ -206,7 +206,7 @@ const getGiftAndLoanTotals = async (templateId, sheetId, enrolledRowIndexes) => 
   });
 
   if (rows.length === 0) {
-    throw new Error('No award data found for enrolled students');
+    return { totalGift : 0, totalWorkAndLoan : 0 };
   }
 
   // Step 4: Organize row-wise data
