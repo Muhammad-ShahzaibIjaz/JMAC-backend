@@ -6224,16 +6224,51 @@ async function processCOA(templateId, sheetId, maxRowIndex) {
   console.log('Processing 2_Semester COA...');
   const transaction = await sequelize.transaction();
   try {
+    // Fixed value sets for Academic_Year = 2026 (as strings — ready for DB writes)
+    const STANDARD_2026 = {
+      '2_Semester_COA': '52170',
+      '2_Semester_Tuition': '33300',
+      '2_Semester_Room': '13090',
+      '2_Semester_Meals': '0',
+      '2_Semester_Fees': '900',
+      '2_Semester_Books_Supplies': '1116',
+      '2_Semester_Transportation': '1960',
+      '2_Semester_Other_Indirect_Charges': '1804'
+    };
+
+    const OFF_CAMPUS_2026 = {
+      '2_Semester_COA': '55018',
+      '2_Semester_Tuition': '33300',
+      '2_Semester_Room': '10196',
+      '2_Semester_Meals': '0',
+      '2_Semester_Fees': '900',
+      '2_Semester_Books_Supplies': '1116',
+      '2_Semester_Transportation': '2156',
+      '2_Semester_Other_Indirect_Charges': '7350'
+    };
+
+    const NUMERIC_FIELDS = [
+      '2_Semester_COA',
+      '2_Semester_Tuition',
+      '2_Semester_Fees',
+      '2_Semester_Room',
+      '2_Semester_Meals',
+      '2_Semester_Books_Supplies',
+      '2_Semester_Transportation',
+      '2_Semester_Other_Indirect_Charges'
+    ];
+
     // Step 1: Fetch headers
     const headers = await Header.findAll({
       where: {
         templateId,
-        name: ['2_Semester_COA', '2_Semester_Tuition', '2_Semester_Fees', '2_Semester_Room', '2_Semester_Meals' , '2_Semester_Books_Supplies', '2_Semester_Transportation', '2_Semester_Other_Indirect_Charges']
+        name: [...NUMERIC_FIELDS, 'Academic_Year', 'Housing_Status_From_Application']
       },
       transaction
     });
 
     const headerMap = Object.fromEntries(headers.map(h => [h.name, h.id]));
+    const coaId = headerMap['2_Semester_COA'];
     const tuitionId = headerMap['2_Semester_Tuition'];
     const feesId = headerMap['2_Semester_Fees'];
     const roomId = headerMap['2_Semester_Room'];
@@ -6241,28 +6276,40 @@ async function processCOA(templateId, sheetId, maxRowIndex) {
     const booksId = headerMap['2_Semester_Books_Supplies'];
     const transportationId = headerMap['2_Semester_Transportation'];
     const otherId = headerMap['2_Semester_Other_Indirect_Charges'];
-    const coaId = headerMap['2_Semester_COA'];
+    const academicYearId = headerMap['Academic_Year'];
+    const housingStatusId = headerMap['Housing_Status_From_Application'];
 
     if (!coaId) {
       await transaction.rollback();
       return { message: '2_Semester_COA header not found.' };
     }
 
-    // Step 2: Fetch relevant SheetData
+    // Step 2: Fetch ALL relevant SheetData in a single raw query (no model hydration)
+    const relevantHeaderIds = [
+      coaId, tuitionId, feesId, roomId, mealsId,
+      booksId, transportationId, otherId
+    ].filter(Boolean);
+    if (academicYearId) relevantHeaderIds.push(academicYearId);
+    if (housingStatusId) relevantHeaderIds.push(housingStatusId);
+
     const sheetData = await SheetData.findAll({
-      where: {
-        headerId: [tuitionId, feesId, roomId, mealsId, booksId, transportationId, otherId],
-        sheetId: sheetId
-      },
+      where: { headerId: relevantHeaderIds, sheetId },
+      attributes: ['id', 'headerId', 'rowIndex', 'value'],
+      raw: true,
       transaction
     });
 
-    // Step 3: Group by rowIndex
-    const grouped = {};
-    sheetData.forEach(data => {
-      if (!grouped[data.rowIndex]) grouped[data.rowIndex] = {};
-      grouped[data.rowIndex][data.headerId] = parseFloat(data.value) || 0;
-    });
+    // Step 3: Build row-indexed lookup: Map<rowIndex, { [headerId]: { id, value } }>
+    // This is the key win — zero DB calls inside the main loop.
+    const grouped = new Map();
+    for (const row of sheetData) {
+      let rowMap = grouped.get(row.rowIndex);
+      if (!rowMap) {
+        rowMap = {};
+        grouped.set(row.rowIndex, rowMap);
+      }
+      rowMap[row.headerId] = { id: row.id, value: row.value };
+    }
 
     // Step 4: Create OperationLog
     const operationLog = await OperationLog.create({
@@ -6270,79 +6317,122 @@ async function processCOA(templateId, sheetId, maxRowIndex) {
       sheetId,
       operationType: 'CALCULATION'
     }, { transaction });
+    const operationLogId = operationLog.id;
 
-    // Step 5: Prepare payloads
-    const insertPayload = [];
-    const snapshotPayload = [];
+    // Step 5: Walk rows and build payloads — pure in-memory work
+    const insertPayload = [];        // new SheetData rows
+    const updatePayload = [];        // { id, value } for existing rows
+    const snapshotPayload = [];      // SheetDataSnapshot rows
 
-    for (let rowIndex = 0; rowIndex <= maxRowIndex; rowIndex++) {
-      const values = grouped[rowIndex] || {};
-      const tuition = values[headerMap['2_Semester_Tuition']] || 0;
-      const fees = values[headerMap['2_Semester_Fees']] || 0;
-      const room = values[headerMap['2_Semester_Room']] || 0;
-      const meals = values[headerMap['2_Semester_Meals']] || 0;
-      const books = values[headerMap['2_Semester_Books_Supplies']] || 0;
-      const transportation = values[headerMap['2_Semester_Transportation']] || 0;
-      const other = values[headerMap['2_Semester_Other_Indirect_Charges']] || 0;
-      
-      const coa = tuition + fees + room + meals + books + transportation + other;
-
-      const existing = await SheetData.findOne({
-        where: {
-          headerId: headerMap['2_Semester_COA'],
-          sheetId: sheetId,
-          rowIndex: parseInt(rowIndex)
-        },
-        transaction
-      });
-
+    const queueWrite = (headerId, rowIndex, newValueStr, existing) => {
       if (existing) {
+        // Skip no-op writes — big win on re-runs
+        if (existing.value === newValueStr) return;
         snapshotPayload.push({
-          operationLogId: operationLog.id,
-          headerId: headerMap['2_Semester_COA'],
-          sheetId: sheetId,
-          rowIndex: parseInt(rowIndex),
+          operationLogId,
+          headerId,
+          sheetId,
+          rowIndex,
           originalValue: existing.value,
-          newValue: coa.toString(),
+          newValue: newValueStr,
           changeType: 'UPDATE'
         });
-
-        existing.value = coa.toString();
-        await existing.save({ transaction });
+        updatePayload.push({ id: existing.id, value: newValueStr });
       } else {
         snapshotPayload.push({
-          operationLogId: operationLog.id,
-          headerId: headerMap['2_Semester_COA'],
-          sheetId: sheetId,
-          rowIndex: parseInt(rowIndex),
+          operationLogId,
+          headerId,
+          sheetId,
+          rowIndex,
           originalValue: null,
-          newValue: coa.toString(),
+          newValue: newValueStr,
           changeType: 'INSERT'
         });
+        insertPayload.push({ headerId, sheetId, rowIndex, value: newValueStr });
+      }
+    };
 
-        insertPayload.push({
-          headerId: headerMap['2_Semester_COA'],
-          sheetId: sheetId,
-          rowIndex: parseInt(rowIndex),
-          value: coa.toString()
-        });
+    for (let rowIndex = 0; rowIndex <= maxRowIndex; rowIndex++) {
+      const values = grouped.get(rowIndex);
+
+      const academicYearRaw = values && academicYearId ? values[academicYearId]?.value : null;
+      const housingStatusRaw = values && housingStatusId ? values[housingStatusId]?.value : null;
+      const academicYear = academicYearRaw ? String(academicYearRaw).trim() : '';
+      const housingStatus = housingStatusRaw ? String(housingStatusRaw).trim().toLowerCase() : '';
+
+      if (academicYear === '2026') {
+        const coaExisting = values ? values[coaId] : null;
+        const hasCOA = coaExisting && coaExisting.value !== null &&
+                       coaExisting.value !== undefined && coaExisting.value !== '';
+        const isOffCampus = housingStatus === 'off campus';
+        const valueSet = (hasCOA && isOffCampus) ? OFF_CAMPUS_2026 : STANDARD_2026;
+
+        for (const fieldName of NUMERIC_FIELDS) {
+          const hId = headerMap[fieldName];
+          if (!hId) continue;
+          const existing = values ? values[hId] : null;
+          queueWrite(hId, rowIndex, valueSet[fieldName], existing);
+        }
+      } else {
+        // Original behavior: sum components into 2_Semester_COA
+        const num = (hId) => {
+          const v = values && hId ? values[hId]?.value : null;
+          return v ? (parseFloat(v) || 0) : 0;
+        };
+        const coa = num(tuitionId) + num(feesId) + num(roomId) + num(mealsId) +
+                    num(booksId) + num(transportationId) + num(otherId);
+        const existing = values ? values[coaId] : null;
+        queueWrite(coaId, rowIndex, coa.toString(), existing);
       }
     }
 
-    // Step 6: Bulk insert new SheetData
-    if (insertPayload.length > 0) {
-      await SheetData.bulkCreate(insertPayload, { transaction });
+    // Step 6: Bulk insert new rows in chunks
+    const CHUNK = 5000;
+    for (let i = 0; i < insertPayload.length; i += CHUNK) {
+      await SheetData.bulkCreate(insertPayload.slice(i, i + CHUNK), {
+        transaction,
+        validate: false,
+        hooks: false
+      });
     }
 
-    // Step 7: Bulk insert SheetDataSnapshot
-    if (snapshotPayload.length > 0) {
-      await SheetDataSnapshot.bulkCreate(snapshotPayload, { transaction });
+    // Step 7: Bulk update existing rows — group by target value so we issue
+    // one UPDATE per distinct value instead of one per row. With only 8 fixed
+    // value sets, millions of row updates collapse into a handful of statements.
+    const updatesByValue = new Map();
+    for (const { id, value } of updatePayload) {
+      let ids = updatesByValue.get(value);
+      if (!ids) {
+        ids = [];
+        updatesByValue.set(value, ids);
+      }
+      ids.push(id);
+    }
+
+    for (const [value, ids] of updatesByValue) {
+      for (let i = 0; i < ids.length; i += CHUNK) {
+        await SheetData.update(
+          { value },
+          { where: { id: ids.slice(i, i + CHUNK) }, transaction, hooks: false }
+        );
+      }
+    }
+
+    // Step 8: Bulk insert snapshots in chunks
+    for (let i = 0; i < snapshotPayload.length; i += CHUNK) {
+      await SheetDataSnapshot.bulkCreate(snapshotPayload.slice(i, i + CHUNK), {
+        transaction,
+        validate: false,
+        hooks: false
+      });
     }
 
     await transaction.commit();
     return {
       message: 'Processed 2_Semester_COA with logging and snapshots.',
-      rowsAffected: insertPayload.length + snapshotPayload.length
+      rowsInserted: insertPayload.length,
+      rowsUpdated: updatePayload.length,
+      snapshots: snapshotPayload.length
     };
   } catch (error) {
     await transaction.rollback();
