@@ -59,6 +59,10 @@ const Campus = sequelize.define(
       allowNull: false,
       defaultValue: "Other",
     },
+    academicYearCoa: {
+      type: DataTypes.JSON,
+      allowNull: true,
+    }
   },
   {
     tableName: "Campus",

@@ -556,7 +556,7 @@ async function getAveragesMetricsFromMatchedRows(sheetId, matchedRowIndexes, tem
   const headers = await Header.findAll({
     where: {
       templateId,
-      name: { [Op.in]: ['Net_Tuition_Revenue', 'Net_Charges_To_Student', 'NACUBO_Discount_Rate', 'Total_Discount_Rate'] },
+      name: { [Op.in]: ['Net_Tuition_Revenue', 'Net_Charges_To_Student', 'NACUBO_Discount_Rate', 'Direct_Charges_Discount_Rate'] },
     },
     raw: true,
   });
@@ -569,7 +569,7 @@ async function getAveragesMetricsFromMatchedRows(sheetId, matchedRowIndexes, tem
   const netTuitionHeaderId = headerMap['Net_Tuition_Revenue'];
   const discountRateHeaderId = headerMap['NACUBO_Discount_Rate'];
   const netChargesHeaderId = headerMap['Net_Charges_To_Student'];
-  const totalDiscountHeaderId = headerMap['Total_Discount_Rate'];
+  const totalDiscountHeaderId = headerMap['Direct_Charges_Discount_Rate'];
 
   if (!netTuitionHeaderId && !discountRateHeaderId && !netChargesHeaderId && !totalDiscountHeaderId) {
     return { netRevenue: 0, netCharges: 0, nacuboDiscount: 0, totalDiscount: 0 };
@@ -641,7 +641,7 @@ async function getAveragesMetricsFromMatchedRowsOfPackage(sheetId, matchedRowInd
   const headers = await Header.findAll({
     where: {
       templateId,
-      name: { [Op.in]: ['Net_Tuition_Revenue', 'Net_Charges_To_Student', 'NACUBO_Discount_Rate', 'Total_Discount_Rate'] },
+      name: { [Op.in]: ['Net_Tuition_Revenue', 'Net_Charges_To_Student', 'NACUBO_Discount_Rate', 'Direct_Charges_Discount_Rate'] },
     },
     raw: true,
   });
@@ -654,7 +654,7 @@ async function getAveragesMetricsFromMatchedRowsOfPackage(sheetId, matchedRowInd
   const netTuitionHeaderId = headerMap['Net_Tuition_Revenue'];
   const discountRateHeaderId = headerMap['NACUBO_Discount_Rate'];
   const netChargesHeaderId = headerMap['Net_Charges_To_Student'];
-  const totalDiscountHeaderId = headerMap['Total_Discount_Rate'];
+  const totalDiscountHeaderId = headerMap['Direct_Charges_Discount_Rate'];
 
   if (!netTuitionHeaderId && !discountRateHeaderId && !netChargesHeaderId && !totalDiscountHeaderId) {
     return {
@@ -1148,7 +1148,7 @@ async function getFinancialMetricsFromMatchedRows(sheetId, matchedRowIndexes, te
   const headers = await Header.findAll({
     where: {
       templateId,
-      name: { [Op.in]: ['Total_Institutional_Gift', 'Total_Institutional_Unfunded_Gift', 'NACUBO_Discount_Rate', 'Total_Discount_Rate',
+      name: { [Op.in]: ['Total_Institutional_Gift', 'Total_Institutional_Unfunded_Gift', 'NACUBO_Discount_Rate', 'Direct_Charges_Discount_Rate',
       'Institutional_Merit_As_%_Of_Need_Met', 'Total_Gift_Aid', 'Net_Charges_To_Student', 'Campus_Discount Rate',
       'Y/N Is_Student_Pell_Eligible', 'Student_Financial_Need', 'Total_Need_Met', 'GAP/Unmet_Need'] },
     },
@@ -1163,7 +1163,7 @@ async function getFinancialMetricsFromMatchedRows(sheetId, matchedRowIndexes, te
   const totalInstGiftId = headerMap['Total_Institutional_Gift'];
   const totalInstUnfundedGiftId = headerMap['Total_Institutional_Unfunded_Gift'];
   const discountRateHeaderId = headerMap['NACUBO_Discount_Rate'];
-  const totalDiscountHeaderId = headerMap['Total_Discount_Rate'];
+  const totalDiscountHeaderId = headerMap['Direct_Charges_Discount_Rate'];
   const instMeritNeedId = headerMap['Institutional_Merit_As_%_Of_Need_Met'];
   const totalGiftAidId = headerMap['Total_Gift_Aid'];
   const netChargesId = headerMap['Net_Charges_To_Student'];
@@ -2431,7 +2431,7 @@ async function calculatePopulationStats(templateId, sheetId) {
       }).length;
 
       const avgNetRevenue = average(studentRows.map(s => parseFloat(s.values['Net_Tuition_Revenue'] || 0)));
-      const avgDiscountRate = average(studentRows.map(s => parseFloat(s.values['Total_Discount_Rate'] || 0)));
+      const avgDiscountRate = average(studentRows.map(s => parseFloat(s.values['Direct_Charges_Discount_Rate'] || 0)));
       const avgNacuboRate = average(studentRows.map(s => parseFloat(s.values['NACUBO_Discount_Rate'] || 0)));
       const totalNetCharges = sum(studentRows.map(s => parseFloat(s.values['Net_Charges_To_Student'] || 0)));
       const totalFundedGift = sum(studentRows.map(s => parseFloat(s.values['Total_Institutional_Gift'] || 0)));

@@ -5100,14 +5100,14 @@ async function processNetTuitionFee(templateId, sheetId, maxRowIndex) {
 }
 
 async function processTotalDiscountRate(templateId, sheetId, maxRowIndex) {
-  console.log('Processing Total_Discount_Rate...');
+  console.log('Processing Direct_Charges_Discount_Rate...');
   const transaction = await sequelize.transaction();
   try {
     // Step 1: Fetch headers
     const headers = await Header.findAll({
       where: {
         templateId,
-        name: ['Total_Institutional_Gift', 'Total_Direct_Costs', 'Total_Discount_Rate']
+        name: ['Total_Institutional_Gift', 'Total_Direct_Costs', 'Direct_Charges_Discount_Rate']
       },
       transaction
     });
@@ -5115,9 +5115,9 @@ async function processTotalDiscountRate(templateId, sheetId, maxRowIndex) {
     const headerMap = {};
     headers.forEach(h => headerMap[h.name] = h.id);
 
-    if (!headerMap['Total_Discount_Rate']) {
+    if (!headerMap['Direct_Charges_Discount_Rate']) {
       await transaction.rollback();
-      return { message: 'Total_Discount_Rate header not found.' };
+      return { message: 'Direct_Charges_Discount_Rate header not found.' };
     }
 
     // Step 2: Fetch relevant SheetData
@@ -5155,7 +5155,7 @@ async function processTotalDiscountRate(templateId, sheetId, maxRowIndex) {
       const discountRate = calculateTotalDiscountRate(gift, directCosts);
       const existing = await SheetData.findOne({
         where: {
-          headerId: headerMap['Total_Discount_Rate'],
+          headerId: headerMap['Direct_Charges_Discount_Rate'],
           sheetId: sheetId,
           rowIndex: parseInt(rowIndex)
         },
@@ -5165,7 +5165,7 @@ async function processTotalDiscountRate(templateId, sheetId, maxRowIndex) {
       if (existing) {
         snapshotPayload.push({
           operationLogId: operationLog.id,
-          headerId: headerMap['Total_Discount_Rate'],
+          headerId: headerMap['Direct_Charges_Discount_Rate'],
           sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
           originalValue: existing.value,
@@ -5178,7 +5178,7 @@ async function processTotalDiscountRate(templateId, sheetId, maxRowIndex) {
       } else {
         snapshotPayload.push({
           operationLogId: operationLog.id,
-          headerId: headerMap['Total_Discount_Rate'],
+          headerId: headerMap['Direct_Charges_Discount_Rate'],
           sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
           originalValue: null,
@@ -5187,7 +5187,7 @@ async function processTotalDiscountRate(templateId, sheetId, maxRowIndex) {
         });
 
         insertPayload.push({
-          headerId: headerMap['Total_Discount_Rate'],
+          headerId: headerMap['Direct_Charges_Discount_Rate'],
           sheetId: sheetId,
           rowIndex: parseInt(rowIndex),
           value: discountRate.toString()
@@ -5207,12 +5207,12 @@ async function processTotalDiscountRate(templateId, sheetId, maxRowIndex) {
 
     await transaction.commit();
     return {
-      message: 'Processed Total_Discount_Rate with logging and snapshots.',
+      message: 'Processed Direct_Charges_Discount_Rate with logging and snapshots.',
       rowsAffected: insertPayload.length + snapshotPayload.length
     };
   } catch (error) {
     await transaction.rollback();
-    console.error('Error processing Total_Discount_Rate:', error);
+    console.error('Error processing Direct_Charges_Discount_Rate:', error);
     throw error;
   }
 }

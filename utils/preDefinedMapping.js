@@ -6083,7 +6083,7 @@ const pre_defined_mapping = [
     ]
   },
   {
-    "name": "Total_Discount_Rate",
+    "name": "Direct_Charges_Discount_Rate",
     "aliases": [
       "TOTAL_DISCOUNT_RATE",
       "totalDiscountRate",

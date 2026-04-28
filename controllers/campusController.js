@@ -18,6 +18,7 @@ const createCampus = async (req, res) => {
     presidentName = "",
     schoolType,
     customFields = [],
+    academicYearCoa = []
   } = req.body;
 
   const username = await getUserName(req.userId);
@@ -40,6 +41,7 @@ const createCampus = async (req, res) => {
       gradStudents,
       presidentName,
       schoolType,
+      academicYearCoa,
     });
 
 
@@ -152,6 +154,7 @@ const updateCampus = async (req, res) => {
     presidentName,
     schoolType,
     customFields = [],
+    academicYearCoa = []
   } = req.body;
 
   const username = await getUserName(req.userId);
@@ -179,6 +182,7 @@ const updateCampus = async (req, res) => {
       gradStudents: gradStudents !== undefined ? gradStudents : campus.gradStudents,
       presidentName: presidentName !== undefined ? presidentName : campus.presidentName,
       schoolType: schoolType !== undefined ? schoolType : campus.schoolType,
+      academicYearCoa: academicYearCoa !== undefined ? academicYearCoa : campus.academicYearCoa,
     });
 
     // Delete all existing custom fields for this campus
@@ -212,7 +216,7 @@ const updateCampus = async (req, res) => {
       action: "UPDATE_CAMPUS",
       username,
       performedBy: req.userRole,
-      details: `Updated campus ID: ${campusId} with ${customFields.length} custom fields`,
+      details: `Updated campus ID: ${campusId} with ${customFields.length} custom fields and academic year COA`,
     });
 
     // Fetch the updated campus data with all custom fields
