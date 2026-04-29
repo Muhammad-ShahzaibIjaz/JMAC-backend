@@ -1,5 +1,18 @@
 const normalizeKey = key => typeof key === 'string' ? key.replace(/[^a-zA-Z0-9_]/g, '_') : '';
 
+const DATE_REGEX = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?)?$/;
+
+const isDateString = (v) => typeof v === 'string' && DATE_REGEX.test(v);
+
+const toDateOnly = (v) => isDateString(v) ? v.slice(0, 10) : v;
+
+const valuesEqual = (a, b) => {
+  if (isDateString(a) && isDateString(b)) {
+    return toDateOnly(a) === toDateOnly(b);
+  }
+  return a === b;
+};
+
 function evaluateConditions(rowData, conditionBlock) {
   const getValue = (field) => {
     const normalizedField = normalizeKey(field);
@@ -10,13 +23,13 @@ function evaluateConditions(rowData, conditionBlock) {
     if (cond.operator === 'isEqualTo') {
       const val1 = getValue(cond.field1);
       const val2 = getValue(cond.field2);
-      return val1 === val2;
+      return valuesEqual(val1, val2);
     }
     if (cond.operator === 'isNotEqualTo') {
       const val1 = getValue(cond.field1);
       const val2 = getValue(cond.field2);
       if ((val1 === null || val1 === '' || val1 === "NULL" || val1 === "null") && (val2 === null || val2 === '' || val2 === "NULL" || val2 === "null")) return false;
-      return val1 !== val2;
+      return !valuesEqual(val1, val2);
     }
 
     const value = getValue(cond.field);
