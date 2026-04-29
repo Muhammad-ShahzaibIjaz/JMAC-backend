@@ -8,7 +8,7 @@ const { processFiles } = require('./fileController');
 const { getMapHeaders, getHeaderID } = require('./headerController');
 const { v4: uuidv4 } = require('uuid');
 const math = require('mathjs');
-const { OperationLog, SheetDataSnapshot } = require('../models');
+const { OperationLog, SheetDataSnapshot, Campus } = require('../models');
 const { convertScore } = require('../services/conversion');
 const { getCipTitle } = require('../services/cipService');
 const { desiredOrder, requiredHeadersName, awardTypePatterns, ynFlags } = require('../utils/headerOrderList');
@@ -6220,33 +6220,10 @@ async function processCampusDiscount(templateId, sheetId, maxRowIndex) {
   }
 }
 
-async function processCOA(templateId, sheetId, maxRowIndex) {
+async function processCOA(templateId, sheetId, maxRowIndex, autoFillCOA, campusId) {
   console.log('Processing 2_Semester COA...');
   const transaction = await sequelize.transaction();
   try {
-    // Fixed value sets for Academic_Year = 2026 (as strings — ready for DB writes)
-    const STANDARD_2026 = {
-      '2_Semester_COA': '52170',
-      '2_Semester_Tuition': '33300',
-      '2_Semester_Room': '13090',
-      '2_Semester_Meals': '0',
-      '2_Semester_Fees': '900',
-      '2_Semester_Books_Supplies': '1116',
-      '2_Semester_Transportation': '1960',
-      '2_Semester_Other_Indirect_Charges': '1804'
-    };
-
-    const OFF_CAMPUS_2026 = {
-      '2_Semester_COA': '55018',
-      '2_Semester_Tuition': '33300',
-      '2_Semester_Room': '10196',
-      '2_Semester_Meals': '0',
-      '2_Semester_Fees': '900',
-      '2_Semester_Books_Supplies': '1116',
-      '2_Semester_Transportation': '2156',
-      '2_Semester_Other_Indirect_Charges': '7350'
-    };
-
     const NUMERIC_FIELDS = [
       '2_Semester_COA',
       '2_Semester_Tuition',
@@ -6258,7 +6235,52 @@ async function processCOA(templateId, sheetId, maxRowIndex) {
       '2_Semester_Other_Indirect_Charges'
     ];
 
-    // Step 1: Fetch headers
+    // Map JSON keys (from campus.academicYearCoa) → header field names
+    const COA_KEY_TO_FIELD = {
+      coa: '2_Semester_COA',
+      tuition: '2_Semester_Tuition',
+      fees: '2_Semester_Fees',
+      room: '2_Semester_Room',
+      meals: '2_Semester_Meals',
+      booksSupplies: '2_Semester_Books_Supplies',
+      transportation: '2_Semester_Transportation',
+      otherIndirectCharges: '2_Semester_Other_Indirect_Charges'
+    };
+
+    // Step 1: Load campus COA config if auto-fill is on
+    // Build a Map<academicYear, { onCampus, offCampus }> for O(1) lookup
+    const coaByYear = new Map();
+    if (autoFillCOA && campusId) {
+      const campus = await Campus.findByPk(campusId, {
+        attributes: ['academicYearCoa'],
+        transaction
+      });
+
+      const entries = campus?.academicYearCoa;
+      if (Array.isArray(entries)) {
+        for (const entry of entries) {
+          if (!entry || !entry.academicYear) continue;
+          coaByYear.set(String(entry.academicYear).trim(), {
+            onCampus: entry.onCampus || null,
+            offCampus: entry.offCampus || null
+          });
+        }
+      }
+    }
+
+    // Convert a campus COA object ({ coa, tuition, ... }) into the
+    // header-field-keyed string map the rest of the code expects.
+    const buildValueSet = (coaObj) => {
+      if (!coaObj) return null;
+      const out = {};
+      for (const [jsonKey, fieldName] of Object.entries(COA_KEY_TO_FIELD)) {
+        const v = coaObj[jsonKey];
+        out[fieldName] = (v === null || v === undefined) ? '0' : String(v);
+      }
+      return out;
+    };
+
+    // Step 2: Fetch headers
     const headers = await Header.findAll({
       where: {
         templateId,
@@ -6284,7 +6306,7 @@ async function processCOA(templateId, sheetId, maxRowIndex) {
       return { message: '2_Semester_COA header not found.' };
     }
 
-    // Step 2: Fetch ALL relevant SheetData in a single raw query (no model hydration)
+    // Step 3: Fetch ALL relevant SheetData in a single raw query
     const relevantHeaderIds = [
       coaId, tuitionId, feesId, roomId, mealsId,
       booksId, transportationId, otherId
@@ -6299,8 +6321,7 @@ async function processCOA(templateId, sheetId, maxRowIndex) {
       transaction
     });
 
-    // Step 3: Build row-indexed lookup: Map<rowIndex, { [headerId]: { id, value } }>
-    // This is the key win — zero DB calls inside the main loop.
+    // Step 4: Build row-indexed lookup
     const grouped = new Map();
     for (const row of sheetData) {
       let rowMap = grouped.get(row.rowIndex);
@@ -6311,7 +6332,7 @@ async function processCOA(templateId, sheetId, maxRowIndex) {
       rowMap[row.headerId] = { id: row.id, value: row.value };
     }
 
-    // Step 4: Create OperationLog
+    // Step 5: Create OperationLog
     const operationLog = await OperationLog.create({
       templateId,
       sheetId,
@@ -6319,15 +6340,14 @@ async function processCOA(templateId, sheetId, maxRowIndex) {
     }, { transaction });
     const operationLogId = operationLog.id;
 
-    // Step 5: Walk rows and build payloads — pure in-memory work
-    const insertPayload = [];        // new SheetData rows
-    const updatePayload = [];        // { id, value } for existing rows
-    const snapshotPayload = [];      // SheetDataSnapshot rows
+    // Step 6: Walk rows and build payloads
+    const insertPayload = [];
+    const updatePayload = [];
+    const snapshotPayload = [];
 
     const queueWrite = (headerId, rowIndex, newValueStr, existing) => {
       if (existing) {
-        // Skip no-op writes — big win on re-runs
-        if (existing.value === newValueStr) return;
+        if (existing.value === newValueStr) return; // skip no-op writes
         snapshotPayload.push({
           operationLogId,
           headerId,
@@ -6352,6 +6372,19 @@ async function processCOA(templateId, sheetId, maxRowIndex) {
       }
     };
 
+    // Sum components into 2_Semester_COA — original "else" behavior,
+    // extracted so we can reuse it as a fallback when a year has no campus config.
+    const sumIntoCOA = (rowIndex, values) => {
+      const num = (hId) => {
+        const v = values && hId ? values[hId]?.value : null;
+        return v ? (parseFloat(v) || 0) : 0;
+      };
+      const coa = num(tuitionId) + num(feesId) + num(roomId) + num(mealsId) +
+                  num(booksId) + num(transportationId) + num(otherId);
+      const existing = values ? values[coaId] : null;
+      queueWrite(coaId, rowIndex, coa.toString(), existing);
+    };
+
     for (let rowIndex = 0; rowIndex <= maxRowIndex; rowIndex++) {
       const values = grouped.get(rowIndex);
 
@@ -6360,12 +6393,20 @@ async function processCOA(templateId, sheetId, maxRowIndex) {
       const academicYear = academicYearRaw ? String(academicYearRaw).trim() : '';
       const housingStatus = housingStatusRaw ? String(housingStatusRaw).trim().toLowerCase() : '';
 
-      if (academicYear === '2026') {
-        const coaExisting = values ? values[coaId] : null;
-        const hasCOA = coaExisting && coaExisting.value !== null &&
-                       coaExisting.value !== undefined && coaExisting.value !== '';
+      // Decide whether to apply the campus COA values for this row.
+      // Conditions: autoFillCOA is on AND we have a campus config for this row's year.
+      const yearConfig = (autoFillCOA && academicYear) ? coaByYear.get(academicYear) : null;
+
+      if (yearConfig) {
         const isOffCampus = housingStatus === 'off campus';
-        const valueSet = (hasCOA && isOffCampus) ? OFF_CAMPUS_2026 : STANDARD_2026;
+        const sourceCoa = isOffCampus ? yearConfig.offCampus : yearConfig.onCampus;
+        const valueSet = buildValueSet(sourceCoa);
+
+        // If the chosen side (on/off) is missing in the campus config, fall back to summing.
+        if (!valueSet) {
+          sumIntoCOA(rowIndex, values);
+          continue;
+        }
 
         for (const fieldName of NUMERIC_FIELDS) {
           const hId = headerMap[fieldName];
@@ -6374,19 +6415,13 @@ async function processCOA(templateId, sheetId, maxRowIndex) {
           queueWrite(hId, rowIndex, valueSet[fieldName], existing);
         }
       } else {
-        // Original behavior: sum components into 2_Semester_COA
-        const num = (hId) => {
-          const v = values && hId ? values[hId]?.value : null;
-          return v ? (parseFloat(v) || 0) : 0;
-        };
-        const coa = num(tuitionId) + num(feesId) + num(roomId) + num(mealsId) +
-                    num(booksId) + num(transportationId) + num(otherId);
-        const existing = values ? values[coaId] : null;
-        queueWrite(coaId, rowIndex, coa.toString(), existing);
+        // Either autoFillCOA is false, or this row's academic year is not
+        // configured on the campus → fall back to the sum-components logic.
+        sumIntoCOA(rowIndex, values);
       }
     }
 
-    // Step 6: Bulk insert new rows in chunks
+    // Step 7: Bulk insert
     const CHUNK = 5000;
     for (let i = 0; i < insertPayload.length; i += CHUNK) {
       await SheetData.bulkCreate(insertPayload.slice(i, i + CHUNK), {
@@ -6396,9 +6431,7 @@ async function processCOA(templateId, sheetId, maxRowIndex) {
       });
     }
 
-    // Step 7: Bulk update existing rows — group by target value so we issue
-    // one UPDATE per distinct value instead of one per row. With only 8 fixed
-    // value sets, millions of row updates collapse into a handful of statements.
+    // Step 8: Bulk update — group by target value, one UPDATE per distinct value
     const updatesByValue = new Map();
     for (const { id, value } of updatePayload) {
       let ids = updatesByValue.get(value);
@@ -6418,7 +6451,7 @@ async function processCOA(templateId, sheetId, maxRowIndex) {
       }
     }
 
-    // Step 8: Bulk insert snapshots in chunks
+    // Step 9: Bulk insert snapshots
     for (let i = 0; i < snapshotPayload.length; i += CHUNK) {
       await SheetDataSnapshot.bulkCreate(snapshotPayload.slice(i, i + CHUNK), {
         transaction,
@@ -6442,9 +6475,9 @@ async function processCOA(templateId, sheetId, maxRowIndex) {
 }
 
 
-async function calculateFurtherMetrics(templateId, sheetId, maxRowIndex, fnflMap) {
+async function calculateFurtherMetrics(templateId, sheetId, maxRowIndex, fnflMap, autoFillCOA, campusId) {
   await processNACUBODiscountRates(templateId, sheetId, maxRowIndex);
-  await processCOA(templateId, sheetId, maxRowIndex);
+  await processCOA(templateId, sheetId, maxRowIndex, autoFillCOA, campusId);
   await processNetCharges(templateId, sheetId, maxRowIndex);
   await processTotalDirectCost(templateId, sheetId, maxRowIndex);
   await processNetTuition(templateId, sheetId, maxRowIndex);
@@ -6463,7 +6496,7 @@ async function calculateAwardInfo(req, res) {
   const username = await getUserName(req.userId);
   const transaction = await sequelize.transaction();
   try{
-    const { templateId, sheetId, acceptedStatuses } = req.body;
+    const { templateId, sheetId, acceptedStatuses, autoFillCOA=false, campusId } = req.body;
     if (!templateId || !sheetId || !Array.isArray(acceptedStatuses) || acceptedStatuses.length === 0) {
       await transaction.rollback();
       return res.status(400).json({ message: 'Invalid input. templateId, sheetId, and acceptedStatuses are required.' });
@@ -6482,7 +6515,7 @@ async function calculateAwardInfo(req, res) {
     const fnflSums = await calculateAwards(templateId, sheetId, acceptedStatuses, transaction);
     const fnflMap = {};
     fnflSums.forEach(f => fnflMap[f.rowIndex] = f.amount);
-    await calculateFurtherMetrics(templateId, sheetId, maxRow, fnflMap);
+    await calculateFurtherMetrics(templateId, sheetId, maxRow, fnflMap, autoFillCOA, campusId);
     await createLog({ action: 'CALCULATE_AWARD_INFO', username, performedBy: req.userRole, details: `Calculated award info for templateId: ${templateId}, sheetId: ${sheetId}` });
     res.status(200).json({ message: 'Award information calculated successfully.' });
   } catch(error){
@@ -6839,11 +6872,11 @@ async function getNullAwardRows(templateId, sheetId) {
   }
 }
 
-async function populateAward20Fields(templateId, targetHeaderId, sheetId, targetRows, awardStatusName) {
-  console.log('Populating Awd_Amt20, Awd_Cd20, Awd_Status20, Awd_CR20...');
+async function populateAward20Amt(templateId, targetHeaderId, sheetId, awardStatusName) {
+  console.log('Populating Awd_Amt20 for matching international award rows...');
   const transaction = await sequelize.transaction();
   try {
-    // Step 1: Get header IDs
+    // Step 1: Get header IDs for the three filter columns + the target Awd_Amt20
     const headers = await Header.findAll({
       where: {
         templateId,
@@ -6863,93 +6896,158 @@ async function populateAward20Fields(templateId, targetHeaderId, sheetId, target
       return { message: 'One or more target headers not found.' };
     }
 
-    // Step 2: Create OperationLog
+    // Step 2: Fetch all sheet data for the three filter columns + the source header in one go
+    const filterData = await SheetData.findAll({
+      where: {
+        sheetId,
+        headerId: [cd20Id, status20Id, cr20Id, targetHeaderId]
+      },
+      attributes: ['headerId', 'rowIndex', 'value'],
+      raw: true,
+      transaction
+    });
+
+    // Step 3: Group by rowIndex so we can check all three conditions per row
+    // Map<rowIndex, { cd?: string, status?: string, cr?: string, target?: string }>
+    const rowMap = new Map();
+    for (const row of filterData) {
+      let bucket = rowMap.get(row.rowIndex);
+      if (!bucket) {
+        bucket = {};
+        rowMap.set(row.rowIndex, bucket);
+      }
+      if (row.headerId === cd20Id) bucket.cd = row.value;
+      else if (row.headerId === status20Id) bucket.status = row.value;
+      else if (row.headerId === cr20Id) bucket.cr = row.value;
+      else if (row.headerId === targetHeaderId) bucket.target = row.value;
+    }
+
+    // Step 4: Find matching rows — those where all three filter conditions hold
+    const matchingRows = [];
+    for (const [rowIndex, bucket] of rowMap) {
+      if (
+        bucket.cd === 'B:International' &&
+        bucket.cr === 'IMUG' &&
+        bucket.status === awardStatusName
+      ) {
+        const cleaned = bucket.target?.replace(/[^\d.-]/g, '') || '0';
+        matchingRows.push({ rowIndex, amtValue: cleaned });
+      }
+    }
+
+    if (matchingRows.length === 0) {
+      await transaction.rollback();
+      return { message: 'No matching rows found.', rowsAffected: 0 };
+    }
+
+    // Step 5: Fetch existing Awd_Amt20 values for matching rows (for snapshot originalValue)
+    const matchingRowIndexes = matchingRows.map(r => r.rowIndex);
+    const existingAmt = await SheetData.findAll({
+      where: {
+        sheetId,
+        headerId: amt20Id,
+        rowIndex: matchingRowIndexes
+      },
+      attributes: ['id', 'rowIndex', 'value'],
+      raw: true,
+      transaction
+    });
+
+    const existingMap = new Map();
+    for (const entry of existingAmt) {
+      existingMap.set(entry.rowIndex, { id: entry.id, value: entry.value });
+    }
+
+    // Step 6: Create OperationLog
     const operationLog = await OperationLog.create({
       templateId,
       sheetId,
       operationType: 'BULK_UPDATE'
     }, { transaction });
 
-    // Step 3: Fetch source values from targetHeaderId
-    const sourceData = await SheetData.findAll({
-      where: {
-        headerId: targetHeaderId,
-        sheetId,
-        rowIndex: targetRows
-      },
-      transaction
-    });
-
-    const valueMap = new Map();
-    for (const entry of sourceData) {
-      const cleaned = entry.value?.replace(/[^\d.-]/g, '') || '0';
-      valueMap.set(entry.rowIndex, cleaned);
-    }
-
-    // Step 4: Fetch existing SheetData for target rows and headers
-    const existingData = await SheetData.findAll({
-      where: {
-        sheetId,
-        rowIndex: targetRows,
-        headerId: [amt20Id, cd20Id, status20Id, cr20Id]
-      },
-      transaction
-    });
-
-    const existingMap = new Map(); // key: `${headerId}_${rowIndex}`
-    for (const entry of existingData) {
-      const key = `${entry.headerId}_${entry.rowIndex}`;
-      existingMap.set(key, entry.value);
-    }
-
-    // Step 5: Prepare upsert + snapshot payloads
-    const upsertPayload = [];
+    // Step 7: Build payloads — only Awd_Amt20 needs writing
+    const insertPayload = [];
+    const updatePayload = [];
     const snapshotPayload = [];
 
-    for (const rowIndex of targetRows) {
-      const amtValue = valueMap.get(rowIndex) || '0';
+    for (const { rowIndex, amtValue } of matchingRows) {
+      const existing = existingMap.get(rowIndex);
 
-      const entries = [
-        { headerId: amt20Id, value: amtValue },
-        { headerId: cd20Id, value: 'B:International' },
-        { headerId: status20Id, value: awardStatusName },
-        { headerId: cr20Id, value: 'IMUG' }
-      ];
-
-      for (const { headerId, value } of entries) {
-        const key = `${headerId}_${rowIndex}`;
-        const originalValue = existingMap.get(key) ?? null;
-
+      if (existing) {
+        if (existing.value === amtValue) continue; // skip no-op
         snapshotPayload.push({
           operationLogId: operationLog.id,
-          headerId,
+          headerId: amt20Id,
           sheetId,
           rowIndex,
-          originalValue,
-          newValue: value,
-          changeType: originalValue === null ? 'INSERT' : 'UPDATE'
+          originalValue: existing.value,
+          newValue: amtValue,
+          changeType: 'UPDATE'
         });
-
-        upsertPayload.push({ headerId, sheetId, rowIndex, value });
+        updatePayload.push({ id: existing.id, value: amtValue });
+      } else {
+        snapshotPayload.push({
+          operationLogId: operationLog.id,
+          headerId: amt20Id,
+          sheetId,
+          rowIndex,
+          originalValue: null,
+          newValue: amtValue,
+          changeType: 'INSERT'
+        });
+        insertPayload.push({ headerId: amt20Id, sheetId, rowIndex, value: amtValue });
       }
     }
 
-    // Step 6: Bulk upsert and snapshot
-    await SheetData.bulkCreate(upsertPayload, {
-      transaction,
-      updateOnDuplicate: ['value']
-    });
+    // Step 8: Bulk insert new rows
+    const CHUNK = 5000;
+    for (let i = 0; i < insertPayload.length; i += CHUNK) {
+      await SheetData.bulkCreate(insertPayload.slice(i, i + CHUNK), {
+        transaction,
+        validate: false,
+        hooks: false
+      });
+    }
 
-    await SheetDataSnapshot.bulkCreate(snapshotPayload, { transaction });
+    // Step 9: Bulk update existing rows — group by value for fewer UPDATE statements
+    const updatesByValue = new Map();
+    for (const { id, value } of updatePayload) {
+      let ids = updatesByValue.get(value);
+      if (!ids) {
+        ids = [];
+        updatesByValue.set(value, ids);
+      }
+      ids.push(id);
+    }
+
+    for (const [value, ids] of updatesByValue) {
+      for (let i = 0; i < ids.length; i += CHUNK) {
+        await SheetData.update(
+          { value },
+          { where: { id: ids.slice(i, i + CHUNK) }, transaction, hooks: false }
+        );
+      }
+    }
+
+    // Step 10: Bulk insert snapshots
+    for (let i = 0; i < snapshotPayload.length; i += CHUNK) {
+      await SheetDataSnapshot.bulkCreate(snapshotPayload.slice(i, i + CHUNK), {
+        transaction,
+        validate: false,
+        hooks: false
+      });
+    }
 
     await transaction.commit();
     return {
-      message: `Upserted award fields with snapshot logging for ${targetRows.length} rows.`,
-      rowsAffected: upsertPayload.length
+      message: `Updated Awd_Amt20 for ${matchingRows.length} matching rows.`,
+      rowsAffected: matchingRows.length,
+      rowsInserted: insertPayload.length,
+      rowsUpdated: updatePayload.length
     };
   } catch (error) {
     await transaction.rollback();
-    console.error('Error populating award fields:', error);
+    console.error('Error populating Awd_Amt20:', error);
     throw error;
   }
 }
@@ -6960,22 +7058,35 @@ async function autoFillInternationalAwards(req, res) {
   const username = await getUserName(req.userId);
   try {
     if (!templateId || !sheetId || !targetHeader || !awardStatusName) {
-      return res.status(400).json({ message: 'templateId, sheetId, targetHeader, and awardStatusName are required.' });
-    }
-    const targetRows = await getNullAwardRows(templateId, sheetId);
-    if (targetRows.length === 0) {
-      return res.status(200).json({ message: 'No rows with all NULL awards found.' });
+      return res.status(400).json({
+        message: 'templateId, sheetId, targetHeader, and awardStatusName are required.'
+      });
     }
 
     const header = await Header.findOne({ where: { templateId, name: targetHeader } });
     if (!header) {
-      return res.status(404).json({ message: `Header "${targetHeader}" not found for the given templateId.` });
+      return res.status(404).json({
+        message: `Header "${targetHeader}" not found for the given templateId.`
+      });
     }
-    const result = await populateAward20Fields(templateId, header.id, sheetId, targetRows, awardStatusName);
-    await createLog({ action: 'AUTO_FILL_INTERNATIONAL_AWARDS', username, performedBy: req.userRole, details: `Auto-filled international awards for templateId: ${templateId}, sheetId: ${sheetId}` });
+
+    const result = await populateAward20Amt(templateId, header.id, sheetId, awardStatusName);
+
+    await createLog({
+      action: 'AUTO_FILL_INTERNATIONAL_AWARDS',
+      username,
+      performedBy: req.userRole,
+      details: `Auto-filled international awards for templateId: ${templateId}, sheetId: ${sheetId}`
+    });
+
     return res.status(200).json({ message: 'Auto-fill completed.', details: result });
   } catch (error) {
-    await createLog({ action: 'AUTO_FILL_INTERNATIONAL_AWARDS_FAILED', username, performedBy: req.userRole, details: `Failed to auto-fill international awards for templateId: ${req.body.templateId}, sheetId: ${req.body.sheetId}. Error: ${error.message}` });
+    await createLog({
+      action: 'AUTO_FILL_INTERNATIONAL_AWARDS_FAILED',
+      username,
+      performedBy: req.userRole,
+      details: `Failed to auto-fill international awards for templateId: ${req.body.templateId}, sheetId: ${req.body.sheetId}. Error: ${error.message}`
+    });
     console.error('Error in autoFillInternationalAwards:', error);
     return res.status(500).json({ message: 'Internal server error.', details: error.message });
   }
