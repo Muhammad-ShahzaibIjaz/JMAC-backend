@@ -6,6 +6,9 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "serve": "nodemon --max-old-space-size=8192 server.js"
   },
+  "nodemonConfig": {
+    "ignore": ["geocodeCache.json"]
+  },
   "keywords": [],
   "author": "",
   "license": "ISC",
