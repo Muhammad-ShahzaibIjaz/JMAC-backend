@@ -1457,7 +1457,12 @@ const calculateFilerStats = async (sheetId, templateId, admittedRowIndexes) => {
   // Step 4: Filter totalFilers (SAI not blank)
   const totalFilers = admittedRowIndexes.filter(index => {
     const val = saiMap[index];
-    return val !== null && val !== undefined && val.toString().trim() !== '';
+    return val !== null && val !== undefined && val.toString().trim() !== '' && val.toString().trim().toUpperCase() !== 'NULL';
+  });
+
+  const totalNonFilers = admittedRowIndexes.filter(index => {
+    const val = saiMap[index];
+    return val === null || val === undefined || val.toString().trim() === '' || val.toString().trim().toUpperCase() === 'NULL';
   });
 
   // Step 5: Filter needBased (SAI exists AND Need > 0)
@@ -1480,7 +1485,9 @@ const calculateFilerStats = async (sheetId, templateId, admittedRowIndexes) => {
   const avg = arr => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
 
   return {
+    overAllTotal: admittedCount,
     totalFilers: totalFilers.length,
+    totalNonFilers: totalNonFilers.length,
     needBased: needBased.length,
     totalFilerPercent,
     needBasedPercent,
@@ -1516,7 +1523,7 @@ const getFAFSAFilerSummary = async (req, res) => {
         return {
           yearLabel,
           result: {
-            statuses: allStatuses.map(status => ({ statusName: status.statusName, totalFilers: 0, needBased: 0, totalFilerPercent: 0, needBasedPercent: 0, totalFilerSAI: 0, needBasedSAI: 0, totalFilerAvgNeed: 0, needBasedAvgNeed: 0 })),
+            statuses: allStatuses.map(status => ({ statusName: status.statusName, overAllTotal: 0, totalFilers: 0, totalNonFilers: 0, needBased: 0, totalFilerPercent: 0, needBasedPercent: 0, totalFilerSAI: 0, needBasedSAI: 0, totalFilerAvgNeed: 0, needBasedAvgNeed: 0 })),
           }
         };
       }
@@ -1543,7 +1550,7 @@ const getFAFSAFilerSummary = async (req, res) => {
         return {
           yearLabel,
           result: {
-            statuses: allStatuses.map(status => ({ statusName: status.statusName, totalFilers: 0, needBased: 0, totalFilerPercent: 0, needBasedPercent: 0, totalFilerSAI: 0, needBasedSAI: 0, totalFilerAvgNeed: 0, needBasedAvgNeed: 0 })),
+            statuses: allStatuses.map(status => ({ statusName: status.statusName, overAllTotal: 0, totalFilers: 0, totalNonFilers: 0, needBased: 0, totalFilerPercent: 0, needBasedPercent: 0, totalFilerSAI: 0, needBasedSAI: 0, totalFilerAvgNeed: 0, needBasedAvgNeed: 0 })),
           }
         };
       }
