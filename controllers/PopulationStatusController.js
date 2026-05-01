@@ -1475,12 +1475,15 @@ const calculateFilerStats = async (sheetId, templateId, admittedRowIndexes) => {
   const admittedCount = admittedRowIndexes.length;
   const totalFilerPercent = admittedCount ? ((totalFilers.length / admittedCount) * 100).toFixed(2) : 0;
   const needBasedPercent = admittedCount ? ((needBased.length / admittedCount) * 100).toFixed(2) : 0;
+  const totalNonFilerPercent = admittedCount ? ((totalNonFilers.length / admittedCount) * 100).toFixed(2) : 0;
 
   // Step 7: Calculate averages
   const totalFilerSAIValues = totalFilers.map(i => parseFloat(saiMap[i])).filter(v => !isNaN(v));
   const needBasedSAIValues = needBased.map(i => parseFloat(saiMap[i])).filter(v => !isNaN(v));
+  const totalNonFilerSAIValues = totalNonFilers.map(i => parseFloat(saiMap[i])).filter(v => !isNaN(v));
   const totalFilerNeedValues = totalFilers.map(i => parseFloat(needMap[i])).filter(v => !isNaN(v));
   const needBasedNeedValues = needBased.map(i => parseFloat(needMap[i])).filter(v => !isNaN(v));
+  const totalNonFilerNeedValues = totalNonFilers.map(i => parseFloat(needMap[i])).filter(v => !isNaN(v));
 
   const avg = arr => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
 
@@ -1491,10 +1494,13 @@ const calculateFilerStats = async (sheetId, templateId, admittedRowIndexes) => {
     needBased: needBased.length,
     totalFilerPercent,
     needBasedPercent,
+    totalNonFilerPercent,
     totalFilerAvgSAI: avg(totalFilerSAIValues),
     needBasedAvgSAI: avg(needBasedSAIValues),
+    totalNonFilerAvgSAI: avg(totalNonFilerSAIValues),
     totalFilerAvgNeed: avg(totalFilerNeedValues),
-    needBasedAvgNeed: avg(needBasedNeedValues)
+    needBasedAvgNeed: avg(needBasedNeedValues),
+    totalNonFilerAvgNeed: avg(totalNonFilerNeedValues),
   };
 };
 
@@ -1523,7 +1529,7 @@ const getFAFSAFilerSummary = async (req, res) => {
         return {
           yearLabel,
           result: {
-            statuses: allStatuses.map(status => ({ statusName: status.statusName, overAllTotal: 0, totalFilers: 0, totalNonFilers: 0, needBased: 0, totalFilerPercent: 0, needBasedPercent: 0, totalFilerSAI: 0, needBasedSAI: 0, totalFilerAvgNeed: 0, needBasedAvgNeed: 0 })),
+            statuses: allStatuses.map(status => ({ statusName: status.statusName, overAllTotal: 0, totalFilers: 0, totalNonFilers: 0, needBased: 0, totalFilerPercent: 0, needBasedPercent: 0, totalNonFilerPercent: 0, totalFilerSAI: 0, needBasedSAI: 0, totalNonFilerSAI: 0, totalFilerAvgNeed: 0, needBasedAvgNeed: 0, totalNonFilerAvgNeed: 0 })),
           }
         };
       }
@@ -1550,7 +1556,7 @@ const getFAFSAFilerSummary = async (req, res) => {
         return {
           yearLabel,
           result: {
-            statuses: allStatuses.map(status => ({ statusName: status.statusName, overAllTotal: 0, totalFilers: 0, totalNonFilers: 0, needBased: 0, totalFilerPercent: 0, needBasedPercent: 0, totalFilerSAI: 0, needBasedSAI: 0, totalFilerAvgNeed: 0, needBasedAvgNeed: 0 })),
+            statuses: allStatuses.map(status => ({ statusName: status.statusName, overAllTotal: 0, totalFilers: 0, totalNonFilers: 0, needBased: 0, totalFilerPercent: 0, needBasedPercent: 0, totalNonFilerPercent: 0, totalFilerSAI: 0, needBasedSAI: 0, totalNonFilerSAI: 0, totalFilerAvgNeed: 0, needBasedAvgNeed: 0, totalNonFilerAvgNeed: 0 })),
           }
         };
       }
