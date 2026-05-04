@@ -5498,119 +5498,6 @@ async function processNeed(templateId, sheetId, maxRowIndex) {
   }
 }
 
-// async function processNeedMet(templateId, sheetId, maxRowIndex, fnflMap) {
-//   console.log('Processing Need_Met...');
-//   const transaction = await sequelize.transaction();
-//   try {
-//     const headers = await Header.findAll({
-//       where: {
-//         templateId,
-//         name: ['Student_Financial_Need', 'Total_Gift_Aid', 'Total_Work_Aid', 'Total_Need_Met']
-//       },
-//       transaction
-//     });
-
-//     const headerMap = {};
-//     headers.forEach(h => headerMap[h.name] = h.id);
-
-//     if (!headerMap['Total_Need_Met']) {
-//       await transaction.rollback();
-//       return { message: 'Total_Need_Met header not found.' };
-//     }
-
-//     const sheetData = await SheetData.findAll({
-//       where: {
-//         headerId: [headerMap['Student_Financial_Need'], headerMap['Total_Gift_Aid'], headerMap['Total_Work_Aid']],
-//         sheetId: sheetId
-//       },
-//       transaction
-//     });
-
-//     const grouped = {};
-//     sheetData.forEach(data => {
-//       if (!grouped[data.rowIndex]) grouped[data.rowIndex] = {};
-//       grouped[data.rowIndex][data.headerId] = parseFloat(data.value) || 0;
-//     });
-
-//     const operationLog = await OperationLog.create({
-//       templateId,
-//       sheetId,
-//       operationType: 'CALCULATION'
-//     }, { transaction });
-
-//     const insertPayload = [];
-//     const snapshotPayload = [];
-
-//     for (let rowIndex = 0; rowIndex <= maxRowIndex; rowIndex++) {
-//       const values = grouped[rowIndex] || {};
-//       const fnflAmount = fnflMap[rowIndex] || 0;
-//       const need = values[headerMap['Student_Financial_Need']] || 0;
-//       const gift = values[headerMap['Total_Gift_Aid']] || 0;
-//       const work = values[headerMap['Total_Work_Aid']] || 0;
-
-//       const needMet = calculateNeedMet(need, gift, work, fnflAmount);
-//       const existing = await SheetData.findOne({
-//         where: {
-//           headerId: headerMap['Total_Need_Met'],
-//           sheetId: sheetId,
-//           rowIndex: parseInt(rowIndex)
-//         },
-//         transaction
-//       });
-
-//       if (existing) {
-//         snapshotPayload.push({
-//           operationLogId: operationLog.id,
-//           headerId: headerMap['Total_Need_Met'],
-//           sheetId: sheetId,
-//           rowIndex: parseInt(rowIndex),
-//           originalValue: existing.value,
-//           newValue: needMet.toString(),
-//           changeType: 'UPDATE'
-//         });
-
-//         existing.value = needMet.toString();
-//         await existing.save({ transaction });
-//       } else {
-//         snapshotPayload.push({
-//           operationLogId: operationLog.id,
-//           headerId: headerMap['Total_Need_Met'],
-//           sheetId: sheetId,
-//           rowIndex: parseInt(rowIndex),
-//           originalValue: null,
-//           newValue: needMet.toString(),
-//           changeType: 'INSERT'
-//         });
-
-//         insertPayload.push({
-//           headerId: headerMap['Total_Need_Met'],
-//           sheetId: sheetId,
-//           rowIndex: parseInt(rowIndex),
-//           value: needMet.toString()
-//         });
-//       }
-//     }
-
-//     if (insertPayload.length > 0) {
-//       await SheetData.bulkCreate(insertPayload, { transaction });
-//     }
-
-//     if (snapshotPayload.length > 0) {
-//       await SheetDataSnapshot.bulkCreate(snapshotPayload, { transaction });
-//     }
-
-//     await transaction.commit();
-//     return {
-//       message: 'Processed Total_Need_Met with logging and snapshots.',
-//       rowsAffected: insertPayload.length + snapshotPayload.length
-//     };
-//   } catch (error) {
-//     await transaction.rollback();
-//     console.error('Error processing Total_Need_Met:', error);
-//     throw error;
-//   }
-// }
-
 async function processGap(templateId, sheetId, maxRowIndex, fnflMap) {
   console.log('Processing Gap...');
   const transaction = await sequelize.transaction();
@@ -5786,7 +5673,12 @@ async function processTotalNeedMet(templateId, sheetId, maxRowIndex, fnflMap) {
       const work = values[headerMap['Total_Work_Aid']] || 0;
       const fnflAmount = fnflMap[rowIndex] || 0;
 
-      const discountRate = calculateTotalNeedMet(need, gift, work, fnflAmount);
+      let discountRate = 0;
+      if (need === 0) {
+        discountRate = 100;
+      } else {
+         discountRate = calculateTotalNeedMet(need, gift, work, fnflAmount);
+      }
 
       const existing = await SheetData.findOne({
         where: {
@@ -6474,7 +6366,6 @@ async function processCOA(templateId, sheetId, maxRowIndex, autoFillCOA, campusI
   }
 }
 
-
 async function calculateFurtherMetrics(templateId, sheetId, maxRowIndex, fnflMap, autoFillCOA, campusId) {
   await processNACUBODiscountRates(templateId, sheetId, maxRowIndex);
   await processCOA(templateId, sheetId, maxRowIndex, autoFillCOA, campusId);
@@ -6484,7 +6375,7 @@ async function calculateFurtherMetrics(templateId, sheetId, maxRowIndex, fnflMap
   await processNetTuitionFee(templateId, sheetId, maxRowIndex);
   await processTotalDiscountRate(templateId, sheetId, maxRowIndex);
   await processNeed(templateId, sheetId, maxRowIndex);
-  // await processNeedMet(templateId, sheetId, maxRowIndex, fnflMap);
+  await processNeedMet(templateId, sheetId, maxRowIndex);
   await processGap(templateId, sheetId, maxRowIndex, fnflMap);
   await processTotalNeedMet(templateId, sheetId, maxRowIndex, fnflMap);
   await processTotalNeedMet_W(templateId, sheetId, maxRowIndex);
