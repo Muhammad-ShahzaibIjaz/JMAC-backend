@@ -4356,8 +4356,10 @@ async function deleteRow(req, res) {
   }
 }
 
-async function calculateAwards(templateId, sheetId, acceptedStatuses, transaction) {
-  // Step 1: Fetch headers once
+async function calculateAwards(templateId, sheetId, acceptedStatuses) {
+  const transaction = await sequelize.transaction();
+  try {
+    // Step 1: Fetch headers once
   const headers = await Header.findAll({
     where: { templateId, name: requiredHeadersName },
     transaction
@@ -4485,9 +4487,13 @@ async function calculateAwards(templateId, sheetId, acceptedStatuses, transactio
       transaction
     });
   }
+    await transaction.commit();
+    return fnflSums;
+  } catch (error) {
+    await transaction.rollback();
+    console.error('Error calculating awards:', error);
+  }
 
-  await transaction.commit();
-  return fnflSums;
 }
 
 async function processNACUBODiscountRates(templateId, sheetId, maxRowIndex) {
@@ -6375,7 +6381,6 @@ async function calculateFurtherMetrics(templateId, sheetId, maxRowIndex, fnflMap
   await processNetTuitionFee(templateId, sheetId, maxRowIndex);
   await processTotalDiscountRate(templateId, sheetId, maxRowIndex);
   await processNeed(templateId, sheetId, maxRowIndex);
-  await processNeedMet(templateId, sheetId, maxRowIndex);
   await processGap(templateId, sheetId, maxRowIndex, fnflMap);
   await processTotalNeedMet(templateId, sheetId, maxRowIndex, fnflMap);
   await processTotalNeedMet_W(templateId, sheetId, maxRowIndex);
@@ -6385,7 +6390,6 @@ async function calculateFurtherMetrics(templateId, sheetId, maxRowIndex, fnflMap
 
 async function calculateAwardInfo(req, res) {
   const username = await getUserName(req.userId);
-  const transaction = await sequelize.transaction();
   try{
     const { templateId, sheetId, acceptedStatuses, autoFillCOA=false, campusId } = req.body;
     if (!templateId || !sheetId || !Array.isArray(acceptedStatuses) || acceptedStatuses.length === 0) {
@@ -6403,14 +6407,13 @@ async function calculateAwardInfo(req, res) {
       attributes: ['rowIndex'],
     });
     const maxRow = maxRowIndex?.rowIndex ?? 0;
-    const fnflSums = await calculateAwards(templateId, sheetId, acceptedStatuses, transaction);
+    const fnflSums = await calculateAwards(templateId, sheetId, acceptedStatuses);
     const fnflMap = {};
     fnflSums.forEach(f => fnflMap[f.rowIndex] = f.amount);
     await calculateFurtherMetrics(templateId, sheetId, maxRow, fnflMap, autoFillCOA, campusId);
     await createLog({ action: 'CALCULATE_AWARD_INFO', username, performedBy: req.userRole, details: `Calculated award info for templateId: ${templateId}, sheetId: ${sheetId}` });
     res.status(200).json({ message: 'Award information calculated successfully.' });
   } catch(error){
-    await transaction.rollback();
     await createLog({ action: 'CALCULATE_AWARD_INFO_FAILED', username, performedBy: req.userRole, details: `Failed to calculate award info for templateId: ${req.body.templateId}, sheetId: ${req.body.sheetId}. Error: ${error.message}` });
     console.error('Error calculating award info:', error);
     return res.status(500).json({ message: 'Internal server error.', details: error.message });
