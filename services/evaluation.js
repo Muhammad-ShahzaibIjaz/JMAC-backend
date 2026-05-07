@@ -1,13 +1,20 @@
 const normalizeKey = key => typeof key === 'string' ? key.replace(/[^a-zA-Z0-9_]/g, '_') : '';
 
 const DATE_REGEX = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?)?$/;
+const US_DATE_REGEX = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/;
 
-const isDateString = (v) => typeof v === 'string' && DATE_REGEX.test(v);
+const isDateLike = (v) => typeof v === 'string' && (DATE_REGEX.test(v) || US_DATE_REGEX.test(v));
 
-const toDateOnly = (v) => isDateString(v) ? v.slice(0, 10) : v;
+const toDateOnly = (v) => {
+  if (typeof v !== 'string') return v;
+  if (DATE_REGEX.test(v)) return v.slice(0, 10);         // "2025-10-18T04:32:18" → "2025-10-18"
+  const match = v.match(US_DATE_REGEX);
+  if (match) return `${match[3]}-${match[1].padStart(2, '0')}-${match[2].padStart(2, '0')}`;  // "10/17/2025" → "2025-10-17"
+  return v;
+};
 
 const valuesEqual = (a, b) => {
-  if (isDateString(a) && isDateString(b)) {
+  if (isDateLike(a) && isDateLike(b)) {
     return toDateOnly(a) === toDateOnly(b);
   }
   return a === b;
@@ -21,10 +28,11 @@ function evaluateConditions(rowData, conditionBlock) {
 
   const evaluateSingle = (cond) => {
     if (cond.operator === 'isEqualTo') {
-      const val1 = getValue(cond.field1);
+      const val1 = getValue(cond.field1 || cond.field);
       const val2 = getValue(cond.field2);
       return valuesEqual(val1, val2);
     }
+    
     if (cond.operator === 'isNotEqualTo') {
       const val1 = getValue(cond.field1);
       const val2 = getValue(cond.field2);

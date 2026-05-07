@@ -3822,6 +3822,9 @@ async function evaluateSheetDataAndAssign(req, res) {
         filteredRowData[normalized] = rowData[normalized] ?? { value: '' };
       }
 
+      if (rowIndex === 1) {
+        console.log('First row data for evaluation:', filteredRowData);
+      }
       const isValid = evaluateConditions(filteredRowData, conditions);
       if (isValid) matchingRowIndices.push(rowIndex);
     }

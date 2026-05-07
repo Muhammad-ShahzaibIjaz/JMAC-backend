@@ -1901,7 +1901,7 @@ const getStealthMatchedRows = async (templateId, sheetId, matchingRows) => {
 
   for (const rowIndex of matchingRows) {
     const val = stealthRowMap.get(rowIndex);
-    if (val === 'Y') {
+    if (val === 'Y' || val === 'Yes') {
       stealthRowIndexes.push(rowIndex);
     } else {
       non_stealthRowIndexes.push(rowIndex);
