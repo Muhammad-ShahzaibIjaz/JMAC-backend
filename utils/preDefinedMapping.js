@@ -8592,7 +8592,7 @@ const pre_defined_mapping = [
     ]
   },
   {
-    "name": "Y/N Stealth APP",
+    "name": "Y/N Stealth_App",
     "aliases": [
       "StealthApp",
       "jenzabar_stealth_app",

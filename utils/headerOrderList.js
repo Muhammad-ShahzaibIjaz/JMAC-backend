@@ -1067,7 +1067,7 @@ const ynFlags = [
   "Y/N Student_In_County",
   "Y/N Bought_Through_Search",
   "Y/N Student_Inquired",
-  "Y/N Stealth APP",
+  "Y/N Stealth_App",
   "Y/N Student_Applied",
   "Y/N Student_Admitted",
   "Y/N Student_Readmitted",

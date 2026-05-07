@@ -1871,7 +1871,7 @@ const getAwardStats = async (req, res) => {
 
 const getStealthMatchedRows = async (templateId, sheetId, matchingRows) => {
   const stealthHeader = await Header.findOne({
-    where: { templateId, name: 'Y/N Stealth APP' },
+    where: { templateId, name: 'Y/N Stealth_App' },
     attributes: ['id'],
     raw: true,
   });
