@@ -4,6 +4,7 @@ const templateController = require('../controllers/templateController');
 const { verifyToken, verifyUserActive } = require('../middlewares/authMiddleware');
 
 router.post('/templates', verifyToken, verifyUserActive, templateController.createTemplate);
+router.put('/templates/:id', verifyToken, verifyUserActive, templateController.updateTemplate);
 router.delete('/templates/:id', verifyToken, verifyUserActive, templateController.deleteTemplate);
 router.get('/templates', verifyToken, verifyUserActive, templateController.getTemplates);
 router.get('/templates/:campusId', verifyToken, verifyUserActive, templateController.getTemplatesByCampus);

@@ -36,7 +36,7 @@ const getElementEnrollmentStats = async (templateId, sheetId) => {
   });
 
   if (rows.length === 0) {
-    throw new Error('No data found for Element_Number or Y/N Student_Enrolled');
+    return {};
   }
 
   // Step 3: Organize data row-wise

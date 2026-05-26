@@ -69,6 +69,45 @@ async function createTemplate(req, res) {
   }
 }
 
+async function updateTemplate(req, res) {
+  const { id } = req.params;
+  const { name } = req.body;
+  const username = await getUserName(req.userId);
+  try {
+    if (!name || typeof name !== 'string' || name.trim().length === 0) {
+      return res.status(400).json({ error: 'Template name is required and must be a non-empty string' });
+    }
+    const trimmedName = name.trim();
+    const template = await Template.findByPk(id);
+    if (!template) {
+      return res.status(404).json({ error: 'Template not found' });
+    }
+    const existingTemplate = await Template.findOne({
+      where: {
+        campusId: template.campusId,
+        [Op.and]: sequelize.where(
+          sequelize.fn('LOWER', sequelize.col('name')),
+          trimmedName.toLowerCase()        ),
+        id: { [Op.ne]: id },
+      },
+    });
+    if (existingTemplate) {
+      return res.status(409).json({ error: 'A template with this name already exists' });
+    }
+    template.name = name.trim();
+    await template.save();
+    await createLog({ action: 'UPDATE_TEMPLATE', username, performedBy: req.userRole, details: `Template with ID: ${id} updated to '${template.name}'` });
+    res.json({
+      id: template.id,
+      name: template.name
+    });
+  } catch (error) {
+    await createLog({ action: 'UPDATE_TEMPLATE_FAILED', username, performedBy: req.userRole, details: `Failed to update template ID '${id}': ${error.message}` });
+    console.error('Error updating template:', error);
+    res.status(500).json({ error: error.message });
+  }
+}
+
 async function deleteTemplate(req, res) {
   const { id } = req.params;
   const username = await getUserName(req.userId);
@@ -247,6 +286,7 @@ async function getTemplatePermissionStatus(req, res) {
 
 module.exports = {
   createTemplate,
+  updateTemplate,
   deleteTemplate,
   getTemplates,
   getTemplateByID,

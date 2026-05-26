@@ -8,6 +8,7 @@ router.get('/status/:templateId', verifyToken, verifyUserActive, populationStatu
 router.put('/status', verifyToken, verifyUserActive, populationStatusController.updatePopulationStatus);
 router.delete('/status/:id', verifyToken, verifyUserActive, populationStatusController.deletePopulationStatus);
 router.post('/save-submission-date', verifyToken, verifyUserActive, populationStatusController.savePopulationSubmissionDate);
+router.post('/submission-date', verifyToken, verifyUserActive, populationStatusController.getPopulationSubmissionByTemplateIdAndSheet);
 router.get('/submissions/:templateId', verifyToken, verifyUserActive, populationStatusController.getPopulationSubmissionsByTemplateId);
 router.put('/submission', verifyToken, verifyUserActive, populationStatusController.updatePopulationSubmissionDate);
 router.delete('/submission/:id', verifyToken, verifyUserActive, populationStatusController.deletePopulationSubmission);

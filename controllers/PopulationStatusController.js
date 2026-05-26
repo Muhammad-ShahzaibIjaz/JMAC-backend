@@ -106,6 +106,23 @@ const savePopulationSubmissionDate = async (req, res) => {
   }
 };
 
+const getPopulationSubmissionByTemplateIdAndSheet = async (req, res) => {
+    const { templateId, sheetId } = req.body;
+    try {
+        if (!templateId || !sheetId) {
+            return res.status(400).json({ error: 'templateId and sheetId are required' });
+        }
+        const populationSubmission = await PopulationSubmission.findOne({
+            where: { templateId, selectedSheet: sheetId },
+            attributes: ['id', 'submissionDate', 'selectedSheet', 'submissionDescription']
+        });
+        res.status(200).json(populationSubmission);
+    } catch (error) {
+        console.error('Error fetching population submissions:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+};
+
 const getPopulationSubmissionsByTemplateId = async (req, res) => {
     const { templateId } = req.params;
     try {
@@ -2497,6 +2514,7 @@ module.exports = {
     savePopulationSubmissionDate,
     updatePopulationSubmissionDate,
     getPopulationSubmissionsByTemplateId,
+    getPopulationSubmissionByTemplateIdAndSheet,
     deletePopulationSubmission,
     getPopulationStatusByTemplateId,
     updatePopulationStatus,
