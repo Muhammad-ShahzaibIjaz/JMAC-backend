@@ -478,13 +478,17 @@ async function getHeadersWithDuplicateData(req, res) {
     }
 
     const sortedHeaders = sortHeadersFlexibleMatch(headers);
-    const headerIds = sortedHeaders.map(h => h.id);
     const headerMap = new Map(sortedHeaders.map(h => [h.id, h]));
 
+    // Use Student_ID as the sole identity key for duplicate detection
     const normalize = str => str.toLowerCase().replace(/[_\s]/g, '');
-    const normalizedHeaderMap = new Map(sortedHeaders.map(h => [normalize(h.name), h.name]));
-    const preferredKey = normalizedHeaderMap.get('studentid');
-    const identityHeaders = preferredKey ? [preferredKey] : sortedHeaders.slice(0, 3).map(h => h.name);
+    const studentIdHeader = sortedHeaders.find(h => normalize(h.name) === 'studentid');
+
+    if (!studentIdHeader) {
+      return res.status(400).json({ error: 'No Student_ID header found in this template' });
+    }
+
+    const identityHeaders = [studentIdHeader.name];
 
     const sheetData = [];
     const stream = await sequelize.query(`
@@ -530,23 +534,23 @@ async function getHeadersWithDuplicateData(req, res) {
       }
 
       const row = rowsByIndex.get(entry.rowIndex);
-      if (!row) {
-        row = { originalRowIndex: entry.rowIndex, values: Object.create(null), sheetDataRefs: [] };
-        rowsByIndex.set(entry.rowIndex, row);
-      }
       row.values[entry.headerName] = value;
       row.sheetDataRefs.push({
         headerId: entry.headerId,
         headerName: entry.headerName,
         id: entry.id,
         value,
-        valid
+        valid,
+        criticalityLevel: entry.criticalityLevel,
+        columnType: entry.columnType
       });
     }
 
+    // Group by Student_ID value to find duplicates
     const grouped = new Map();
     for (const row of rowsByIndex.values()) {
       const key = identityHeaders.map(h => row.values[h] ?? '').join('|');
+      if (!key || key === '') continue; // skip rows with no Student_ID
       if (!grouped.has(key)) grouped.set(key, []);
       grouped.get(key).push(row);
     }
@@ -570,8 +574,8 @@ async function getHeadersWithDuplicateData(req, res) {
           headerDataMap.set(ref.headerId, {
             id: ref.headerId,
             name: ref.headerName,
-            criticalityLevel: headerMap.get(ref.headerId).criticalityLevel,
-            columnType: headerMap.get(ref.headerId).columnType,
+            criticalityLevel: ref.criticalityLevel,
+            columnType: ref.columnType,
             data: []
           });
         }
@@ -587,8 +591,8 @@ async function getHeadersWithDuplicateData(req, res) {
     }
 
     const orderedHeaderResponse = sortedHeaders
-    .map(h => headerDataMap.get(h.id))
-    .filter(Boolean);
+      .map(h => headerDataMap.get(h.id))
+      .filter(Boolean);
 
     res.status(200).json({
       headers: orderedHeaderResponse,
