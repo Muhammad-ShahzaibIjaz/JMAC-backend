@@ -37,6 +37,10 @@ const Campus = sequelize.define(
       type: DataTypes.STRING(255),
       allowNull: true,
     },
+    leadConsultantEmail: {
+      type: DataTypes.STRING(255),
+      allowNull: true,
+    },
     undergradStudents: {
       type: DataTypes.INTEGER,
       allowNull: true,
@@ -46,6 +50,10 @@ const Campus = sequelize.define(
       allowNull: true,
     },
     presidentName: {
+      type: DataTypes.STRING(255),
+      allowNull: true,
+    },
+    leadConsultantName: {
       type: DataTypes.STRING(255),
       allowNull: true,
     },
