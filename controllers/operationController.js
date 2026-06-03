@@ -1,5 +1,6 @@
+const sequelize = require('../config/database');
 const { Op } = require('sequelize');
-const OperationProgressLog = require('../models/OperationProgressLog');
+const { OperationProgressLog } = require('../models');
 
 
 
