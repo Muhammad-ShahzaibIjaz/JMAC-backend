@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { verifyToken, verifyUserActive } = require('../middlewares/authMiddleware');
-const { getSessionLog, getHistory } = require('../controllers/operationlogController');
+const { getSessionLog, getHistory } = require('../controllers/operationController');
 
 
 router.get('/operation-logs/session/:sessionId', verifyToken, verifyUserActive, getSessionLog);
