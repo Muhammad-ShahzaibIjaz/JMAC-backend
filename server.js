@@ -11,6 +11,7 @@ require("dotenv").config();
 const app = require("./app");
 require("./utils/sequelizeDB");
 const { initAddressHelper } = require('./utils/addressHelper');
+const { startCleanupService, resolveOrphanedSessions } = require('./services/operationLogCleanService');
 
 
 const PORT = process.env.PORT || 3001;
@@ -20,6 +21,9 @@ async function startServer() {
     console.log('Initializing address helper...');
     await initAddressHelper();
     console.log('Address helper ready.');
+
+    await resolveOrphanedSessions();
+    startCleanupService();
  
     app.listen(PORT, () => {
       console.log(`Server Running on port ${PORT}`);

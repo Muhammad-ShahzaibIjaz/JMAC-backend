@@ -8,14 +8,14 @@ const { processFiles } = require('./fileController');
 const { getMapHeaders, getHeaderID } = require('./headerController');
 const { v4: uuidv4 } = require('uuid');
 const math = require('mathjs');
-const { OperationLog, SheetDataSnapshot, Campus } = require('../models');
+const { OperationLog, SheetDataSnapshot, Campus, OperationProgressLog } = require('../models');
 const { convertScore } = require('../services/conversion');
 const { getCipTitle } = require('../services/cipService');
 const { desiredOrder, requiredHeadersName, awardTypePatterns, ynFlags } = require('../utils/headerOrderList');
 const { buildZipCountyMap } = require('../services/countyService');
 const { calculateNACUBODiscountRate, calculateNetCharges, calculateGap, calculateNeedMet, calculateTotalDiscountRate, calculateNetTuition, calculateNeed, matchCriteria, calculateTotalNeedMet, calculateTotalDirectCost, calculateTotalInstitutionalMeritGift, calculateNetTuitionFee, calculateTuitionDiscountRate } = require('../utils/calculationHelper');
 const { evaluateConditions, evaluateBound } = require('../services/evaluation');
-const { createLog } = require("../utils/auditLogger");
+const { createLog, logStep } = require("../utils/auditLogger");
 const { getUserName } = require('./userController');
 const fs = require('fs');
 const { extractUniversities } = require('../services/ficeCodeService');
@@ -4363,144 +4363,140 @@ async function deleteRow(req, res) {
   }
 }
 
-async function calculateAwards(templateId, sheetId, acceptedStatuses) {
+async function calculateAwards(templateId, sheetId, acceptedStatuses, logCtx) {
+  const { log } = logCtx;
   const transaction = await sequelize.transaction();
   try {
-    // Step 1: Fetch headers once
-  const headers = await Header.findAll({
-    where: { templateId, name: requiredHeadersName },
-    transaction
-  });
-
-  const headerMap = Object.fromEntries(headers.map(h => [h.name, h.id]));
-  const requiredHeaderIds = headers.map(h => h.id);
-  const awardHeaderIds = Object.fromEntries(
-    Object.keys(awardTypePatterns).map(name => [name, headerMap[name]])
-  );
-
-  // Step 2: Fetch all relevant SheetData in one query
-  const sheetData = await SheetData.findAll({
-    where: {
-      headerId: { [Op.in]: requiredHeaderIds },
-      sheetId
-    },
-    attributes: ['rowIndex', 'headerId', 'value'],
-    raw: true,
-    transaction
-  });
-
-  if (sheetData.length === 0) {
-    await transaction.rollback();
-    return;
-  }
-
-  // Step 3: Build in-memory map
-  const sheetDataMap = {};
-  for (const cell of sheetData) {
-    sheetDataMap[`${cell.rowIndex}_${cell.headerId}`] = cell.value;
-  }
-
-  const rowIndexes = [...new Set(sheetData.map(d => d.rowIndex))];
-  const acceptedStatusSet = new Set(acceptedStatuses.map(s => s.toLowerCase()));
-
-  // Step 4: Create operation log once
-  const operationLog = await OperationLog.create({
-    templateId,
-    sheetId,
-    operationType: 'CALCULATION',
-    transaction
-  });
-
-  const updates = [];
-  const snapshots = [];
-  const fnflSums = [];
-
-  // Step 5: Process rows entirely in memory
-  for (const rowIndex of rowIndexes) {
-    const rowData = {};
-    for (const headerId of requiredHeaderIds) {
-      rowData[headerId] = sheetDataMap[`${rowIndex}_${headerId}`];
+    const headers = await Header.findAll({
+      where: { templateId, name: requiredHeadersName },
+      transaction
+    });
+ 
+    const headerMap = Object.fromEntries(headers.map(h => [h.name, h.id]));
+    const requiredHeaderIds = headers.map(h => h.id);
+    const awardHeaderIds = Object.fromEntries(
+      Object.keys(awardTypePatterns).map(name => [name, headerMap[name]])
+    );
+ 
+    const sheetData = await SheetData.findAll({
+      where: {
+        headerId: { [Op.in]: requiredHeaderIds },
+        sheetId
+      },
+      attributes: ['rowIndex', 'headerId', 'value'],
+      raw: true,
+      transaction
+    });
+ 
+    if (sheetData.length === 0) {
+      await transaction.rollback();
+      return;
     }
-
-    const awardSums = Object.fromEntries(
+ 
+    const sheetDataMap = {};
+    for (const cell of sheetData) {
+      sheetDataMap[`${cell.rowIndex}_${cell.headerId}`] = cell.value;
+    }
+ 
+    const rowIndexes = [...new Set(sheetData.map(d => d.rowIndex))];
+    const acceptedStatusSet = new Set(acceptedStatuses.map(s => s.toLowerCase()));
+ 
+    const operationLog = await OperationLog.create({
+      templateId,
+      sheetId,
+      operationType: 'CALCULATION',
+      transaction
+    });
+ 
+    const updates = [];
+    const snapshots = [];
+    const fnflSums = [];
+ 
+    // Accumulate totals across all rows per award type
+    const globalAwardSums = Object.fromEntries(
       Object.keys(awardTypePatterns).map(name => [name, 0])
     );
-    let fnflTotal = 0;
-    let hasFNFLFlag = false;
-    for (let i = 1; i <= 20; i++) {
-      const cd = rowData[headerMap[`Awd_CR${i}`]];
-      const amtRaw = rowData[headerMap[`Awd_Amt${i}`]];
-      const status = rowData[headerMap[`Awd_Status${i}`]];
-
-      if (!cd || !acceptedStatusSet.has(status?.toLowerCase())) continue;
-
-      const amt = parseFloat(amtRaw);
-      if (isNaN(amt)) continue;
-
-      for (const [awardName, pattern] of Object.entries(awardTypePatterns)) {
-        if (pattern.test(cd)) {
-          awardSums[awardName] += amt;
+ 
+    for (const rowIndex of rowIndexes) {
+      const rowData = {};
+      for (const headerId of requiredHeaderIds) {
+        rowData[headerId] = sheetDataMap[`${rowIndex}_${headerId}`];
+      }
+ 
+      const awardSums = Object.fromEntries(
+        Object.keys(awardTypePatterns).map(name => [name, 0])
+      );
+      let fnflTotal = 0;
+      let hasFNFLFlag = false;
+ 
+      for (let i = 1; i <= 20; i++) {
+        const cd = rowData[headerMap[`Awd_CR${i}`]];
+        const amtRaw = rowData[headerMap[`Awd_Amt${i}`]];
+        const status = rowData[headerMap[`Awd_Status${i}`]];
+ 
+        if (!cd || !acceptedStatusSet.has(status?.toLowerCase())) continue;
+ 
+        const amt = parseFloat(amtRaw);
+        if (isNaN(amt)) continue;
+ 
+        for (const [awardName, pattern] of Object.entries(awardTypePatterns)) {
+          if (pattern.test(cd)) {
+            awardSums[awardName] += amt;
+            globalAwardSums[awardName] += amt;
+          }
+        }
+ 
+        if (/^FNFL$/.test(cd)) {
+          fnflTotal += amt;
+          hasFNFLFlag = true;
         }
       }
-
-      if (/^FNFL$/.test(cd)) {
-        fnflTotal += amt;
-        hasFNFLFlag = true;
+ 
+      if (hasFNFLFlag) {
+        fnflSums.push({ rowIndex: parseInt(rowIndex), amount: fnflTotal });
+        hasFNFLFlag = false;
+      }
+ 
+      for (const [awardName, total] of Object.entries(awardSums)) {
+        const headerId = awardHeaderIds[awardName];
+        if (!headerId) continue;
+ 
+        const newValue = total.toString();
+        const originalValue = sheetDataMap[`${rowIndex}_${headerId}`] ?? null;
+ 
+        updates.push({ rowIndex: parseInt(rowIndex), headerId, sheetId, value: newValue });
+        snapshots.push({
+          operationLogId: operationLog.id,
+          headerId,
+          sheetId,
+          rowIndex: parseInt(rowIndex),
+          originalValue,
+          newValue,
+          changeType: originalValue ? 'UPDATE' : 'INSERT'
+        });
       }
     }
-    if (hasFNFLFlag) {
-      fnflSums.push({rowIndex: parseInt(rowIndex), amount: fnflTotal });
-      hasFNFLFlag = false;
+ 
+    if (updates.length > 0) {
+      await SheetData.bulkCreate(updates, { updateOnDuplicate: ['value'], transaction });
     }
-
-    // Collect updates + snapshots
-    for (const [awardName, total] of Object.entries(awardSums)) {
-      const headerId = awardHeaderIds[awardName];
-      if (!headerId) continue;
-
-      const newValue = total.toString();
-      const originalValue = sheetDataMap[`${rowIndex}_${headerId}`] ?? null;
-
-      updates.push({
-        rowIndex: parseInt(rowIndex),
-        headerId,
-        sheetId,
-        value: newValue
-      });
-
-      snapshots.push({
-        operationLogId: operationLog.id,
-        headerId,
-        sheetId,
-        rowIndex: parseInt(rowIndex),
-        originalValue,
-        newValue,
-        changeType: originalValue ? 'UPDATE' : 'INSERT'
-      });
+    if (snapshots.length > 0) {
+      await SheetDataSnapshot.bulkCreate(snapshots, { validate: false, transaction });
     }
-  }
-
-  // Step 6: Bulk write once
-  if (updates.length > 0) {
-    await SheetData.bulkCreate(updates, {
-      updateOnDuplicate: ['value'],
-      transaction
-    });
-  }
-
-  if (snapshots.length > 0) {
-    await SheetDataSnapshot.bulkCreate(snapshots, {
-      validate: false,
-      transaction
-    });
-  }
+ 
     await transaction.commit();
+ 
+    // ── Log one line per award type AFTER the transaction commits ─────────────
+    for (const [col, pattern] of Object.entries(awardTypePatterns)) {
+      await log(`${col} → if any award matched this pattern ${pattern} and it's status is ${acceptedStatuses.join(', ')} take it's amount`, 'SUCCESS');
+    }
+ 
     return fnflSums;
   } catch (error) {
     await transaction.rollback();
     console.error('Error calculating awards:', error);
+    throw error;
   }
-
 }
 
 async function processNACUBODiscountRates(templateId, sheetId, maxRowIndex) {
@@ -6379,30 +6375,85 @@ async function processCOA(templateId, sheetId, maxRowIndex, autoFillCOA, campusI
   }
 }
 
-async function calculateFurtherMetrics(templateId, sheetId, maxRowIndex, fnflMap, autoFillCOA, campusId) {
+async function calculateFurtherMetrics(templateId, sheetId, maxRowIndex, fnflMap, autoFillCOA, campusId, logCtx) {
+  const { log } = logCtx;
+
   await processNACUBODiscountRates(templateId, sheetId, maxRowIndex);
+  await log('NACUBO_Discount_Rate → (Total_Institutional_Gift / (2_Semester_Tuition + 2_Semester_Fees)) × 100', 'SUCCESS');
+
   await processCOA(templateId, sheetId, maxRowIndex, autoFillCOA, campusId);
+  await log('2_Semester_COA → 2_Semester_Tuition + 2_Semester_Fees + 2_Semester_Room + 2_Semester_Meals + 2_Semester_Books_Supplies + 2_Semester_Transportation + 2_Semester_Other_Indirect_Charges', 'SUCCESS');
+
   await processNetCharges(templateId, sheetId, maxRowIndex);
+  await log('Net_Charges_To_Student → (2_Semester_Tuition + 2_Semester_Fees + 2_Semester_Room + 2_Semester_Meals) - Total_Institutional_Gift', 'SUCCESS');
+
   await processTotalDirectCost(templateId, sheetId, maxRowIndex);
+  await log('Total_Direct_Costs → 2_Semester_Tuition + 2_Semester_Fees + 2_Semester_Room + 2_Semester_Meals', 'SUCCESS');
+
   await processNetTuition(templateId, sheetId, maxRowIndex);
+  await log('Net_Tuition_Revenue → 2_Semester_Tuition - Total_Institutional_Gift', 'SUCCESS');
+
   await processNetTuitionFee(templateId, sheetId, maxRowIndex);
+  await log('Net_Tuition/Fee_Revenue → (2_Semester_Tuition + 2_Semester_Fees) - Total_Institutional_Gift', 'SUCCESS');
+
   await processTotalDiscountRate(templateId, sheetId, maxRowIndex);
+  await log('Direct_Charges_Discount_Rate → (Total_Institutional_Gift / Total_Direct_Costs) × 100', 'SUCCESS');
+
   await processNeed(templateId, sheetId, maxRowIndex);
+  await log('Student_Financial_Need → 2_Semester_COA - SAI  (if SAI < 0, treated as 0; result floored at 0)', 'SUCCESS');
+
   await processGap(templateId, sheetId, maxRowIndex, fnflMap);
+  await log('GAP/Unmet_Charges → Total_Direct_Costs - Total_Gift_Aid - FNFL_Amount', 'SUCCESS');
+
   await processTotalNeedMet(templateId, sheetId, maxRowIndex, fnflMap);
+  await log('%_Of_Need_Met → ((Total_Gift_Aid + Total_Work_Aid + FNFL_Amount) / Student_Financial_Need) × 100', 'SUCCESS');
+
   await processTotalNeedMet_W(templateId, sheetId, maxRowIndex);
+  await log('%_Of_Need_Met_W/Gift_Aid → (Total_Gift_Aid / Student_Financial_Need) × 100', 'SUCCESS');
+
   await processTuitionDiscountRates(templateId, sheetId, maxRowIndex);
+  await log('Tuition_Discount_Rate → (Total_Institutional_Gift / 2_Semester_Tuition) × 100', 'SUCCESS');
+
   await processCampusDiscount(templateId, sheetId, maxRowIndex);
+  await log('Campus_Discount_Rate → (Total_Institutional_Gift / Sum_Of_All_Net_Tuition_Revenue) × 100', 'SUCCESS');
 }
 
 async function calculateAwardInfo(req, res) {
   const username = await getUserName(req.userId);
+  const { templateId, sheetId, acceptedStatuses, autoFillCOA=false, campusId } = req.body;
+
+  if (!templateId || !sheetId || !Array.isArray(acceptedStatuses) || acceptedStatuses.length === 0) {
+    return res.status(400).json({ message: 'Invalid input. templateId, sheetId, and acceptedStatuses are required.' });
+  }
+
+  const session = await OperationProgressLog.create({
+    templateId,
+    sheetId,
+    sessionId: null,
+    kind: 'SESSION',
+    operationType: 'CALCULATE_AWARD_INFO',
+    stepNumber: null,
+    message: 'Award calculation started',
+    status: 'RUNNING',
+    triggeredBy: username,
+  });
+  await session.update({ sessionId: session.id });
+  const sessionId = session.id;
+
+  const emit = res.locals?.sseEmit ?? null;
+  let step = 0;
+
+  const log = (message, status = 'INFO') => logStep({
+    sessionId, templateId, sheetId, triggeredBy: username, emit,
+    stepNumber: ++step, message, status,
+    operationType: 'CALCULATE_AWARD_INFO',
+  });
+
+  const logCtx = { log };
+
   try{
-    const { templateId, sheetId, acceptedStatuses, autoFillCOA=false, campusId } = req.body;
-    if (!templateId || !sheetId || !Array.isArray(acceptedStatuses) || acceptedStatuses.length === 0) {
-      await transaction.rollback();
-      return res.status(400).json({ message: 'Invalid input. templateId, sheetId, and acceptedStatuses are required.' });
-    }
+    await log('Starting award calculation...', 'INFO');
+
     const maxRowIndex = await SheetData.findOne({
       where: { sheetId },
       include: [{
@@ -6414,13 +6465,21 @@ async function calculateAwardInfo(req, res) {
       attributes: ['rowIndex'],
     });
     const maxRow = maxRowIndex?.rowIndex ?? 0;
-    const fnflSums = await calculateAwards(templateId, sheetId, acceptedStatuses);
+
+    const fnflSums = await calculateAwards(templateId, sheetId, acceptedStatuses, logCtx);
     const fnflMap = {};
     fnflSums.forEach(f => fnflMap[f.rowIndex] = f.amount);
-    await calculateFurtherMetrics(templateId, sheetId, maxRow, fnflMap, autoFillCOA, campusId);
+
+    await calculateFurtherMetrics(templateId, sheetId, maxRow, fnflMap, autoFillCOA, campusId, logCtx);
+
+    await log('Award calculation completed successfully.', 'SUCCESS');
+    await session.update({ status: 'DONE', message: 'Completed' });
+
     await createLog({ action: 'CALCULATE_AWARD_INFO', username, performedBy: req.userRole, details: `Calculated award info for templateId: ${templateId}, sheetId: ${sheetId}` });
-    res.status(200).json({ message: 'Award information calculated successfully.' });
+    res.status(200).json({ message: 'Award information calculated successfully.', sessionId });
   } catch(error){
+    await log('Something went wrong. Award calculation failed.', 'ERROR').catch(() => {});
+    await session.update({ status: 'FAILED', message: error.message }).catch(() => {});
     await createLog({ action: 'CALCULATE_AWARD_INFO_FAILED', username, performedBy: req.userRole, details: `Failed to calculate award info for templateId: ${req.body.templateId}, sheetId: ${req.body.sheetId}. Error: ${error.message}` });
     console.error('Error calculating award info:', error);
     return res.status(500).json({ message: 'Internal server error.', details: error.message });
@@ -7091,6 +7150,24 @@ async function bulkUpdateYesNo(req, res) {
 
   const username = await getUserName(req.userId);
 
+  const session = await OperationProgressLog.create({
+    templateId,
+    sheetId,
+    sessionId: null,
+    kind: 'SESSION',
+    operationType: 'BULK_UPDATE_YES_NO',
+    stepNumber: null,
+    message: 'Bulk Y/N update started',
+    status: 'RUNNING',
+    triggeredBy: username,
+  });
+
+  await session.update({ sessionId: session.id });
+  const sessionId = session.id;
+
+  const emit = res.locals?.sseEmit ?? null;
+  let step = 0;
+
   try {
     const allHeaders = await Header.findAll({
       where: { templateId, name: { [Op.in]: ynFlags } },
@@ -7098,11 +7175,40 @@ async function bulkUpdateYesNo(req, res) {
       raw: true,
     });
     if (allHeaders.length === 0) {
+      await logStep({
+        sessionId, templateId, sheetId, triggeredBy: username, emit,
+        stepNumber: ++step,
+        message: 'No Y/N columns found in this template.',
+        status: 'ERROR',
+        operationType: 'BULK_UPDATE_YES_NO',
+      });
+      await session.update({ status: 'FAILED', message: 'No matching Y/N columns found' });
       return res.status(404).json({ error: 'No matching headers found for Yes/No flags' });
     }
 
+    const headerNames = allHeaders.map(h => h.name);
     const headerIdsArray = `{${allHeaders.map(h => h.id).join(',')}}`;
     const headerIds = allHeaders.map(h => h.id);
+
+    // ── Log: operation starting ───────────────────────────────────────────────
+    await logStep({
+      sessionId, templateId, sheetId, triggeredBy: username, emit,
+      stepNumber: ++step,
+      message: 'Starting bulk Y/N update...',
+      status: 'INFO',
+      operationType: 'BULK_UPDATE_YES_NO',
+    });
+
+    // ── Log: one line per column, that's it ───────────────────────────────────
+    for (const name of headerNames) {
+      await logStep({
+        sessionId, templateId, sheetId, triggeredBy: username, emit,
+        stepNumber: ++step,
+        message: `${name} → No`,
+        status: 'INFO',
+        operationType: 'BULK_UPDATE_YES_NO',
+      });
+    }
 
     const [maxResult] = await sequelize.query(
       `SELECT MAX("rowIndex") AS "maxRow" FROM "SheetData" WHERE "sheetId" = :sheetId::uuid`,
@@ -7111,6 +7217,7 @@ async function bulkUpdateYesNo(req, res) {
 
     const maxRowIndex = maxResult?.maxRow ?? 0;
     if (maxRowIndex === 0) {
+      await session.update({ status: 'FAILED', message: 'No rows found in sheet' });
       return res.status(404).json({ error: 'No rows found for the given sheetId' });
     }
 
@@ -7230,6 +7337,20 @@ async function bulkUpdateYesNo(req, res) {
       totalInserted += results.reduce((sum, [r]) => sum + parseInt(r.inserted), 0);
     }
 
+    // ── Log: done ─────────────────────────────────────────────────────────────
+    await logStep({
+      sessionId, templateId, sheetId, triggeredBy: username, emit,
+      stepNumber: ++step,
+      message: 'Bulk Y/N update completed successfully.',
+      status: 'SUCCESS',
+      operationType: 'BULK_UPDATE_YES_NO',
+    });
+ 
+    await session.update({
+      status: 'DONE',
+      message: `Completed — updated: ${updateCount}, inserted: ${totalInserted}`,
+    });
+
     createLog({
       action: 'BULK_UPDATE_YES_NO',
       username,
@@ -7247,6 +7368,14 @@ async function bulkUpdateYesNo(req, res) {
     });
 
   } catch (error) {
+    await logStep({
+      sessionId, templateId, sheetId, triggeredBy: username, emit,
+      stepNumber: ++step,
+      message: 'Something went wrong. Bulk Y/N update failed.',
+      status: 'ERROR',
+      operationType: 'BULK_UPDATE_YES_NO',
+    }).catch(() => {});
+    await session.update({ status: 'FAILED', message: error.message }).catch(() => {});
     createLog({
       action: 'BULK_UPDATE_YES_NO_FAILED',
       username,

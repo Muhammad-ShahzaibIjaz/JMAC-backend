@@ -28,6 +28,7 @@ const ViewGoal = require('./ViewGoal');
 const Campus = require('./Campus');
 const Note = require('./Note');
 const CustomField = require('./CustomField');
+const OperationProgressLog = require('./OperationProgresslog');
 const sequelize = require('../config/database');
 
 Campus.hasMany(Template, { foreignKey: 'campusId', onDelete: 'CASCADE' });
@@ -40,6 +41,12 @@ Campus.hasMany(CustomField, { foreignKey: 'campusId', onDelete: 'CASCADE', as: "
 CustomField.belongsTo(Campus, { foreignKey: 'campusId', onDelete: 'CASCADE' });
 
 // Define associations
+Template.hasMany(OperationProgressLog, { foreignKey: 'templateId', onDelete: 'CASCADE' });
+OperationProgressLog.belongsTo(Template, { foreignKey: 'templateId', onDelete: 'CASCADE' });
+
+Sheet.hasMany(OperationProgressLog, { foreignKey: 'sheetId', onDelete: 'CASCADE' });
+OperationProgressLog.belongsTo(Sheet, { foreignKey: 'sheetId', onDelete: 'CASCADE' });
+
 Template.hasMany(File, { foreignKey: 'templateId', onDelete: 'CASCADE' });
 File.belongsTo(Template, { foreignKey: 'templateId' });
 
@@ -151,4 +158,5 @@ module.exports = {
   Campus,
   Note,
   CustomField,
+  OperationProgressLog,
 };

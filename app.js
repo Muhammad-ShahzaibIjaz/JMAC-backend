@@ -42,9 +42,12 @@ const viewGoalRoutes = require("./routes/viewGoalRoutes");
 const faafRoute = require("./routes/faafRoute");
 const campusRoutes = require("./routes/campusRoutes");
 const ipedRoutes = require("./routes/ipedRoutes");
+const operationlogRoutes = require("./routes/operationlogRoutes");
 
 
 
+
+app.use("/api", operationlogRoutes);
 app.use("/api", ipedRoutes);
 app.use("/api", campusRoutes);
 app.use("/api", faafRoute);
