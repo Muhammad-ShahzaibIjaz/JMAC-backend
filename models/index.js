@@ -28,7 +28,7 @@ const ViewGoal = require('./ViewGoal');
 const Campus = require('./Campus');
 const Note = require('./Note');
 const CustomField = require('./CustomField');
-const OperationProgressLog = require('./OperationProgresslog');
+const OperationProgressLog = require('./OperationProgressLog');
 const sequelize = require('../config/database');
 
 Campus.hasMany(Template, { foreignKey: 'campusId', onDelete: 'CASCADE' });
