@@ -1,6 +1,6 @@
 const sequelize = require("../config/database");
-const OnboardingCoa = require("../models/OnboardingCoa");
-const OnboardingFunnel = require("../models/OnboardingFunnel");
+const OnboardingCoa = require("../models/Onboardingcoa");
+const OnboardingFunnel = require("../models/Onboardingfunnel");
 const { createLog } = require("../utils/auditLogger");
 const { getUserName } = require("./userController");
 

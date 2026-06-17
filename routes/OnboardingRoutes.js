@@ -9,14 +9,14 @@ const {
   getFunnel,
   saveFunnel,
   deleteFunnel,
-} = require("../controllers/onboardingController");
+} = require("../controllers/OnboardingController");
 
 const {
   getInstitutionList,
   saveInstitutionList,
   deleteInstitutionList,
   copyInstitutionsFromForm,
-} = require("../controllers/onboardingInstitutionController");
+} = require("../controllers/OnboardinginstitutionController");
 
 // NOTE: assumes the same auth middleware used elsewhere already runs and sets
 // req.userId / req.userRole (mount this router behind that middleware, exactly

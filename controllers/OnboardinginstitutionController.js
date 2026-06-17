@@ -1,5 +1,5 @@
 const sequelize = require("../config/database");
-const OnboardingInstitutionList = require("../models/OnboardingInstitutionList");
+const OnboardingInstitutionList = require("../models/Onboardinginstitutionlist");
 const { createLog } = require("../utils/auditLogger");
 const { getUserName } = require("./userController");
 
