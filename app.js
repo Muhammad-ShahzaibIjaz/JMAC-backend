@@ -43,10 +43,13 @@ const faafRoute = require("./routes/faafRoute");
 const campusRoutes = require("./routes/campusRoutes");
 const ipedRoutes = require("./routes/ipedRoutes");
 const operationlogRoutes = require("./routes/operationlogRoutes");
+const onboardingRoutes = require("./routes/OnboardingRoutes");
 
 
 
 
+
+app.use("/api", onboardingRoutes);
 app.use("/api", operationlogRoutes);
 app.use("/api", ipedRoutes);
 app.use("/api", campusRoutes);
