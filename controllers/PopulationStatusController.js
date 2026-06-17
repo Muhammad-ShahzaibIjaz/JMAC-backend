@@ -1166,7 +1166,7 @@ async function getFinancialMetricsFromMatchedRows(sheetId, matchedRowIndexes, te
     where: {
       templateId,
       name: { [Op.in]: ['Total_Institutional_Gift', 'Total_Institutional_Unfunded_Gift', 'NACUBO_Discount_Rate', 'Direct_Charges_Discount_Rate',
-      '%_Of_Need_Met_W/Gift_Aid', 'Total_Gift_Aid', 'Net_Charges_To_Student', 'Campus_Discount Rate',
+      'Institutional_Merit_As_%_Of_Need_Met', 'Total_Gift_Aid', 'Net_Charges_To_Student', 'Campus_Discount Rate',
       'Y/N Is_Student_Pell_Eligible', 'Student_Financial_Need', 'Total_Need_Met', 'GAP/Unmet_Charges'] },
     },
     raw: true,
@@ -1181,7 +1181,7 @@ async function getFinancialMetricsFromMatchedRows(sheetId, matchedRowIndexes, te
   const totalInstUnfundedGiftId = headerMap['Total_Institutional_Unfunded_Gift'];
   const discountRateHeaderId = headerMap['NACUBO_Discount_Rate'];
   const totalDiscountHeaderId = headerMap['Direct_Charges_Discount_Rate'];
-  const instMeritNeedId = headerMap['%_Of_Need_Met_W/Gift_Aid'];
+  const instMeritNeedId = headerMap['Institutional_Merit_As_%_Of_Need_Met'];
   const totalGiftAidId = headerMap['Total_Gift_Aid'];
   const netChargesId = headerMap['Net_Charges_To_Student'];
   const campusDiscountId = headerMap['Campus_Discount Rate'];
