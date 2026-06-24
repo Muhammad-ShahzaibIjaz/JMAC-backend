@@ -2531,5 +2531,6 @@ module.exports = {
     getExportableStudentData,
     getDatabyStateCounty,
     getPreviousCensusStats,
-    getRuleConditionsAndHeaders
+    getRuleConditionsAndHeaders,
+    applyPopulationRule,
 };

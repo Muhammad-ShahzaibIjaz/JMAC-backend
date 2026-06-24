@@ -1,9 +1,10 @@
 const sequelize = require('../config/database');
 const { DataTypes, Op, QueryTypes, fn, col } = require('sequelize');
 const { Header, SheetData } = require('../models');
+const { getRuleConditionsAndHeaders, applyPopulationRule } = require('./PopulationStatusController');
 
 
-const getElementEnrollmentStats = async (templateId, sheetId) => {
+const getElementEnrollmentStats = async (templateId, sheetId, allowedRowIndexes = null) => {
   // Step 1: Fetch both headers in one query
   const headers = await Header.findAll({
     where: {
@@ -25,13 +26,18 @@ const getElementEnrollmentStats = async (templateId, sheetId) => {
   const elementHeaderId = headerMap['Element_Number'];
   const enrolledHeaderId = headerMap['Y/N Student_Enrolled'];
 
-  // Step 2: Fetch all relevant rows in one query
+  // Step 2: Fetch all relevant rows — scoped to allowedRowIndexes if provided
+  const where = {
+    sheetId,
+    headerId: { [Op.in]: [elementHeaderId, enrolledHeaderId] },
+  };
+  if (allowedRowIndexes && allowedRowIndexes.length > 0) {
+    where.rowIndex = { [Op.in]: allowedRowIndexes };
+  }
+
   const rows = await SheetData.findAll({
     attributes: ['rowIndex', 'value', 'headerId'],
-    where: {
-      sheetId,
-      headerId: { [Op.in]: [elementHeaderId, enrolledHeaderId] },
-    },
+    where,
     raw: true,
   });
 
@@ -244,32 +250,42 @@ const getGiftAndLoanTotals = async (templateId, sheetId, enrolledRowIndexes) => 
 
 
 const dataProject = async (req, res) => {
-    const { templateId, sheetId } = req.body;
+    const { templateId, sheetId, populationRuleId } = req.body;
     try {
-        const stats = await getElementEnrollmentStats(templateId, sheetId);
-        for (const element in stats) {
-            const enrolledRowIndexes = stats[element].enrolledRowIndexes;
-            if (enrolledRowIndexes.length > 0) {
-                const averages = await getAverageRevenueAndDiscount(templateId, sheetId, enrolledRowIndexes);
-                stats[element].averageNetTuitionRevenue = averages.averageNetTuitionRevenue;
-                stats[element].averageNACUBODiscountRate = averages.averageNACUBODiscountRate;
-                stats[element].avgNeed = averages.avgNeed;
-                stats[element].avgNeedMet = averages.avgNeedMet;
-                stats[element].avgNeedMetWithGiftAid = averages.avgNeedMetWithGiftAid;
-                const totals = await getGiftAndLoanTotals(templateId, sheetId, enrolledRowIndexes);
-                stats[element].totalGift = totals.totalGift;
-                stats[element].totalWorkAndLoan = totals.totalWorkAndLoan;
-            } else {
-                stats[element].averageNetTuitionRevenue = null;
-                stats[element].averageNACUBODiscountRate = null;
-                stats[element].avgNeed = null;
-                stats[element].avgNeedMet = null;
-                stats[element].avgNeedMetWithGiftAid = null;
-                stats[element].totalGift = 0;
-                stats[element].totalWorkAndLoan = 0;
-            }
+      // Step 0: Resolve population rule → matched row indexes
+      let allowedRowIndexes = null;
+      if (populationRuleId) {
+        const { conditions, headers } = await getRuleConditionsAndHeaders(populationRuleId);
+        allowedRowIndexes = await applyPopulationRule(templateId, sheetId, conditions, headers);
+        // No rows match the rule → nothing to project
+        if (!allowedRowIndexes || allowedRowIndexes.length === 0) {
+            return res.status(200).json({ success: true, data: {} });
         }
-        res.status(200).json({ success: true, data: stats });
+      }
+      const stats = await getElementEnrollmentStats(templateId, sheetId, allowedRowIndexes);
+      for (const element in stats) {
+          const enrolledRowIndexes = stats[element].enrolledRowIndexes;
+          if (enrolledRowIndexes.length > 0) {
+              const averages = await getAverageRevenueAndDiscount(templateId, sheetId, enrolledRowIndexes);
+              stats[element].averageNetTuitionRevenue = averages.averageNetTuitionRevenue;
+              stats[element].averageNACUBODiscountRate = averages.averageNACUBODiscountRate;
+              stats[element].avgNeed = averages.avgNeed;
+              stats[element].avgNeedMet = averages.avgNeedMet;
+              stats[element].avgNeedMetWithGiftAid = averages.avgNeedMetWithGiftAid;
+              const totals = await getGiftAndLoanTotals(templateId, sheetId, enrolledRowIndexes);
+              stats[element].totalGift = totals.totalGift;
+              stats[element].totalWorkAndLoan = totals.totalWorkAndLoan;
+          } else {
+              stats[element].averageNetTuitionRevenue = null;
+              stats[element].averageNACUBODiscountRate = null;
+              stats[element].avgNeed = null;
+              stats[element].avgNeedMet = null;
+              stats[element].avgNeedMetWithGiftAid = null;
+              stats[element].totalGift = 0;
+              stats[element].totalWorkAndLoan = 0;
+          }
+      }
+      res.status(200).json({ success: true, data: stats });
     } catch (error) {
         console.error('Error in data projection:', error);
         res.status(500).json({ success: false, message: error.message });
