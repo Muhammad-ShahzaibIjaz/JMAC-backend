@@ -1,7 +1,7 @@
 const sequelize = require('../config/database');
 const { DataTypes, Op, QueryTypes, fn, col } = require('sequelize');
 const { Header, SheetData } = require('../models');
-const { getRuleConditionsAndHeaders, applyPopulationRule } = require('./PopulationStatusController');
+const { getRuleConditionsAndHeaders, applyPopulationRule, getSheetIdBySubmissionDate } = require('./PopulationStatusController');
 
 
 const getElementEnrollmentStats = async (templateId, sheetId, allowedRowIndexes = null) => {
@@ -250,8 +250,12 @@ const getGiftAndLoanTotals = async (templateId, sheetId, enrolledRowIndexes) => 
 
 
 const dataProject = async (req, res) => {
-    const { templateId, sheetId, populationRuleId } = req.body;
+    const { templateId, selectedDate, populationRuleId } = req.body;
     try {
+      if (!templateId || !selectedDate || !populationRuleId) {
+        return res.status(400).json({ success: false, message: 'templateId, selectedDate, and populationRuleId are required' });
+      }
+      const sheetId = await getSheetIdBySubmissionDate(selectedDate, templateId);
       // Step 0: Resolve population rule → matched row indexes
       let allowedRowIndexes = null;
       if (populationRuleId) {
