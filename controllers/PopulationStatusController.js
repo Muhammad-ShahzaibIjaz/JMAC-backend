@@ -2271,13 +2271,16 @@ async function analyzeStudentsByStateAndCounty(sheetId, templateId, rowIndexes) 
     const countyGroups = {};
     for (const s of enriched) {
       const county = s.Home_County?.trim();
-      if (!county) continue;
+      const state = s.Student_State?.trim();
+      if (!county || !state) continue;
+      const key = `${state}|${county}`;
       if (!countyGroups[county]) countyGroups[county] = [];
-      countyGroups[county].push(s);
+      if (!countyGroups[key]) countyGroups[key] = [];
+      countyGroups[key].push(s);
     }
 
     const countyResults = {};
-    for (const [county, group] of Object.entries(countyGroups)) {
+    for (const [key, group] of Object.entries(countyGroups)) {
       const saiValues = [];
       const needValues = [];
 
@@ -2288,7 +2291,7 @@ async function analyzeStudentsByStateAndCounty(sheetId, templateId, rowIndexes) 
         if (!isNaN(need)) needValues.push(need);
       }
 
-      countyResults[county] = {
+      countyResults[key] = {
         studentCount: group.length,
         AvgSAI: avg(saiValues),
         AvgNeed: avg(needValues),
