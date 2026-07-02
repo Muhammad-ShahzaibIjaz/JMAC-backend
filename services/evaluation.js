@@ -73,18 +73,31 @@ function evaluateConditions(rowData, conditionBlock) {
 }
 
 function evaluateBound(value, bound) {
-  if (!bound || !bound.operator || bound.value === undefined || bound.value === null || bound.value === "" || isNaN(bound.value) || value === null || value === '' || value === "NULL" || value === "null" || isNaN(value)) {
+  if (!bound || !bound.operator || bound.value === undefined || bound.value === null || bound.value === "" || value === null || value === '' || value === "NULL" || value === "null") {
     return false; // no restriction
   }
-
+ 
+  // Text/string equality comparisons (e.g. "Y"/"N" flags) — do NOT force numeric parsing
+  if (bound.operator === "isEqualTo" || bound.operator === "isNotEqualTo") {
+    if (isNaN(bound.value)) {
+      const strValue = String(value).trim().toUpperCase();
+      const strBound = String(bound.value).trim().toUpperCase();
+      return bound.operator === "isEqualTo" ? strValue === strBound : strValue !== strBound;
+    }
+  }
+ 
+  // Numeric comparisons
+  if (isNaN(value) || isNaN(bound.value)) return false;
+ 
+  const numValue = parseFloat(value);
   const numBound = parseFloat(bound.value);
   switch (bound.operator) {
-    case "greaterThan": return value > numBound;
-    case "greaterThanEqual": return value >= numBound;
-    case "lessThan": return value < numBound;
-    case "lessThanEqual": return value <= numBound;
-    case "isNotEqualTo": return value !== numBound;
-    case "isEqualTo": return value === numBound;
+    case "greaterThan": return numValue > numBound;
+    case "greaterThanEqual": return numValue >= numBound;
+    case "lessThan": return numValue < numBound;
+    case "lessThanEqual": return numValue <= numBound;
+    case "isNotEqualTo": return numValue !== numBound;
+    case "isEqualTo": return numValue === numBound;
     default: return false; // unknown operator → ignore
   }
 }

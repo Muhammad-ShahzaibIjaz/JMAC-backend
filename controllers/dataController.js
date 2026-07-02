@@ -7644,25 +7644,25 @@ async function evaluateBandsAndAssign(req, res) {
   const transaction = await sequelize.transaction();
   try {
     const { templateId, sheetId, outputHeader, targetHeader, selectedValues, conditions } = req.body;
-
+ 
     if (!templateId || !sheetId || !outputHeader || !targetHeader || !Array.isArray(selectedValues) || selectedValues.length === 0 || !Array.isArray(conditions) || conditions.length === 0) {
       await transaction.rollback();
       return res.status(400).json({ message: 'Invalid input. templateId, sheetId, outputHeader, targetHeader, selectedValues, and conditions are required.' });
     }
-
+ 
     const outputHeaderId = await Header.findOne({ where: { templateId, name: outputHeader } });
     const targetHeaderId = await Header.findOne({ where: { templateId, name: targetHeader } });
-
+ 
     if (!outputHeaderId || !targetHeaderId) {
       await transaction.rollback();
       return res.status(404).json({ message: "Output or target header not found for the given templateId." });
     }
-
+ 
     // Resolve all input headers used in conditions
     const inputHeaderNames = [...new Set(conditions.map(c => c.inputHeader))];
     const inputHeaders = await Header.findAll({ where: { templateId, name: inputHeaderNames } });
     const inputHeaderMap = new Map(inputHeaders.map(h => [h.name, h.id]));
-
+ 
     // Validate all input headers exist
     for (const name of inputHeaderNames) {
       if (!inputHeaderMap.has(name)) {
@@ -7670,13 +7670,13 @@ async function evaluateBandsAndAssign(req, res) {
         return res.status(404).json({ message: `Input header "${name}" not found for the given templateId.` });
       }
     }
-
+ 
     // Get max row index
     const [{ maxRowIndex }] = await sequelize.query(
       `SELECT MAX("rowIndex") as "maxRowIndex" FROM "SheetData" WHERE "sheetId" = :sheetId`,
       { replacements: { sheetId }, type: QueryTypes.SELECT }
     );
-
+ 
     // Fetch all input data for relevant headers + target filter
     const inputData = await sequelize.query(
       `
@@ -7701,42 +7701,46 @@ async function evaluateBandsAndAssign(req, res) {
         type: QueryTypes.SELECT,
       }
     );
-
+ 
     if (inputData.length === 0) {
       await transaction.rollback();
       return res.status(200).json({ message: "No data found for the input headers." });
     }
-
+ 
     // Build maps: { headerId -> Map(rowIndex -> value) }
     const headerValueMaps = new Map();
     for (const row of inputData) {
       if (!headerValueMaps.has(row.headerId)) headerValueMaps.set(row.headerId, new Map());
       headerValueMaps.get(row.headerId).set(row.rowIndex, row.value);
     }
-
+ 
     const existingOutput = await SheetData.findAll({
       where: { headerId: outputHeaderId.id, sheetId },
       attributes: ["rowIndex", "id", "value"],
       raw: true,
     });
     const outputMap = new Map(existingOutput.map(r => [r.rowIndex, r]));
-
+ 
     const toInsert = [], toUpdate = [], snapshots = [];
-
+ 
     const operationLog = await OperationLog.create({
       templateId,
       sheetId,
       operationType: 'CALCULATION',
     }, { transaction });
-
-    let correctOnes = 0;
+ 
     for (let rowIndex = 0; rowIndex <= maxRowIndex; rowIndex++) {
       let assignedValue = null;
       for (const cond of conditions) {
         const headerId = inputHeaderMap.get(cond.inputHeader);
         const rawValue = headerValueMaps.get(headerId)?.get(rowIndex) ?? null;
-        const inputValue = rawValue === null || rawValue === "" || rawValue.toUpperCase() === "NULL" ? null : parseFloat(rawValue);
-
+ 
+        // IMPORTANT: don't force parseFloat here — evaluateBound decides
+        // numeric vs text comparison based on the operator/bound value.
+        const inputValue = rawValue === null || rawValue === "" || (typeof rawValue === "string" && rawValue.toUpperCase() === "NULL")
+          ? null
+          : rawValue;
+ 
         let lowerOk = false, upperOk = false;
         if (cond.lowerBound?.operator === 'isNull') {
           lowerOk = (inputValue === null);
@@ -7744,21 +7748,22 @@ async function evaluateBandsAndAssign(req, res) {
           lowerOk = (inputValue !== null);
         } else {
           lowerOk = evaluateBound(inputValue, cond.lowerBound);
-          if (lowerOk) correctOnes++;
         }
-
+ 
         if (cond.upperBound) {
           upperOk = evaluateBound(inputValue, cond.upperBound);
         } else {
           upperOk = true;
         }
-
+ 
         if (lowerOk && upperOk) {
           assignedValue = cond.assignValue;
-          break; // stop at first matching condition
+          // NOTE: no `break` — every condition is evaluated in sequence.
+          // A later matching condition overrides an earlier one (last-match-wins),
+          // so band order in the request no longer traps students in an earlier band.
         }
       }
-      
+ 
       if (assignedValue !== null) {
         const existing = outputMap.get(rowIndex);
         if (existing) {
@@ -7772,7 +7777,7 @@ async function evaluateBandsAndAssign(req, res) {
         }
       }
     }
-
+ 
     // Bulk commit
     if (toInsert.length > 0) await SheetData.bulkCreate(toInsert, { transaction });
     if (toUpdate.length > 0) {
@@ -7783,12 +7788,12 @@ async function evaluateBandsAndAssign(req, res) {
       }
     }
     if (snapshots.length > 0) await SheetDataSnapshot.bulkCreate(snapshots, { transaction });
-
+ 
     await transaction.commit();
     await createLog({ action: 'EVALUATE_BANDS_AND_ASSIGN', username, performedBy: req.userRole, details: `Evaluated conditions and assigned values for templateId: ${templateId}, sheetId: ${sheetId}` });
-
+ 
     return res.status(200).json({ message: "Condition evaluation completed successfully.", inserted: toInsert.length, updated: toUpdate.length });
-
+ 
   } catch (error) {
     await transaction.rollback();
     await createLog({ action: 'EVALUATE_BANDS_AND_ASSIGN_FAILED', username, performedBy: req.userRole, details: `Failed for templateId: ${req.body.templateId}, sheetId: ${req.body.sheetId}. Error: ${error.message}` });
