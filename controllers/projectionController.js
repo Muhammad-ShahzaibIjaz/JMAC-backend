@@ -1,15 +1,52 @@
 const sequelize = require('../config/database');
 const { DataTypes, Op, QueryTypes, fn, col } = require('sequelize');
-const { Header, SheetData } = require('../models');
+const { Header, SheetData, PopulationStatus } = require('../models');
 const { getRuleConditionsAndHeaders, applyPopulationRule, getSheetIdBySubmissionDate } = require('./PopulationStatusController');
 
 
+
+const getStatusesByTemplateId = async (templateId) => {
+  try {
+    const statuses = await PopulationStatus.findAll({
+      where: {
+        templateId,
+      },
+    });
+    return statuses.map(status => ({
+      selectedStatuses: status.selectedStatuses,
+      targetHeader: status.targetHeader,
+      statusName: status.statusName,
+    }));
+  } catch (error) {
+    console.error('Error fetching statuses by template ID:', error);
+    return [];
+  }
+};
+
 const getElementEnrollmentStats = async (templateId, sheetId, allowedRowIndexes = null) => {
-  // Step 1: Fetch both headers in one query
+
+  // Step 1: Resolve Admitted / Net Confirmed statuses for this template
+  const statuses = await getStatusesByTemplateId(templateId);
+
+  const admittedStatus = statuses.find(s => s.statusName === 'Admitted');
+  const enrolledStatus = statuses.find(s => s.statusName === 'Net Confirmed');
+
+  if (!admittedStatus || !enrolledStatus) {
+    throw new Error('Admitted or Net Confirmed population status not configured');
+  }
+
+  const admittedValues = new Set((admittedStatus.selectedStatuses || []).map(v => v.toString().trim()));
+  const enrolledValues = new Set((enrolledStatus.selectedStatuses || []).map(v => v.toString().trim()));
+
+  // Both use the same targetHeader (Admissions_Funnel_Stage), but resolve from admitted config
+  const funnelHeaderName = admittedStatus.targetHeader;
+
+
+  // Step 2: Fetch both headers in one query
   const headers = await Header.findAll({
     where: {
       templateId,
-      name: { [Op.in]: ['Element_Number', 'Y/N Student_Enrolled'] },
+      name: { [Op.in]: ['Element_Number', funnelHeaderName] },
     },
     attributes: ['id', 'name'],
     raw: true,
@@ -24,12 +61,12 @@ const getElementEnrollmentStats = async (templateId, sheetId, allowedRowIndexes 
   headers.forEach(h => { headerMap[h.name] = h.id; });
 
   const elementHeaderId = headerMap['Element_Number'];
-  const enrolledHeaderId = headerMap['Y/N Student_Enrolled'];
+  const funnelHeaderId = headerMap[funnelHeaderName];
 
-  // Step 2: Fetch all relevant rows — scoped to allowedRowIndexes if provided
+  // Step 3: Fetch all relevant rows — scoped to allowedRowIndexes if provided
   const where = {
     sheetId,
-    headerId: { [Op.in]: [elementHeaderId, enrolledHeaderId] },
+    headerId: { [Op.in]: [elementHeaderId, funnelHeaderId] },
   };
   if (allowedRowIndexes && allowedRowIndexes.length > 0) {
     where.rowIndex = { [Op.in]: allowedRowIndexes };
@@ -51,20 +88,16 @@ const getElementEnrollmentStats = async (templateId, sheetId, allowedRowIndexes 
     if (!rowMap[row.rowIndex]) rowMap[row.rowIndex] = {};
     if (row.headerId === elementHeaderId) {
       rowMap[row.rowIndex].elementNumber = row.value;
-    } else if (row.headerId === enrolledHeaderId) {
-      rowMap[row.rowIndex].enrolledValue = row.value;
+    } else if (row.headerId === funnelHeaderId) {
+      rowMap[row.rowIndex].funnelValue = row.value;
     }
   }
-
-  // Step 4: Normalize values
-  const admittedSet = new Set(['Y', 'Yes', 'true', '1']);
-  const enrolledSet = new Set(['N', 'No', 'false', '0']);
 
   const stats = {};
 
   for (const [rowIndex, data] of Object.entries(rowMap)) {
     const element = data.elementNumber;
-    const enrolledVal = (data.enrolledValue || '').toString().trim();
+    const funnelVal = (data.funnelValue || '').toString().trim();
 
     if (!element) continue;
 
@@ -77,10 +110,13 @@ const getElementEnrollmentStats = async (templateId, sheetId, allowedRowIndexes 
       };
     }
 
-    if (admittedSet.has(enrolledVal)) {
+    // Bucket independently — each based on its own selectedStatuses match
+    if (admittedValues.has(funnelVal)) {
       stats[element].admittedCount++;
       stats[element].admittedRowIndexes.push(Number(rowIndex));
-    } else if (enrolledSet.has(enrolledVal)) {
+    }
+ 
+    if (enrolledValues.has(funnelVal)) {
       stats[element].enrolledCount++;
       stats[element].enrolledRowIndexes.push(Number(rowIndex));
     }
