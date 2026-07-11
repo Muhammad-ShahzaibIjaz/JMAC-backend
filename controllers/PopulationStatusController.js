@@ -1388,7 +1388,7 @@ const getFinancialAidsValues = async (req, res) => {
         TIUG: 0, TIFUG: 0, Avg_TIFUG: 0, Avg_TSG: 0, SNC: 0, Avg_SNC: 0,
         Avg_NACUBO: 0, Avg_Discount: 0, Avg_C_Discount: 0,
         FAFSA: 0, Student_Pell: 0, Avg_Need_Met: 0,
-        Avg_SFN: 0, Avg_TNM: 0, Avg_TUN: 0, student_melt: 0
+        Avg_SFN: 0, Avg_TNM: 0, Avg_TUN: 0, student_melt: 0, student_melt_percentage: 0
       }));
       return res.status(200).json(fallbackStatuses);
     }
@@ -1424,17 +1424,20 @@ const getFinancialAidsValues = async (req, res) => {
         });
       }
       const student_melt = confirmedCount > 0
-        ? (confirmedCount - netConfirmedCount) / confirmedCount
+        ? confirmedCount - netConfirmedCount
+        : 0;
+      const student_melt_percentage = confirmedCount > 0
+        ? ((confirmedCount - netConfirmedCount) / confirmedCount) * 100
         : 0;
       // put the same melt value on every status object
-      statusCounts.forEach(s => { s.student_melt = student_melt; });
+      statusCounts.forEach(s => { s.student_melt = student_melt; s.student_melt_percentage = student_melt_percentage; });
     } else {
       statusCounts.push(...allStatuses.map(status => ({
         statusName: status.statusName,
         TIUG: 0, TIFUG: 0, Avg_TIFUG: 0, Avg_TSG: 0, SNC: 0, Avg_SNC: 0,
         Avg_NACUBO: 0, Avg_Discount: 0, Avg_C_Discount: 0,
         FAFSA: 0, Student_Pell: 0, Avg_Need_Met: 0,
-        Avg_SFN: 0, Avg_TNM: 0, Avg_TUN: 0, student_melt: 0
+        Avg_SFN: 0, Avg_TNM: 0, Avg_TUN: 0, student_melt: 0, student_melt_percentage: 0
       })));
     }
 

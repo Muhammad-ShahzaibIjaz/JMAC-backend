@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const templateController = require('../controllers/templateController');
-const { verifyToken, verifyUserActive } = require('../middlewares/authMiddleware');
+const { verifyToken, verifyUserActive, verifyAdmin } = require('../middlewares/authMiddleware');
 
 router.post('/templates', verifyToken, verifyUserActive, templateController.createTemplate);
 router.put('/templates/:id', verifyToken, verifyUserActive, templateController.updateTemplate);
@@ -10,5 +10,7 @@ router.get('/templates', verifyToken, verifyUserActive, templateController.getTe
 router.get('/templates/:campusId', verifyToken, verifyUserActive, templateController.getTemplatesByCampus);
 router.get('/template/:id', verifyToken, verifyUserActive, templateController.getTemplateByID);
 router.get('/template/permission/status', verifyToken, verifyUserActive, templateController.getTemplatePermissionStatus);
+router.get('/templates-for-user-campuses', verifyToken, verifyUserActive, verifyAdmin, templateController.getTemplatesForUserCampuses);
+router.get('/templates-with-campus', verifyToken, verifyUserActive, verifyAdmin, templateController.getAllTemplatesWithCampus);
 
 module.exports = router;

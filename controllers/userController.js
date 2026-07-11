@@ -1,5 +1,5 @@
 const { v4: uuidv4 } = require("uuid");
-const { User, Template, TemplatePermission } = require("../models");
+const { User, Template, TemplatePermission, CampusPermission, Campus } = require("../models");
 const jwt = require("jsonwebtoken");
 const { SECRET_KEY, ENVIRONMENT } = require("../config/env");
 const bcrypt = require("bcrypt");
@@ -22,10 +22,54 @@ const getUserName = async (userId) => {
     return user ? user.username : "Unknown User";
 }
 
+const validateTemplatesBelongToCampuses = async (permissions, campusIds, transaction) => {
+    if (!Array.isArray(permissions) || permissions.length === 0) {
+        return { valid: true, invalidTemplateIds: [] };
+    }
+    const templateIds = permissions.map((p) => p.templateId);
+    const templates = await Template.findAll({
+        where: { id: { [Op.in]: templateIds } },
+        attributes: ["id", "campusId"],
+        transaction,
+    });
+
+    const campusSet = new Set(campusIds);
+    const foundMap = new Map(templates.map((t) => [t.id, t.campusId]));
+
+    const invalidTemplateIds = templateIds.filter((tid) => {
+        const campusId = foundMap.get(tid);
+        return !campusId || !campusSet.has(campusId);
+    });
+
+    return { valid: invalidTemplateIds.length === 0, invalidTemplateIds };
+};
+
+
+// Removes template permissions for a user whose template's campus
+// is no longer in the granted campus list.
+const cleanupOrphanTemplatePermissions = async (userId, grantedCampusIds, transaction) => {
+    const perms = await TemplatePermission.findAll({
+        where: { userId },
+        include: [{ model: Template, attributes: ["id", "campusId"] }],
+        transaction,
+    });
+
+    const campusSet = new Set(grantedCampusIds);
+    const toDelete = perms
+        .filter((p) => !p.Template || !campusSet.has(p.Template.campusId))
+        .map((p) => p.id);
+
+    if (toDelete.length > 0) {
+        await TemplatePermission.destroy({
+            where: { id: { [Op.in]: toDelete } },
+            transaction,
+        });
+    }
+};
 
 const createUser = async (req, res) => {
     const transaction = await sequelize.transaction();
-    const { username, password, role, permissions, hasDecisionTreeAccess=true } = req.body;
+    const { username, password, role, permissions, campusIds = [], hasDecisionTreeAccess=true } = req.body;
     try {
         if (!username || !password || !role) {
             await transaction.rollback();
@@ -36,6 +80,16 @@ const createUser = async (req, res) => {
             await transaction.rollback();
             return res.status(409).json({ message: "User with this username already exists." });
         }
+
+        const { valid, invalidTemplateIds } = await validateTemplatesBelongToCampuses(permissions, campusIds, transaction);
+        if (!valid) {
+            await transaction.rollback();
+            return res.status(400).json({
+                message: "Some templates do not belong to the user's assigned campuses.",
+                invalidTemplateIds,
+            });
+        }
+
         const passwordHash = await hashPassword(password);
         const newUser = await User.create({
             id: uuidv4(),
@@ -44,6 +98,16 @@ const createUser = async (req, res) => {
             role,
             hasDecisionTreeAccess
         }, { transaction });
+
+
+        // Campus permissions
+        if (Array.isArray(campusIds) && campusIds.length > 0) {
+            const campusRecords = campusIds.map((campusId) => ({
+                campusId,
+                userId: newUser.id,
+            }));
+            await CampusPermission.bulkCreate(campusRecords, { transaction });
+        }
 
         if (Array.isArray(permissions) && permissions.length > 0) {
             const permissionRecords = permissions.map(perm => ({
@@ -66,7 +130,7 @@ const createUser = async (req, res) => {
 
 const updateUser = async (req, res) => {
     const transaction = await sequelize.transaction();
-    const { id, username, role, isActive, permissions, hasDecisionTreeAccess } = req.body;
+    const { id, username, role, isActive, permissions, campusIds, hasDecisionTreeAccess } = req.body;
     try {
         if (!id || !username || !role) {
             await transaction.rollback();
@@ -77,12 +141,52 @@ const updateUser = async (req, res) => {
             await transaction.rollback();
             return res.status(404).json({ message: "User not found." });
         }
+
         user.username = username.includes("@smartaid") ? username : `${username}@smartaid`;
         user.role = role;
         user.isActive = isActive;
         user.hasDecisionTreeAccess = hasDecisionTreeAccess;
         await user.save({ transaction });
+
+        // --- Campus permissions ---
+        // Determine the effective campus list for validation.
+        // If campusIds provided, we reset them; otherwise keep existing.
+        let effectiveCampusIds;
+        if (Array.isArray(campusIds)) {
+            await CampusPermission.destroy({ where: { userId: id }, transaction });
+            if (campusIds.length > 0) {
+                const campusRecords = campusIds.map((campusId) => ({
+                    campusId,
+                    userId: id,
+                }));
+                await CampusPermission.bulkCreate(campusRecords, { transaction });
+            }
+            effectiveCampusIds = campusIds;
+        } else {
+            const existing = await CampusPermission.findAll({
+                where: { userId: id },
+                attributes: ["campusId"],
+                transaction,
+            });
+            effectiveCampusIds = existing.map((c) => c.campusId);
+        }
+
+        // --- Template permissions ---
         if (Array.isArray(permissions)) {
+            // Guard: only allow templates within the effective (granted) campuses
+            const { valid, invalidTemplateIds } = await validateTemplatesBelongToCampuses(
+                permissions,
+                effectiveCampusIds,
+                transaction
+            );
+            if (!valid) {
+                await transaction.rollback();
+                return res.status(400).json({
+                    message: "Some templates do not belong to the user's assigned campuses.",
+                    invalidTemplateIds,
+                });
+            }
+
             await TemplatePermission.destroy({ where: { userId: id }, transaction });
             const permissionRecords = permissions.map(perm => ({
                 templateId: perm.templateId,
@@ -90,7 +194,12 @@ const updateUser = async (req, res) => {
                 accessLevel: perm.permission || 'read',
             }));
             await TemplatePermission.bulkCreate(permissionRecords, { transaction });
+        } else if (Array.isArray(campusIds)) {
+            // permissions not sent, but campuses changed:
+            // clean up any template permissions whose campus is no longer granted
+            await cleanupOrphanTemplatePermissions(id, effectiveCampusIds, transaction);
         }
+
         await transaction.commit();
         await createLog({ action: "USER_UPDATED", username: user.username, performedBy: req.userRole, details: `User ${user.username} was updated.` });
         res.status(200).json({ message: "User updated successfully." });
@@ -216,7 +325,17 @@ const getUsersInfo = async (req, res) => {
                     include: [
                         {
                             model: Template,
-                            attributes: ['id', 'name'],
+                            attributes: ['id', 'name', 'campusId'],
+                        }
+                    ],
+                },
+                {
+                    model: CampusPermission,
+                    as: 'campusPermissions',
+                    include: [
+                        {
+                            model: Campus,
+                            attributes: ['id', 'campusName'],
                         }
                     ],
                 },
@@ -231,7 +350,13 @@ const getUsersInfo = async (req, res) => {
             permissions: user.templatePermissions.map((perm) => ({
                 templateId: perm.templateId,
                 templateName: perm.Template?.name || '',
+                campusId: perm.Template?.campusId || null,
                 permission: perm.accessLevel ?? 'none',
+            })),
+            campusIds: user.campusPermissions.map((cp) => cp.campusId),
+            campuses: user.campusPermissions.map((cp) => ({
+                campusId: cp.campusId,
+                campusName: cp.Campus?.campusName || '',
             })),
             hasDecisionTreeAccess: user.hasDecisionTreeAccess,
         }));

@@ -20,6 +20,7 @@ const PopulationSubmission = require('./PopulationSubmission');
 const Tree = require('./Tree');
 const BandRule = require('./BandRule');
 const User = require('./User');
+const CampusPermission = require('./CampusPermission');
 const ElementMatrix = require('./ElementMatrix');
 const TemplatePermission = require('./TemplatePermission');
 const Log = require('./Log');
@@ -128,6 +129,13 @@ TemplatePermission.belongsTo(Template, { foreignKey: 'templateId' });
 User.hasMany(TemplatePermission, { foreignKey: 'userId', as: 'templatePermissions', onDelete: 'CASCADE' });
 TemplatePermission.belongsTo(User, { foreignKey: 'userId' });
 
+
+Campus.hasMany(CampusPermission, { foreignKey: 'campusId', as: 'campusPermissions', onDelete: 'CASCADE' });
+CampusPermission.belongsTo(Campus, { foreignKey: 'campusId' });
+
+User.hasMany(CampusPermission, { foreignKey: 'userId', as: 'campusPermissions', onDelete: 'CASCADE' });
+CampusPermission.belongsTo(User, { foreignKey: 'userId' });
+
 module.exports = {
   Template,
   File,
@@ -159,4 +167,5 @@ module.exports = {
   Note,
   CustomField,
   OperationProgressLog,
+  CampusPermission,
 };

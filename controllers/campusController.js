@@ -1,7 +1,8 @@
-const { Campus, Note, CustomField } = require('../models');
+const { Campus, Note, CustomField, CampusPermission } = require('../models');
 const { v4: uuidv4 } = require('uuid');
 const { createLog } = require("../utils/auditLogger");
 const { getUserName } = require('./userController');
+const { Op } = require('sequelize');
 
 
 const createCampus = async (req, res) => {
@@ -317,15 +318,44 @@ const getCampus = async (req, res) => {
 }
 
 const getAllCampuses = async (req, res) => {
+    const { userRole, userId } = req;
     try {
-        const campuses = await Campus.findAll({
-            include: [
-                { model: Note, as: "notes" },
-                { model: CustomField, as: "customFields" },
-            ],
-        });
-        res.status(200).json(campuses);
-    } catch (error) {        
+        // Admin & Creator: full access to all campuses
+        if (userRole === "Admin" || userRole === "Creator") {
+            const campuses = await Campus.findAll({
+                include: [
+                    { model: Note, as: "notes" },
+                    { model: CustomField, as: "customFields" },
+                ],
+            });
+            return res.status(200).json(campuses);
+        }
+
+        // Consultant & Campus: only campuses they have permission for
+        if (userRole === "Consultant" || userRole === "Campus") {
+            const perms = await CampusPermission.findAll({
+                where: { userId },
+                attributes: ["campusId"],
+            });
+            const campusIds = perms.map((p) => p.campusId);
+
+            if (campusIds.length === 0) {
+                return res.status(200).json([]); // no access -> empty list
+            }
+
+            const campuses = await Campus.findAll({
+                where: { id: { [Op.in]: campusIds } },
+                include: [
+                    { model: Note, as: "notes" },
+                    { model: CustomField, as: "customFields" },
+                ],
+            });
+            return res.status(200).json(campuses);
+        }
+
+        // Any other role -> nothing
+        return res.status(200).json([]);
+    } catch (error) {
         await createLog({
             action: 'GET_ALL_CAMPUSES_FAILED',
             username: await getUserName(req.userId),

@@ -369,10 +369,6 @@ async function initAddressHelper() {
   console.log('Loading address file cache into memory...');
   await loadAddressFile();
   console.log(`Address file loaded — ${fileAddressMap?.size || 0} cached entries.`);
-  if (!isTokenValid()) {
-    console.log('Fetching initial USPS token...');
-    await refreshUspsToken();
-  }
 }
 
 module.exports = { processAddress, initAddressHelper, flushAddressWrites, validateAndCleanAddress };

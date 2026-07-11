@@ -3,6 +3,7 @@ const Template = require('../models/Template');
 const Header = require('../models/Header');
 const MapHeader = require('../models/MapHeader');
 const TemplatePermission = require('../models/TemplatePermission');
+const CampusPermission = require('../models/CampusPermission');
 const { v4: uuidv4 } = require('uuid');
 const { Op } = require('sequelize');
 const path = require('path');
@@ -284,6 +285,71 @@ async function getTemplatePermissionStatus(req, res) {
   }
 }
 
+
+// Returns campuses (with their templates) that a given user has access to.
+// Used by the admin user-management UI to render campus-grouped permissions.
+async function getTemplatesForUserCampuses(req, res) {
+  const { userId } = req.query;
+  try {
+    if (!userId) {
+      return res.status(400).json({ error: "userId is required" });
+    }
+
+    const campusPerms = await CampusPermission.findAll({
+      where: { userId },
+      attributes: ["campusId"],
+    });
+    const campusIds = campusPerms.map((c) => c.campusId);
+
+    if (campusIds.length === 0) {
+      return res.json([]);
+    }
+
+    const templates = await Template.findAll({
+      where: {
+        campusId: { [Op.in]: campusIds },
+        id: { [Op.ne]: '58f3cf3b-ed4f-4d33-9ad1-0611f85b4df8' },
+      },
+      attributes: ["id", "name", "campusId"],
+    });
+
+    res.json(
+      templates.map((t) => ({
+        id: t.id,
+        name: t.name,
+        campusId: t.campusId,
+      }))
+    );
+  } catch (error) {
+    console.error("Error fetching templates for user campuses:", error);
+    res.status(500).json({ error: error.message });
+  }
+}
+
+// Returns all templates with their campusId — used by the admin user-management
+// UI to render campus-grouped permission selectors (fetched once, filtered locally).
+async function getAllTemplatesWithCampus(req, res) {
+  try {
+    const templates = await Template.findAll({
+      where: {
+        id: { [Op.ne]: '58f3cf3b-ed4f-4d33-9ad1-0611f85b4df8' },
+      },
+      attributes: ["id", "name", "campusId"],
+    });
+
+    res.json(
+      templates.map((t) => ({
+        id: t.id,
+        name: t.name,
+        campusId: t.campusId,
+      }))
+    );
+  } catch (error) {
+    console.error("Error fetching all templates with campus:", error);
+    res.status(500).json({ error: error.message });
+  }
+}
+
 module.exports = {
   createTemplate,
   updateTemplate,
@@ -291,5 +357,7 @@ module.exports = {
   getTemplates,
   getTemplateByID,
   getTemplatePermissionStatus,
-  getTemplatesByCampus
+  getTemplatesByCampus,
+  getTemplatesForUserCampuses,
+  getAllTemplatesWithCampus,
 };
