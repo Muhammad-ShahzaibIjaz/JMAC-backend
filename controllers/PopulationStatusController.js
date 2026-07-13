@@ -501,11 +501,11 @@ async function getAveragesFromMatchedRows(sheetId, matchedRowIndexes, templateId
     return { netRevenue: 0, discountRate: 0 };
   }
 
-  // Step 1: Get headerIds for Net_Tuition_Revenue and NACUBO_Discount_Rate
+  // Step 1: Get headerIds for Net_Tuition/Fee_Revenue and NACUBO_Discount_Rate
   const headers = await Header.findAll({
     where: {
       templateId,
-      name: { [Op.in]: ['Net_Tuition_Revenue', 'NACUBO_Discount_Rate'] },
+      name: { [Op.in]: ['Net_Tuition/Fee_Revenue', 'NACUBO_Discount_Rate'] },
     },
     raw: true,
   });
@@ -515,7 +515,7 @@ async function getAveragesFromMatchedRows(sheetId, matchedRowIndexes, templateId
     return acc;
   }, {});
 
-  const netTuitionHeaderId = headerMap['Net_Tuition_Revenue'];
+  const netTuitionHeaderId = headerMap['Net_Tuition/Fee_Revenue'];
   const discountRateHeaderId = headerMap['NACUBO_Discount_Rate'];
 
   if (!netTuitionHeaderId && !discountRateHeaderId) {
@@ -569,11 +569,11 @@ async function getAveragesMetricsFromMatchedRows(sheetId, matchedRowIndexes, tem
   if (!sheetId || !matchedRowIndexes || matchedRowIndexes.length === 0) {
     return { netRevenue: 0, netCharges: 0, nacuboDiscount: 0, totalDiscount: 0 };
   }
-  // Step 1: Get headerIds for Net_Tuition_Revenue and NACUBO_Discount_Rate
+  // Step 1: Get headerIds for Net_Tuition/Fee_Revenue and NACUBO_Discount_Rate
   const headers = await Header.findAll({
     where: {
       templateId,
-      name: { [Op.in]: ['Net_Tuition_Revenue', 'Net_Charges_To_Student', 'NACUBO_Discount_Rate', 'Direct_Charges_Discount_Rate'] },
+      name: { [Op.in]: ['Net_Tuition/Fee_Revenue', 'Net_Charges_To_Student', 'NACUBO_Discount_Rate', 'Direct_Charges_Discount_Rate'] },
     },
     raw: true,
   });
@@ -583,7 +583,7 @@ async function getAveragesMetricsFromMatchedRows(sheetId, matchedRowIndexes, tem
     return acc;
   }, {});
 
-  const netTuitionHeaderId = headerMap['Net_Tuition_Revenue'];
+  const netTuitionHeaderId = headerMap['Net_Tuition/Fee_Revenue'];
   const discountRateHeaderId = headerMap['NACUBO_Discount_Rate'];
   const netChargesHeaderId = headerMap['Net_Charges_To_Student'];
   const totalDiscountHeaderId = headerMap['Direct_Charges_Discount_Rate'];
@@ -658,7 +658,7 @@ async function getAveragesMetricsFromMatchedRowsOfPackage(sheetId, matchedRowInd
   const headers = await Header.findAll({
     where: {
       templateId,
-      name: { [Op.in]: ['Net_Tuition_Revenue', 'Net_Charges_To_Student', 'NACUBO_Discount_Rate', 'Direct_Charges_Discount_Rate'] },
+      name: { [Op.in]: ['Net_Tuition/Fee_Revenue', 'Net_Charges_To_Student', 'NACUBO_Discount_Rate', 'Direct_Charges_Discount_Rate'] },
     },
     raw: true,
   });
@@ -668,7 +668,7 @@ async function getAveragesMetricsFromMatchedRowsOfPackage(sheetId, matchedRowInd
     return acc;
   }, {});
 
-  const netTuitionHeaderId = headerMap['Net_Tuition_Revenue'];
+  const netTuitionHeaderId = headerMap['Net_Tuition/Fee_Revenue'];
   const discountRateHeaderId = headerMap['NACUBO_Discount_Rate'];
   const netChargesHeaderId = headerMap['Net_Charges_To_Student'];
   const totalDiscountHeaderId = headerMap['Direct_Charges_Discount_Rate'];
@@ -1022,11 +1022,11 @@ async function getAveragesNetRevenueFromMatchedRows(sheetId, matchedRowIndexes, 
     return { netRevenue: 0};
   }
 
-  // Step 1: Get headerIds for Net_Tuition_Revenue and NACUBO_Discount_Rate
+  // Step 1: Get headerIds for Net_Tuition/Fee_Revenue and NACUBO_Discount_Rate
   const headers = await Header.findAll({
     where: {
       templateId,
-      name: { [Op.in]: ['Net_Tuition_Revenue'] },
+      name: { [Op.in]: ['Net_Tuition/Fee_Revenue'] },
     },
     raw: true,
   });
@@ -1036,7 +1036,7 @@ async function getAveragesNetRevenueFromMatchedRows(sheetId, matchedRowIndexes, 
     return acc;
   }, {});
 
-  const netTuitionHeaderId = headerMap['Net_Tuition_Revenue'];
+  const netTuitionHeaderId = headerMap['Net_Tuition/Fee_Revenue'];
 
   if (!netTuitionHeaderId) {
     return { netRevenue: 0 };
@@ -2478,7 +2478,7 @@ async function calculatePopulationStats(templateId, sheetId) {
           return val && ['deposit', 'matriculated'].includes(val.toLowerCase());
       }).length;
 
-      const avgNetRevenue = average(studentRows.map(s => parseFloat(s.values['Net_Tuition_Revenue'] || 0)));
+      const avgNetRevenue = average(studentRows.map(s => parseFloat(s.values['Net_Tuition/Fee_Revenue'] || 0)));
       const avgDiscountRate = average(studentRows.map(s => parseFloat(s.values['Direct_Charges_Discount_Rate'] || 0)));
       const avgNacuboRate = average(studentRows.map(s => parseFloat(s.values['NACUBO_Discount_Rate'] || 0)));
       const totalNetCharges = sum(studentRows.map(s => parseFloat(s.values['Net_Charges_To_Student'] || 0)));
