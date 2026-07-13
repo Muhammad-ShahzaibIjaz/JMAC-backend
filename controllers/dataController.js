@@ -865,6 +865,165 @@ async function getTemplateDataWithExcel(req, res) {
 }
 
 
+async function getTemplateDataWithExcelByRows(req, res) {
+  try {
+    const { templateId, sheetId, templateName, withEmptyColumns = true, rowIndexes } = req.body;
+
+    if (!Array.isArray(rowIndexes) || rowIndexes.length === 0) {
+      return res.status(400).json({ error: 'rowIndexes must be a non-empty array' });
+    }
+
+    // Fetch all headers for the template
+    const headers = await Header.findAll({
+      where: { templateId },
+      attributes: ['id', 'name', 'criticalityLevel', 'columnType'],
+      order: [['id', 'ASC']],
+    });
+
+    if (!headers || headers.length === 0) {
+      console.log(`No headers found for templateId: ${templateId}`);
+      return res.status(404).json({ error: `No headers found for templateId ${templateId}` });
+    }
+
+    const sheetData = await sequelize.query(`
+      SELECT sd.id, sd."rowIndex", sd.value, sd."headerId"
+      FROM "SheetData" sd
+      INNER JOIN "Header" h ON h.id = sd."headerId"
+      WHERE h."templateId" = $templateId
+        AND sd."sheetId" = $sheetId
+        AND sd."rowIndex" = ANY($rowIndexes)
+      ORDER BY sd."rowIndex" ASC, sd."headerId" ASC
+    `, {
+      bind: {
+        templateId,
+        sheetId,
+        rowIndexes: rowIndexes.map(Number),
+      },
+      type: sequelize.QueryTypes.SELECT,
+    });
+
+    const sortedHeaders = sortHeadersFlexibleMatch(headers);
+
+    // --- Inject duplicate SAI after Income_Level ---
+    const saiHeader = sortedHeaders.find(h => h.name === 'SAI');
+    const incomeLevelIndex = sortedHeaders.findIndex(h => h.name === 'Income_Level');
+
+    if (saiHeader && incomeLevelIndex !== -1) {
+      const duplicateSAI = {
+        ...saiHeader,
+        id: `${saiHeader.id}_duplicate`,
+        name: 'SAI',
+        columnType: 'integer',
+        _duplicateOf: saiHeader.id,
+      };
+      sortedHeaders.splice(incomeLevelIndex + 1, 0, duplicateSAI);
+    }
+
+    const headerMap = new Map(sortedHeaders.map(h => [h.id, h]));
+    const validatedDataByHeader = new Map();
+    const errorRows = new Map();
+
+    sortedHeaders.forEach(header => {
+      validatedDataByHeader.set(header.id, []);
+    });
+
+    // Remap requested rowIndexes to sequential 1..N so generateExcelFile stays unchanged
+    const uniqueSortedRows = [...new Set(rowIndexes)].sort((a, b) => a - b);
+    const rowIndexRemap = new Map(uniqueSortedRows.map((orig, i) => [orig, i + 1]));
+    let maxRowIndex = uniqueSortedRows.length;
+
+    const rowBuckets = new Map();
+    for (const data of sheetData) {
+      const header = headerMap.get(data.headerId);
+      if (!header) continue;
+
+      const mappedRowIndex = rowIndexRemap.get(data.rowIndex);
+      if (!mappedRowIndex) continue; // skip anything outside the requested set
+
+      const { value, valid } = validateAndConvertValue(
+        data.value,
+        header.columnType,
+        header.criticalityLevel
+      );
+
+      validatedDataByHeader.get(header.id).push({
+        id: data.id,
+        rowIndex: mappedRowIndex,
+        value,
+        valid,
+      });
+
+      if (!rowBuckets.has(mappedRowIndex)) {
+        rowBuckets.set(mappedRowIndex, new Map());
+      }
+      const normalizedValue = (value === 'NULL' || value === 'null') ? null : value;
+      rowBuckets.get(mappedRowIndex).set(data.headerId, { value: normalizedValue, valid });
+
+      if (!valid) {
+        if (!errorRows.has(mappedRowIndex)) {
+          errorRows.set(mappedRowIndex, []);
+        }
+        errorRows.get(mappedRowIndex).push(header.name);
+      }
+    }
+
+    // Populate duplicate SAI's validatedDataByHeader from the original
+    if (saiHeader) {
+      const originalData = validatedDataByHeader.get(saiHeader.id);
+      validatedDataByHeader.set(`${saiHeader.id}_duplicate`, [...originalData]);
+    }
+
+    const responseHeaders = sortedHeaders.map(header => {
+      const data = validatedDataByHeader.get(header.id);
+      return {
+        id: header.id,
+        name: header.name,
+        criticalityLevel: header.criticalityLevel,
+        columnType: header.columnType,
+        _duplicateOf: header._duplicateOf ?? null,
+        data,
+      };
+    }).filter(headerObj => {
+      if (withEmptyColumns === 'false' || withEmptyColumns === false) {
+        return headerObj.data.some(d => d.value !== null && d.value !== '' && d.value !== undefined && d.value !== 'null' && d.value !== 'NULL');
+      }
+      return true;
+    });
+
+    const totalErrorRows = errorRows.size;
+    const filePath = await generateExcelFile({
+      headers: responseHeaders,
+      maxRowIndex,
+      totalErrorRows,
+      errorRows,
+      rowBuckets,
+      templateName,
+    });
+
+    // Return as blob/download
+    res.download(filePath, err => {
+      if (err) {
+        console.error('Download failed:', err);
+        res.status(500).json({ error: 'Failed to send file' });
+      } else {
+        console.log('File sent successfully.');
+        fs.unlink(filePath, unlinkErr => {
+          if (unlinkErr) {
+            console.error('Failed to delete file:', unlinkErr);
+          } else {
+            console.log('File deleted from disk.');
+          }
+        });
+      }
+    });
+
+  } catch (error) {
+    console.error('Error generating filtered template data with Excel:', error.message, error.stack);
+    res.status(500).json({ error: 'Failed to generate Excel file' });
+  }
+}
+
+
 async function exportDataWithConditions(req, res) {
   const username = await getUserName(req.userId);
   const { templateId, sheetId, templateName, conditions = [], conditionHeaders = [], currentPage = 1, pageSize = 10000, withEmptyColumns=true } = req.body;
@@ -8132,5 +8291,6 @@ module.exports = {
   getAllStatusValues,
   evaluateSheetDataPreview,
   getFICECodes,
-  updateFICEInstitutionalCode
+  updateFICEInstitutionalCode,
+  getTemplateDataWithExcelByRows
 };

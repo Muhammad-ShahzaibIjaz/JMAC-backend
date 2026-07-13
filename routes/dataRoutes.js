@@ -44,5 +44,6 @@ router.put('/clear-empty-columns', verifyToken, verifyUserActive, dataController
 router.put('/normalize-null-values', verifyToken, verifyUserActive, dataController.normalizeNullValues);
 router.put('/update-fice-institutional-code', verifyToken, verifyUserActive, dataController.updateFICEInstitutionalCode);
 router.get('/fice-codes', verifyToken, verifyUserActive, dataController.getFICECodes);
+router.post('/export-data/by-rows', verifyToken, verifyUserActive, dataController.getTemplateDataWithExcelByRows);
 
 module.exports = router;
