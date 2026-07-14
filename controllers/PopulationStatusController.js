@@ -1022,11 +1022,11 @@ async function getAveragesNetRevenueFromMatchedRows(sheetId, matchedRowIndexes, 
     return { netRevenue: 0};
   }
 
-  // Step 1: Get headerIds for Net_Tuition/Fee_Revenue and NACUBO_Discount_Rate
+  // Step 1: Get headerIds for Net_Tuition_Revenue and NACUBO_Discount_Rate
   const headers = await Header.findAll({
     where: {
       templateId,
-      name: { [Op.in]: ['Net_Tuition/Fee_Revenue'] },
+      name: { [Op.in]: ['Net_Tuition_Revenue'] },
     },
     raw: true,
   });
@@ -1036,7 +1036,7 @@ async function getAveragesNetRevenueFromMatchedRows(sheetId, matchedRowIndexes, 
     return acc;
   }, {});
 
-  const netTuitionHeaderId = headerMap['Net_Tuition/Fee_Revenue'];
+  const netTuitionHeaderId = headerMap['Net_Tuition_Revenue'];
 
   if (!netTuitionHeaderId) {
     return { netRevenue: 0 };
