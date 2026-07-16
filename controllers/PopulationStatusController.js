@@ -2078,11 +2078,11 @@ const getExportableStudentData = async (req, res) => {
     twoYearsAgoDate,
     templateId,
     populationRuleId,
-    statusId,
+    studentType = 'All',
   } = req.body;
 
   try {
-    if (!selectedDate || !templateId || !populationRuleId || !statusId) {
+    if (!selectedDate || !templateId || !populationRuleId) {
       return res.status(400).json({ error: 'Required fields missing' });
     }
 
@@ -2097,18 +2097,6 @@ const getExportableStudentData = async (req, res) => {
     };
 
     const { conditions, headers } = await getRuleConditionsAndHeaders(populationRuleId);
-
-    const statusObj = await PopulationStatus.findOne({
-      where: { id: statusId },
-      attributes: ['statusName', 'selectedStatuses', 'targetHeader'],
-      raw: true,
-    });
-
-    if (!statusObj) {
-      return res.status(400).json({ error: 'Invalid statusId' });
-    }
-
-    const { selectedStatuses, targetHeader } = statusObj;
 
     const allHeaders = await Header.findAll({
       where: { templateId },
@@ -2130,13 +2118,11 @@ const getExportableStudentData = async (req, res) => {
         return { yearLabel, headers: headerNames, rows: [] };
       }
 
-      const { rowIndexes } = await calculateStatusStudents(
-        sheetId,
-        selectedStatuses,
-        targetHeader,
-        templateId,
-        matchingRows
-      );
+      let rowIndexes = matchingRows;
+      if (studentType !== 'All') {
+        let { packageRowIndexes, non_packageRowIndexes } = await calculatePackageStudents(sheetId, templateId, rowIndexes);
+        rowIndexes = studentType === 'Package' ? packageRowIndexes : non_packageRowIndexes;
+      }
 
       if (rowIndexes.length === 0) {
         return { yearLabel, headers: headerNames, rows: [] };
@@ -2179,7 +2165,7 @@ const getExportableStudentData = async (req, res) => {
     const buffer = await generateMultiYearExcelFile(final);
     const currentDate = new Date().toISOString().split('T')[0];
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename=${statusObj.statusName}_${currentDate}.xlsx`);
+    res.setHeader('Content-Disposition', `attachment; filename=StudentData_${currentDate}.xlsx`);
     res.status(200).send(buffer);
   } catch (error) {
     console.error('Error exporting student data:', error);
