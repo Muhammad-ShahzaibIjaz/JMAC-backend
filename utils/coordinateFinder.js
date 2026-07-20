@@ -138,7 +138,50 @@ async function geocodeStudents(studentArray, batchSize = 50) {
     return results; // Only returns students with valid coordinates
 }
 
+async function geocodeCampusAddress(address, attempt = 1) {
+  if (!address || !address.trim()) {
+    throw new Error('Address is required');
+  }
+
+  const cleaned = address.trim().replace(/\s+/g, ' ');
+
+  try {
+    const response = await axios.get(API_URL, {
+      params: {
+        address: cleaned,
+        benchmark: 'Public_AR_Current',
+        format: 'json',
+      },
+      timeout: 10000,
+    });
+
+    const matches = response.data?.result?.addressMatches;
+
+    if (Array.isArray(matches) && matches.length > 0) {
+      const { coordinates, matchedAddress } = matches[0];
+      return {
+        latitude: coordinates.y,   // y = lat
+        longitude: coordinates.x,  // x = lng
+        matchedAddress,            // Census's normalized address, handy for verifying
+      };
+    }
+
+    console.warn(`No geocode match for: ${cleaned}`);
+    return null;
+
+  } catch (err) {
+    console.error(`Campus geocode failed for "${cleaned}" (attempt ${attempt}):`, err.message);
+
+    // same backoff pattern as your student geocoder: 2s, 4s
+    if (attempt < 3) {
+      await new Promise(r => setTimeout(r, attempt * 2000));
+      return geocodeCampusAddress(address, attempt + 1);
+    }
+    return null;
+  }
+}
+
 // Initialize cache on startup
 loadCache().catch(console.error);
 
-module.exports = { geocodeStudents };
+module.exports = { geocodeStudents , geocodeCampusAddress };

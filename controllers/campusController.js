@@ -3,12 +3,15 @@ const { v4: uuidv4 } = require('uuid');
 const { createLog } = require("../utils/auditLogger");
 const { getUserName } = require('./userController');
 const { Op } = require('sequelize');
+const { geocodeCampusAddress } = require('../utils/coordinateFinder');
 
 
 const createCampus = async (req, res) => {
   const {
     campusName,
     address = "",
+    latitude = null,
+    longitude = null,
     city = "",
     state = "",
     zipCode = "",
@@ -35,6 +38,8 @@ const createCampus = async (req, res) => {
       id: uuidv4(),
       campusName,
       address,
+      latitude,
+      longitude,
       city,
       state,
       zipCode,
@@ -149,6 +154,8 @@ const updateCampus = async (req, res) => {
   const {
     campusName,
     address,
+    latitude,
+    longitude,
     city,
     state,
     zipCode,
@@ -180,6 +187,8 @@ const updateCampus = async (req, res) => {
     await campus.update({
       campusName: campusName !== undefined ? campusName : campus.campusName,
       address: address !== undefined ? address : campus.address,
+      latitude: latitude !== undefined ? latitude : campus.latitude,
+      longitude: longitude !== undefined ? longitude : campus.longitude,
       city: city !== undefined ? city : campus.city,
       state: state !== undefined ? state : campus.state,
       zipCode: zipCode !== undefined ? zipCode : campus.zipCode,
@@ -366,6 +375,24 @@ const getAllCampuses = async (req, res) => {
     }
 }
 
+
+const getCampusAddress = async (req, res) => {
+  try{
+    const { address } = req.query;
+    if (!address) {
+      return res.status(400).json({ message: 'Address query parameter is required.' });
+    }
+    const result = await geocodeCampusAddress(address);
+    if (!result) {
+      return res.status(404).json({ message: 'No geocode match found for the provided address.' });
+    }
+    res.status(200).json(result);
+  } catch (error) {
+    console.error("Error retrieving campus address:", error);
+    res.status(500).json({ message: 'Error retrieving campus address.' });
+  }
+}
+
 module.exports = {
     createCampus,
     updateCampus,
@@ -374,4 +401,5 @@ module.exports = {
     getAllCampuses,
     createNote,
     deleteNote,
+    getCampusAddress
 };

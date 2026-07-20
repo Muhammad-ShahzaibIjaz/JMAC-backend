@@ -2258,11 +2258,17 @@ async function analyzeStudentsByStateAndCounty(sheetId, templateId, rowIndexes) 
         studentCount: group.length,
         AvgSAI: avg(saiValues),
         AvgNeed: avg(needValues),
-        students: group.map(s => ({
-          rowIndex: s.rowIndex,
-          latitude: s.latitude,
-          longitude: s.longitude,
-        })),
+        students: group.map(s => {
+          const sai = parseFloat(s.SAI);
+          const need = parseFloat(s.Student_Financial_Need);
+          return {
+            rowIndex: s.rowIndex,
+            latitude: s.latitude,
+            longitude: s.longitude,
+            SAI: isNaN(sai) ? null : sai,
+            Student_Financial_Need: isNaN(need) ? null : need,
+          };
+        }),
       };
     }
 
@@ -2294,11 +2300,17 @@ async function analyzeStudentsByStateAndCounty(sheetId, templateId, rowIndexes) 
         studentCount: group.length,
         AvgSAI: avg(saiValues),
         AvgNeed: avg(needValues),
-        students: group.map(s => ({
-          rowIndex: s.rowIndex,
-          latitude: s.latitude,
-          longitude: s.longitude,
-        })),
+        students: group.map(s => {
+          const sai = parseFloat(s.SAI);
+          const need = parseFloat(s.Student_Financial_Need);
+          return {
+            rowIndex: s.rowIndex,
+            latitude: s.latitude,
+            longitude: s.longitude,
+            SAI: isNaN(sai) ? null : sai,
+            Student_Financial_Need: isNaN(need) ? null : need,
+          };
+        }),
       };
     }
 

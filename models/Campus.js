@@ -17,6 +17,14 @@ const Campus = sequelize.define(
       type: DataTypes.TEXT,
       allowNull: true,
     },
+    latitude: {
+      type: DataTypes.FLOAT,
+      allowNull: true,
+    },
+    longitude: {
+      type: DataTypes.FLOAT,
+      allowNull: true,
+    },
     city: {
       type: DataTypes.STRING(255),
       allowNull: true,

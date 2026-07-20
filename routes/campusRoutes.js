@@ -10,6 +10,8 @@ router.delete('/campus', verifyToken, verifyUserActive, campusController.deleteC
 router.get('/campuses', verifyToken, verifyUserActive, campusController.getAllCampuses);
 router.post('/campus/:campusId/notes', verifyToken, verifyUserActive, campusController.createNote);
 router.delete('/campus/notes/:noteId', verifyToken, verifyUserActive, campusController.deleteNote);
+router.get('/campus/address', verifyToken, verifyUserActive, campusController.getCampusAddress);
+router.get('/campus/:campusId', verifyToken, verifyUserActive, campusController.getCampus);
 
 
 module.exports = router;
