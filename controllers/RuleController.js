@@ -215,7 +215,7 @@ const getAllRules = async (req, res) => {
     const rules = await Rule.findAll({
       where: { templateId },
       attributes: ['id', 'name', 'conditions', 'assignments'],
-      order: [['createdAt', 'DESC']]
+      order: [['createdAt', 'ASC']]
     });
 
     const transformedRules = rules.map((rule) => ({
@@ -237,7 +237,7 @@ const getAllConditionalRules = async (req, res) => {
     const rules = await ConditionalRule.findAll({
       where: { [Op.or]: [{templateId: templateId}, {isGlobal: true}] },
       attributes: ['id', 'ruleName', 'conditions', 'headers', 'targetHeaderName', 'targetValue', 'isGlobal'],
-      order: [['createdAt', 'DESC']]
+      order: [['createdAt', 'ASC']]
     });
 
     const transformedRules = rules.map((rule) => {
