@@ -2414,101 +2414,218 @@ async function getHeaderMap(templateId) {
   }, {});
 }
 
-async function getStudentRows(sheetId, rowIndices, headerMap) {
-  const sheetData = await SheetData.findAll({
-    where: {
-      sheetId,
-      rowIndex: { [Op.in]: rowIndices },
-    },
-    raw: true,
+const POPULATION_TYPES = ['view', 'consolidated', 'awarding'];
+
+const STATUS_METRIC_MAP = {
+  admittedCount: 'Admitted',
+  enrolledCount: 'Confirmed',
+  netconfirmedCount: 'Net Confirmed',
+};
+
+const NUMERIC_METRICS = [
+  { key: 'avgNetRevenue',     header: 'Net_Tuition/Fee_Revenue',            agg: 'AVG' },
+  { key: 'avgDiscountRate',   header: 'Direct_Charges_Discount_Rate',       agg: 'AVG' },
+  { key: 'avgNacuboRate',     header: 'NACUBO_Discount_Rate',               agg: 'AVG' },
+  { key: 'totalNetCharges',   header: 'Net_Charges_To_Student',             agg: 'SUM' },
+  { key: 'totalFundedGift',   header: 'Total_Institutional_Gift',           agg: 'SUM' },
+  { key: 'totalUnfundedGift', header: 'Total_Institutional_Unfunded_Gift',  agg: 'SUM' },
+];
+
+const emptyStats = () => ({
+  admittedCount: 0,
+  enrolledCount: 0,
+  netconfirmedCount: 0,
+  avgNetRevenue: 0,
+  avgDiscountRate: 0,
+  avgNacuboRate: 0,
+  totalNetCharges: 0,
+  totalFundedGift: 0,
+  totalUnfundedGift: 0,
+});
+
+/**
+ * Aggregate one rule's matching rows entirely inside Postgres.
+ * Pivots the EAV SheetData into one row per student via FILTER, then
+ * aggregates. Nothing but the final ~9 numbers crosses the wire.
+ */
+async function aggregateRuleStats({
+  sheetId,
+  rowIndices,
+  headerIdsByName,
+  statusDefs,
+}) {
+  // Only the headers we actually need — keeps the scan narrow.
+  const neededHeaderIds = new Set();
+  NUMERIC_METRICS.forEach(m => {
+    const id = headerIdsByName[m.header];
+    if (id) neededHeaderIds.add(id);
+  });
+  Object.values(statusDefs).forEach(def => {
+    if (!def) return;
+    const id = headerIdsByName[def.targetHeader];
+    if (id) neededHeaderIds.add(id);
   });
 
-  const students = {};
-  sheetData.forEach(sd => {
-    if (!students[sd.rowIndex]) students[sd.rowIndex] = {};
-    const colName = headerMap[sd.headerId];
-    if (colName) {
-      students[sd.rowIndex][colName] = sd.value;
+  if (neededHeaderIds.size === 0) return emptyStats();
+
+  const bind = {
+    sheetId,
+    rowIndices,
+    headerIds: Array.from(neededHeaderIds),
+  };
+  let n = 0;
+  const bindKey = value => {
+    const key = `p${n++}`;
+    bind[key] = value;
+    return `$${key}`;
+  };
+
+  // Pivot: one column per header we care about.
+  const pivotCols = [];
+  NUMERIC_METRICS.forEach(m => {
+    const id = headerIdsByName[m.header];
+    if (!id) return;
+    pivotCols.push(
+      `MAX(value) FILTER (WHERE "headerId" = ${bindKey(id)}) AS "${m.key}_raw"`
+    );
+  });
+
+  const statusCols = [];
+  Object.entries(statusDefs).forEach(([metricKey, def]) => {
+    const id = def && headerIdsByName[def.targetHeader];
+    if (!id) return;
+    statusCols.push({ metricKey, headerId: id, def });
+  });
+
+  // Distinct target headers only need pivoting once each.
+  const statusHeaderAlias = {};
+  statusCols.forEach(({ headerId }) => {
+    if (statusHeaderAlias[headerId]) return;
+    const alias = `status_${Object.keys(statusHeaderAlias).length}`;
+    statusHeaderAlias[headerId] = alias;
+    pivotCols.push(
+      `MAX(value) FILTER (WHERE "headerId" = ${bindKey(headerId)}) AS "${alias}"`
+    );
+  });
+
+  if (pivotCols.length === 0) return emptyStats();
+
+  // Count expressions run against the pivoted row.
+  const countSelects = statusCols.map(({ metricKey, headerId, def }) => {
+    const alias = statusHeaderAlias[headerId];
+    const allowed = (def.selectedStatuses || []).map(s => String(s).trim().toLowerCase());
+    if (allowed.length === 0) return `0 AS "${metricKey}"`;
+    return `COUNT(*) FILTER (
+      WHERE lower(btrim("${alias}")) = ANY(${bindKey(allowed)})
+    )::bigint AS "${metricKey}"`;
+  });
+
+  Object.keys(STATUS_METRIC_MAP).forEach(metricKey => {
+    if (!statusCols.some(sc => sc.metricKey === metricKey)) {
+      countSelects.push(`0 AS "${metricKey}"`);
     }
   });
 
-  return Object.entries(students).map(([rowIndex, values]) => ({
-    rowIndex: parseInt(rowIndex, 10),
-    values,
-  }));
+  // NULLIF guards against '' and non-numeric junk becoming a cast error.
+  const numericSelects = NUMERIC_METRICS.map(m => {
+    if (!headerIdsByName[m.header]) return `0 AS "${m.key}"`;
+    return `COALESCE(${m.agg}(
+      CASE WHEN "${m.key}_raw" ~ '^-?[0-9]+(\\.[0-9]+)?$'
+           THEN "${m.key}_raw"::numeric
+           ELSE 0 END
+    ), 0) AS "${m.key}"`;
+  });
+
+  const sql = `
+    WITH pivoted AS (
+      SELECT "rowIndex", ${pivotCols.join(', ')}
+      FROM "SheetData"
+      WHERE "sheetId" = $sheetId
+        AND "headerId" = ANY($headerIds)
+        AND "rowIndex" = ANY($rowIndices)
+      GROUP BY "rowIndex"
+    )
+    SELECT ${[...countSelects, ...numericSelects].join(', ')}
+    FROM pivoted
+  `;
+
+  const [row] = await sequelize.query(sql, {
+    bind,
+    type: sequelize.QueryTypes.SELECT,
+  });
+
+  if (!row) return emptyStats();
+
+  const stats = emptyStats();
+  Object.keys(stats).forEach(key => {
+    if (row[key] !== undefined && row[key] !== null) {
+      stats[key] = Number(row[key]);
+    }
+  });
+  return stats;
 }
 
-
-
 async function calculatePopulationStats(templateId, sheetId) {
-  const populationRules = await PopulationRule.findAll({
-    where: { templateId, populationType: 'consolidated' },
-    attributes: ['id', 'ruleName'],
-    raw: true,
+  const [populationRules, statuses, headerMap] = await Promise.all([
+    PopulationRule.findAll({
+      where: { templateId, populationType: { [Op.in]: POPULATION_TYPES } },
+      attributes: ['id', 'ruleName'],
+      raw: true,
+    }),
+    getStatusesByTemplateId(templateId),
+    getHeaderMap(templateId),
+  ]);
+
+  // headerMap is headerId -> name; invert it once.
+  const headerIdsByName = {};
+  Object.entries(headerMap).forEach(([headerId, name]) => {
+    if (name) headerIdsByName[name] = headerId;
   });
 
-  const headerMap = await getHeaderMap(templateId);
+  const statusMap = {};
+  statuses.forEach(st => {
+    if (st.statusName) statusMap[st.statusName.trim().toLowerCase()] = st;
+  });
 
-  const resultsArray = await Promise.all(
-    populationRules.map(async rule => {
+  const statusDefs = {};
+  Object.entries(STATUS_METRIC_MAP).forEach(([metricKey, statusName]) => {
+    statusDefs[metricKey] = statusMap[statusName.toLowerCase()] || null;
+  });
+
+  // Bounded concurrency — unbounded Promise.all over N rules will
+  // exhaust the pg pool and serialise anyway, but worse.
+  const CONCURRENCY = 4;
+  const results = {};
+  let cursor = 0;
+
+  const worker = async () => {
+    while (cursor < populationRules.length) {
+      const rule = populationRules[cursor++];
       const { conditions, headers } = await getRuleConditionsAndHeaders(rule.id);
+      const matchingRowIndices = await applyPopulationRule(
+        templateId, sheetId, conditions, headers
+      );
 
-      const matchingRowIndices = await applyPopulationRule(templateId, sheetId, conditions, headers);
       if (!matchingRowIndices || matchingRowIndices.length === 0) {
-        return { ruleName: rule.ruleName, stats: { admittedCount: 0, enrolledCount: 0, netconfirmedCount: 0, avgNetRevenue: 0, avgDiscountRate: 0, avgNacuboRate: 0, totalNetCharges: 0, totalFundedGift: 0, totalUnfundedGift: 0 } };
+        results[rule.ruleName] = emptyStats();
+        continue;
       }
 
-      const studentRows = await getStudentRows(sheetId, matchingRowIndices, headerMap);
+      results[rule.ruleName] = await aggregateRuleStats({
+        sheetId,
+        rowIndices: matchingRowIndices,
+        headerIdsByName,
+        statusDefs,
+      });
+    }
+  };
 
-      // Step 5: Compute metrics
-      const admittedCount = studentRows.filter(s => {
-        const val = s.values['Student_Admitted'];
-        return val && (val.toLowerCase() === 'yes' || val.toLowerCase() === 'y');
-      }).length;
-
-      const enrolledCount = studentRows.filter(s => {
-        const val = s.values['Student_Enrolled'];
-        return val && (val.toLowerCase() === 'yes' || val.toLowerCase() === 'y');
-      }).length;
-
-      const netconfirmedCount = studentRows.filter(s => {
-        const val = s.values['Admissions_Funnel_Stage'];
-          return val && ['deposit', 'matriculated'].includes(val.toLowerCase());
-      }).length;
-
-      const avgNetRevenue = average(studentRows.map(s => parseFloat(s.values['Net_Tuition/Fee_Revenue'] || 0)));
-      const avgDiscountRate = average(studentRows.map(s => parseFloat(s.values['Direct_Charges_Discount_Rate'] || 0)));
-      const avgNacuboRate = average(studentRows.map(s => parseFloat(s.values['NACUBO_Discount_Rate'] || 0)));
-      const totalNetCharges = sum(studentRows.map(s => parseFloat(s.values['Net_Charges_To_Student'] || 0)));
-      const totalFundedGift = sum(studentRows.map(s => parseFloat(s.values['Total_Institutional_Gift'] || 0)));
-      const totalUnfundedGift = sum(studentRows.map(s => parseFloat(s.values['Total_Institutional_Unfunded_Gift'] || 0)));
-      return {
-        ruleName: rule.ruleName,
-        stats: {
-          admittedCount,
-          enrolledCount,
-          netconfirmedCount,
-          avgNetRevenue,
-          avgDiscountRate,
-          avgNacuboRate,
-          totalNetCharges,
-          totalFundedGift,
-          totalUnfundedGift,
-        },
-      };
-    })
+  await Promise.all(
+    Array.from({ length: Math.min(CONCURRENCY, populationRules.length) }, worker)
   );
-
-  // Step 6: Convert array to object keyed by ruleName
-  const results = {};
-  resultsArray.forEach(r => {
-    results[r.ruleName] = r.stats;
-  });
 
   return results;
 }
-
-
 
 async function getPreviousCensusStats(req, res) {
   const { templateId, sheetId } = req.body;
