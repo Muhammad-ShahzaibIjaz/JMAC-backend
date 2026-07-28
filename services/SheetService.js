@@ -151,21 +151,22 @@ async function generateHeaderMappingExcel(mappingTable) {
 async function generateMultiYearExcelFile(data) {
   const workbook = new ExcelJS.Workbook();
 
-  // Sort years descending so latest year comes first
   const sortedYears = Object.keys(data).sort((a, b) => b - a);
 
   for (const year of sortedYears) {
-    const { headers, rows } = data[year];
+    const { headers, rows } = data[year]; // headers = [{ name, columnType }]
     const sheet = workbook.addWorksheet(`${year}`);
 
     // Header row (names only)
     sheet.addRow(headers.map(h => h.name));
 
-    // Add data rows
+    // Data rows — coerce by column type
     for (const row of rows) {
       const rowData = headers.map(h => {
         let value = row[h.name] ?? '';
-        value = typeof value === 'string' ? value.replace(/[\u0000-\u001F\u007F-\u009F]/g, '') : value;
+        value = typeof value === 'string'
+          ? value.replace(/[\u0000-\u001F\u007F-\u009F]/g, '')
+          : value;
 
         if (h.columnType === 'Date') {
           if (value === '' || value === null || value === undefined) return '';
@@ -189,20 +190,19 @@ async function generateMultiYearExcelFile(data) {
       sheet.addRow(rowData);
     }
 
-    // Format date columns
+    // Date column formatting
     headers.forEach((h, i) => {
       if (h.columnType === 'Date') {
         sheet.getColumn(i + 1).numFmt = 'mm-dd-yyyy';
       }
     });
 
-    // Set column widths
-    sheet.columns = headers.map(h => ({
-      width: Math.max(h.length, 15),
-    }));
+    // Column widths — set on existing columns, don't reassign sheet.columns
+    headers.forEach((h, i) => {
+      sheet.getColumn(i + 1).width = Math.max(h.name.length, 15);
+    });
   }
 
-  // Return buffer
   return await workbook.xlsx.writeBuffer();
 }
 
