@@ -2100,22 +2100,25 @@ const getExportableStudentData = async (req, res) => {
 
     const allHeaders = await Header.findAll({
       where: { templateId },
-      attributes: ['id', 'name'],
+      attributes: ['id', 'name', 'columnType'],
       raw: true,
     });
     const sortedHeaders = sortHeadersFlexibleMatch(allHeaders);
     const headerMap = Object.fromEntries(sortedHeaders.map(h => [h.id, h.name]));
+
+    // header meta objects instead of plain names
+    const headerMeta = sortedHeaders.map(h => ({ name: h.name, columnType: h.columnType }));
     const headerNames = sortedHeaders.map(h => h.name);
 
     const yearPromises = Object.entries(sheetIds).map(async ([yearLabel, sheetId]) => {
       if (!sheetId) {
-        return { yearLabel, headers: headerNames, rows: [] };
+        return { yearLabel, headers: headerMeta, rows: [] };
       }
 
       const matchingRows = await applyPopulationRule(templateId, sheetId, conditions, headers);
 
       if (matchingRows.length === 0) {
-        return { yearLabel, headers: headerNames, rows: [] };
+        return { yearLabel, headers: headerMeta, rows: [] };
       }
 
       let rowIndexes = matchingRows;
@@ -2125,7 +2128,7 @@ const getExportableStudentData = async (req, res) => {
       }
 
       if (rowIndexes.length === 0) {
-        return { yearLabel, headers: headerNames, rows: [] };
+        return { yearLabel, headers: headerMeta, rows: [] };
       }
 
       const sheetData = await SheetData.findAll({
@@ -2152,7 +2155,7 @@ const getExportableStudentData = async (req, res) => {
         }, {});
       });
 
-      return { yearLabel, headers: headerNames, rows };
+      return { yearLabel, headers: headerMeta, rows };
     });
 
     const yearResults = await Promise.all(yearPromises);

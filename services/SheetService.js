@@ -158,17 +158,31 @@ async function generateMultiYearExcelFile(data) {
     const { headers, rows } = data[year];
     const sheet = workbook.addWorksheet(`${year}`);
 
-    // Add header row
-    sheet.addRow(headers);
+    // Header row (names only)
+    sheet.addRow(headers.map(h => h.name));
 
     // Add data rows
     for (const row of rows) {
       const rowData = headers.map(h => {
-        let value = row[h] ?? '';
+        let value = row[h.name] ?? '';
         value = typeof value === 'string' ? value.replace(/[\u0000-\u001F\u007F-\u009F]/g, '') : value;
-        const parsedDate = new Date(value);
-        if (h.toLowerCase().includes('date') && !isNaN(parsedDate.getTime())) {
-          return parsedDate;
+
+        if (h.columnType === 'Date') {
+          if (value === '' || value === null || value === undefined) return '';
+          const parsedDate = new Date(value);
+          return isNaN(parsedDate.getTime()) ? '' : parsedDate;
+        } else if (h.columnType === 'integer' || h.columnType === 'decimal') {
+          if (value === '' || value === null || value === undefined) return '';
+          const num = Number(value);
+          return isNaN(num) ? '' : num;
+        } else if (h.columnType === 'percentage') {
+          if (value === '' || value === null || value === undefined) return '';
+          const num = Number(value);
+          return isNaN(num) ? '' : parseFloat(num.toFixed(2));
+        } else if (h.columnType === 'Boolean') {
+          return value === true || value === 'true' ? 'Yes'
+               : value === false || value === 'false' ? 'No'
+               : '';
         }
         return value;
       });
@@ -177,7 +191,7 @@ async function generateMultiYearExcelFile(data) {
 
     // Format date columns
     headers.forEach((h, i) => {
-      if (h.toLowerCase().includes('date')) {
+      if (h.columnType === 'Date') {
         sheet.getColumn(i + 1).numFmt = 'mm-dd-yyyy';
       }
     });
