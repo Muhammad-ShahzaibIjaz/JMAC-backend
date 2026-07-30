@@ -1,6 +1,13 @@
 const { DataTypes } = require("sequelize");
 const sequelize = require("../config/database");
 
+// The awarding-goal upgrade stores its richer shape inside populationGoals
+// (JSONB), so no column change is required. For an awarding goal each entry is:
+//   populationGoals[ruleName] = {
+//     coa: { year2026: {...7 items}, year2027: {...7 items} },
+//     enrollment: { admitted, netConfirmed, nacuboDiscountRate }
+//   }
+// View/consolidated goals keep their existing shapes. JSONB absorbs both.
 const CampusGoal = sequelize.define(
   "CampusGoal",
   {
@@ -21,10 +28,18 @@ const CampusGoal = sequelize.define(
       type: DataTypes.STRING(255),
       allowNull: false,
     },
+    // The year this goal is built FOR (e.g. "2027"). Stored as a string to match
+    // the frontend (String(targetYear)) and ViewGoal.goalYear. The COA base year
+    // is goalYear - 1. Nullable so pre-existing rows and view/consolidated goals
+    // are unaffected.
+    goalYear: {
+      type: DataTypes.STRING(4),
+      allowNull: true,
+    },
     populationGoals: {
-        type: DataTypes.JSONB,
-        allowNull: false,
-        defaultValue: {},
+      type: DataTypes.JSONB,
+      allowNull: false,
+      defaultValue: {},
     },
     goalType: {
       type: DataTypes.ENUM("consolidated", "awarding"),

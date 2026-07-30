@@ -4,21 +4,23 @@ const { createLog } = require("../utils/auditLogger");
 const { getUserName } = require('./userController');
 
 const createCampusGoal = async (req, res) => {
-    const { templateId, goalName, populationGoals = {}, goalType='awarding', totalPopulationMappings = [] } = req.body;
+    const { templateId, goalName, goalYear = null, populationGoals = {}, goalType = 'awarding', totalPopulationMappings = [] } = req.body;
     const username = await getUserName(req.userId);
     try {
         if (!templateId || !goalName) {
             return res.status(400).json({ message: 'templateId, goalName are required.' });
         }
 
-        const isExisting = await CampusGoal.findOne({ where: { templateId, goalName } });
+        // A goal name may repeat across years, so uniqueness is per (template, name, year).
+        const isExisting = await CampusGoal.findOne({ where: { templateId, goalName, goalYear } });
         if (isExisting) {
-            return res.status(400).json({ message: 'Campus goal with the same name already exists for this template.' });
+            return res.status(400).json({ message: 'Campus goal with the same name already exists for this template and year.' });
         }
         const newCampusGoal = await CampusGoal.create({
             id: uuidv4(),
             templateId,
             goalName,
+            goalYear,
             populationGoals,
             goalType,
             totalPopulationMappings
@@ -42,10 +44,10 @@ const createCampusGoal = async (req, res) => {
     }
 }
 
-
 const updateCampusGoal = async (req, res) => {
     const { goalId } = req.params;
-    const { goalName, populationGoals, totalPopulationMappings=[] } = req.body;
+    // goalType/goalYear accepted (optional) so an awarding goal keeps its type/year on update.
+    const { goalName, goalYear, populationGoals, goalType, totalPopulationMappings = [] } = req.body;
     const username = await getUserName(req.userId);
     try {
         const campusGoal = await CampusGoal.findByPk(goalId);
@@ -53,7 +55,9 @@ const updateCampusGoal = async (req, res) => {
             return res.status(404).json({ message: 'Campus goal not found.' });
         }
         campusGoal.goalName = goalName || campusGoal.goalName;
+        campusGoal.goalYear = goalYear !== undefined ? goalYear : campusGoal.goalYear;
         campusGoal.populationGoals = populationGoals || campusGoal.populationGoals;
+        campusGoal.goalType = goalType || campusGoal.goalType;
         campusGoal.totalPopulationMappings = totalPopulationMappings || campusGoal.totalPopulationMappings;
         await campusGoal.save();
         await createLog({

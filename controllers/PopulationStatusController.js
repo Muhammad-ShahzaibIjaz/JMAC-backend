@@ -2432,6 +2432,7 @@ const NUMERIC_METRICS = [
   { key: 'totalNetCharges',   header: 'Net_Charges_To_Student',             agg: 'SUM' },
   { key: 'totalFundedGift',   header: 'Total_Institutional_Gift',           agg: 'SUM' },
   { key: 'totalUnfundedGift', header: 'Total_Institutional_Unfunded_Gift',  agg: 'SUM' },
+  { key: 'totalNetRevenue',    header: 'Net_Tuition/Fee_Revenue',           agg: 'SUM' },
 ];
 
 const emptyStats = () => ({
@@ -2444,6 +2445,7 @@ const emptyStats = () => ({
   totalNetCharges: 0,
   totalFundedGift: 0,
   totalUnfundedGift: 0,
+  totalNetRevenue: 0,
 });
 
 /**
