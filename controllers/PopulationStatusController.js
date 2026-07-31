@@ -2432,7 +2432,7 @@ const NUMERIC_METRICS = [
   { key: 'totalNetCharges',   header: 'Net_Charges_To_Student',             agg: 'SUM' },
   { key: 'totalFundedGift',   header: 'Total_Institutional_Gift',           agg: 'SUM' },
   { key: 'totalUnfundedGift', header: 'Total_Institutional_Unfunded_Gift',  agg: 'SUM' },
-  { key: 'totalNetRevenue',    header: 'Net_Tuition/Fee_Revenue',           agg: 'SUM' },
+  { key: 'totalNetRevenue',   header: 'Net_Tuition/Fee_Revenue',            agg: 'SUM' },
 ];
 
 const emptyStats = () => ({
@@ -2449,35 +2449,32 @@ const emptyStats = () => ({
 });
 
 /**
- * Aggregate one rule's matching rows entirely inside Postgres.
- * Pivots the EAV SheetData into one row per student via FILTER, then
- * aggregates. Nothing but the final ~9 numbers crosses the wire.
+ * Pivot the EAV SheetData into one row per student, then aggregate.
+ * mode 'counts'  -> status counts over the given rowIndices
+ * mode 'numeric' -> numeric metrics over the given rowIndices
+ * Nothing but the final numbers crosses the wire.
  */
-async function aggregateRuleStats({
-  sheetId,
-  rowIndices,
-  headerIdsByName,
-  statusDefs,
-}) {
-  // Only the headers we actually need — keeps the scan narrow.
+async function pivotAndAggregate({ sheetId, rowIndices, headerIdsByName, statusDefs, mode }) {
   const neededHeaderIds = new Set();
-  NUMERIC_METRICS.forEach(m => {
-    const id = headerIdsByName[m.header];
-    if (id) neededHeaderIds.add(id);
-  });
-  Object.values(statusDefs).forEach(def => {
-    if (!def) return;
-    const id = headerIdsByName[def.targetHeader];
-    if (id) neededHeaderIds.add(id);
-  });
 
-  if (neededHeaderIds.size === 0) return emptyStats();
+  if (mode === 'numeric') {
+    NUMERIC_METRICS.forEach(m => {
+      const id = headerIdsByName[m.header];
+      if (id) neededHeaderIds.add(id);
+    });
+  } else {
+    Object.values(statusDefs).forEach(def => {
+      if (!def) return;
+      const id = headerIdsByName[def.targetHeader];
+      if (id) neededHeaderIds.add(id);
+    });
+  }
 
-  const bind = {
-    sheetId,
-    rowIndices,
-    headerIds: Array.from(neededHeaderIds),
-  };
+  if (neededHeaderIds.size === 0 || !rowIndices || rowIndices.length === 0) {
+    return {};
+  }
+
+  const bind = { sheetId, rowIndices, headerIds: Array.from(neededHeaderIds) };
   let n = 0;
   const bindKey = value => {
     const key = `p${n++}`;
@@ -2485,61 +2482,64 @@ async function aggregateRuleStats({
     return `$${key}`;
   };
 
-  // Pivot: one column per header we care about.
   const pivotCols = [];
-  NUMERIC_METRICS.forEach(m => {
-    const id = headerIdsByName[m.header];
-    if (!id) return;
-    pivotCols.push(
-      `MAX(value) FILTER (WHERE "headerId" = ${bindKey(id)}) AS "${m.key}_raw"`
-    );
-  });
+  const selects = [];
 
-  const statusCols = [];
-  Object.entries(statusDefs).forEach(([metricKey, def]) => {
-    const id = def && headerIdsByName[def.targetHeader];
-    if (!id) return;
-    statusCols.push({ metricKey, headerId: id, def });
-  });
+  if (mode === 'numeric') {
+    // one pivoted column per numeric header
+    NUMERIC_METRICS.forEach(m => {
+      const id = headerIdsByName[m.header];
+      if (!id) return;
+      pivotCols.push(
+        `MAX(value) FILTER (WHERE "headerId" = ${bindKey(id)}) AS "${m.key}_raw"`
+      );
+    });
+    // aggregate the pivoted row; NULLIF-style regex guard against junk casts
+    NUMERIC_METRICS.forEach(m => {
+      if (!headerIdsByName[m.header]) { selects.push(`0 AS "${m.key}"`); return; }
+      selects.push(`COALESCE(${m.agg}(
+        CASE WHEN "${m.key}_raw" ~ '^-?[0-9]+(\\.[0-9]+)?$'
+             THEN "${m.key}_raw"::numeric
+             ELSE 0 END
+      ), 0) AS "${m.key}"`);
+    });
+  } else {
+    const statusCols = [];
+    Object.entries(statusDefs).forEach(([metricKey, def]) => {
+      const id = def && headerIdsByName[def.targetHeader];
+      if (!id) return;
+      statusCols.push({ metricKey, headerId: id, def });
+    });
 
-  // Distinct target headers only need pivoting once each.
-  const statusHeaderAlias = {};
-  statusCols.forEach(({ headerId }) => {
-    if (statusHeaderAlias[headerId]) return;
-    const alias = `status_${Object.keys(statusHeaderAlias).length}`;
-    statusHeaderAlias[headerId] = alias;
-    pivotCols.push(
-      `MAX(value) FILTER (WHERE "headerId" = ${bindKey(headerId)}) AS "${alias}"`
-    );
-  });
+    // distinct target header pivoted once each
+    const alias = {};
+    statusCols.forEach(({ headerId }) => {
+      if (alias[headerId]) return;
+      const a = `status_${Object.keys(alias).length}`;
+      alias[headerId] = a;
+      pivotCols.push(
+        `MAX(value) FILTER (WHERE "headerId" = ${bindKey(headerId)}) AS "${a}"`
+      );
+    });
 
-  if (pivotCols.length === 0) return emptyStats();
+    statusCols.forEach(({ metricKey, headerId, def }) => {
+      const a = alias[headerId];
+      const allowed = (def.selectedStatuses || []).map(s => String(s).trim().toLowerCase());
+      if (allowed.length === 0) { selects.push(`0 AS "${metricKey}"`); return; }
+      selects.push(`COUNT(*) FILTER (
+        WHERE lower(btrim("${a}")) = ANY(${bindKey(allowed)})
+      )::bigint AS "${metricKey}"`);
+    });
 
-  // Count expressions run against the pivoted row.
-  const countSelects = statusCols.map(({ metricKey, headerId, def }) => {
-    const alias = statusHeaderAlias[headerId];
-    const allowed = (def.selectedStatuses || []).map(s => String(s).trim().toLowerCase());
-    if (allowed.length === 0) return `0 AS "${metricKey}"`;
-    return `COUNT(*) FILTER (
-      WHERE lower(btrim("${alias}")) = ANY(${bindKey(allowed)})
-    )::bigint AS "${metricKey}"`;
-  });
+    // any status metric without a def -> 0
+    Object.keys(STATUS_METRIC_MAP).forEach(metricKey => {
+      if (!statusCols.some(sc => sc.metricKey === metricKey)) {
+        selects.push(`0 AS "${metricKey}"`);
+      }
+    });
+  }
 
-  Object.keys(STATUS_METRIC_MAP).forEach(metricKey => {
-    if (!statusCols.some(sc => sc.metricKey === metricKey)) {
-      countSelects.push(`0 AS "${metricKey}"`);
-    }
-  });
-
-  // NULLIF guards against '' and non-numeric junk becoming a cast error.
-  const numericSelects = NUMERIC_METRICS.map(m => {
-    if (!headerIdsByName[m.header]) return `0 AS "${m.key}"`;
-    return `COALESCE(${m.agg}(
-      CASE WHEN "${m.key}_raw" ~ '^-?[0-9]+(\\.[0-9]+)?$'
-           THEN "${m.key}_raw"::numeric
-           ELSE 0 END
-    ), 0) AS "${m.key}"`;
-  });
+  if (pivotCols.length === 0) return {};
 
   const sql = `
     WITH pivoted AS (
@@ -2550,22 +2550,48 @@ async function aggregateRuleStats({
         AND "rowIndex" = ANY($rowIndices)
       GROUP BY "rowIndex"
     )
-    SELECT ${[...countSelects, ...numericSelects].join(', ')}
-    FROM pivoted
+    SELECT ${selects.join(', ')} FROM pivoted
   `;
 
   const [row] = await sequelize.query(sql, {
     bind,
     type: sequelize.QueryTypes.SELECT,
   });
+  return row || {};
+}
 
-  if (!row) return emptyStats();
+/**
+ * Counts come from ALL matching rows; numeric metrics come from
+ * the Net Confirmed subset only.
+ */
+async function aggregateRuleStats({
+  sheetId,
+  rowIndices,
+  netConfirmedRowIndices,
+  headerIdsByName,
+  statusDefs,
+}) {
+  const [countRow, numRow] = await Promise.all([
+    pivotAndAggregate({
+      sheetId,
+      rowIndices,
+      headerIdsByName,
+      statusDefs,
+      mode: 'counts',
+    }),
+    pivotAndAggregate({
+      sheetId,
+      rowIndices: netConfirmedRowIndices,
+      headerIdsByName,
+      statusDefs,
+      mode: 'numeric',
+    }),
+  ]);
 
   const stats = emptyStats();
   Object.keys(stats).forEach(key => {
-    if (row[key] !== undefined && row[key] !== null) {
-      stats[key] = Number(row[key]);
-    }
+    const v = countRow[key] !== undefined ? countRow[key] : numRow[key];
+    if (v !== undefined && v !== null) stats[key] = Number(v);
   });
   return stats;
 }
@@ -2616,9 +2642,24 @@ async function calculatePopulationStats(templateId, sheetId) {
         continue;
       }
 
+      // Net Confirmed rows only — numeric metrics aggregate over these.
+      let netConfirmedRowIndices = [];
+      const ncDef = statusDefs.netconfirmedCount;
+      if (ncDef) {
+        const { rowIndexes } = await calculateStatusStudents(
+          sheetId,
+          ncDef.selectedStatuses,
+          ncDef.targetHeader,
+          templateId,
+          matchingRowIndices
+        );
+        netConfirmedRowIndices = rowIndexes;
+      }
+
       results[rule.ruleName] = await aggregateRuleStats({
         sheetId,
         rowIndices: matchingRowIndices,
+        netConfirmedRowIndices,
         headerIdsByName,
         statusDefs,
       });
