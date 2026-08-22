@@ -26,6 +26,10 @@ const SUM_METRICS = [
   { key: 'totalInstGift', header: 'Total_Institutional_Gift' }, // NEW field
 ];
 
+const NON_GIFT_AID_KEY = 'avgNonGiftAid';
+const FEDERAL_WORK_AID_HEADER = 'Total_Federal_Work_Aid';
+const AWARD_CODE_HEADERS = Array.from({ length: 20 }, (_, i) => `Awd_CR${i + 1}`);
+const AWARD_AMOUNT_HEADERS = Array.from({ length: 20 }, (_, i) => `Awd_Amt${i + 1}`);
 
 const ELEMENT_NUMBER_HEADER = 'Element_Number';
 
@@ -81,6 +85,10 @@ const getElementMatrixMicroData = async (req, res) => {
     if (netConfirmedDef?.targetHeader) neededHeaderNames.add(netConfirmedDef.targetHeader);
     AVERAGE_METRICS.forEach((m) => neededHeaderNames.add(m.header));
     SUM_METRICS.forEach((m) => neededHeaderNames.add(m.header));
+    // Non-gift aid inputs: federal work aid header + the 40 award code/amount cols.
+    neededHeaderNames.add(FEDERAL_WORK_AID_HEADER);
+    AWARD_CODE_HEADERS.forEach((h) => neededHeaderNames.add(h));
+    AWARD_AMOUNT_HEADERS.forEach((h) => neededHeaderNames.add(h));
  
     const headers = await Header.findAll({
       where: { templateId, name: { [Op.in]: Array.from(neededHeaderNames) } },
@@ -124,7 +132,7 @@ const getElementMatrixMicroData = async (req, res) => {
     const acc = {};
     const ensure = (el) => {
       if (!acc[el]) {
-        acc[el] = { admitted: 0, netConfirmed: 0, sums: {}, totals: {} };
+        acc[el] = { admitted: 0, netConfirmed: 0, sums: {}, totals: {}, nonGiftAid: { sum: 0, count: 0 } };
         AVERAGE_METRICS.forEach((m) => {
           acc[el].sums[m.key] = { sum: 0, count: 0 };
         });
@@ -170,6 +178,21 @@ const getElementMatrixMicroData = async (req, res) => {
           const n = toNumber(row[m.header]);
           if (n !== null) bucket.totals[m.key] += n;
         }
+ 
+        // Non-gift aid = Total_Federal_Work_Aid + FNFL amount.
+        // FNFL: scan Awd_CR1..20; wherever the code is exactly "FNFL", add the
+        // paired Awd_Amt{i}. No acceptance-status filter (per instruction).
+        const federalWorkAid = toNumber(row[FEDERAL_WORK_AID_HEADER]) ?? 0;
+        let fnflTotal = 0;
+        for (let i = 0; i < 20; i++) {
+          const code = row[AWARD_CODE_HEADERS[i]];
+          if (code != null && /^FNFL$/.test(String(code).trim())) {
+            const amt = toNumber(row[AWARD_AMOUNT_HEADERS[i]]);
+            if (amt !== null) fnflTotal += amt;
+          }
+        }
+        bucket.nonGiftAid.sum += federalWorkAid + fnflTotal;
+        bucket.nonGiftAid.count += 1;
       }
     }
  
@@ -190,6 +213,10 @@ const getElementMatrixMicroData = async (req, res) => {
       for (const m of SUM_METRICS) {
         out[m.key] = b.totals[m.key];
       }
+      // Combined average: avgNonGiftAid = avg(Total_Federal_Work_Aid + FNFL)
+      // over net confirmed rows.
+      out[NON_GIFT_AID_KEY] =
+        b.nonGiftAid.count > 0 ? b.nonGiftAid.sum / b.nonGiftAid.count : 0;
       // Derived: % Need Met w/Inst. Gift = Avg(Total_Institutional_Gift) / Avg(Need).
       // avgInstTotalGift and avgNeed are already computed above.
       out.pctNeedMetWithInstGift =
@@ -209,4 +236,3 @@ const getElementMatrixMicroData = async (req, res) => {
 };
  
 module.exports = { getElementMatrixMicroData };
-
