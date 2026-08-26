@@ -3,7 +3,7 @@ const { DataTypes, Op, QueryTypes } = require('sequelize');
 const { PopulationStatus, PopulationSubmission, Header, PopulationRule, SheetData } = require('../models');
 const { evaluateConditions } = require('../services/evaluation');
 const { generateMultiYearExcelFile } = require('../services/SheetService');
-const { desiredOrder, REQUIRED_HEADERS } = require('../utils/headerOrderList');
+const { desiredOrder, REQUIRED_HEADERS, excludedHeadersName } = require('../utils/headerOrderList');
 const { geocodeStudents } = require('../utils/coordinateFinder');
 
 const savePopulationStatus = async (req, res) => {
@@ -2103,7 +2103,13 @@ const getExportableStudentData = async (req, res) => {
       attributes: ['id', 'name', 'columnType'],
       raw: true,
     });
-    const sortedHeaders = sortHeadersFlexibleMatch(allHeaders);
+    if (allHeaders.length === 0) {
+      return res.status(400).json({ error: 'No headers found for the given templateId' });
+    }
+    // Remove headers the user doesn't want
+    const excludedSet = new Set(excludedHeadersName.map(normalize));
+    const filteredHeaders = headers.filter(h => !excludedSet.has(normalize(h.name)));
+    const sortedHeaders = sortHeadersFlexibleMatch(filteredHeaders);
     const headerMap = Object.fromEntries(sortedHeaders.map(h => [h.id, h.name]));
 
     // header meta objects instead of plain names

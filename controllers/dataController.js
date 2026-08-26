@@ -11,7 +11,7 @@ const math = require('mathjs');
 const { OperationLog, SheetDataSnapshot, Campus, OperationProgressLog } = require('../models');
 const { convertScore } = require('../services/conversion');
 const { getCipTitle } = require('../services/cipService');
-const { desiredOrder, requiredHeadersName, awardTypePatterns, ynFlags } = require('../utils/headerOrderList');
+const { desiredOrder, requiredHeadersName, awardTypePatterns, ynFlags, excludedHeadersName } = require('../utils/headerOrderList');
 const { buildZipCountyMap } = require('../services/countyService');
 const { calculateNACUBODiscountRate, calculateNetCharges, calculateGap, calculateNeedMet, calculateTotalDiscountRate, calculateNetTuition, calculateNeed, matchCriteria, calculateTotalNeedMet, calculateTotalDirectCost, calculateTotalInstitutionalMeritGift, calculateNetTuitionFee, calculateTuitionDiscountRate } = require('../utils/calculationHelper');
 const { evaluateConditions, evaluateBound } = require('../services/evaluation');
@@ -735,6 +735,10 @@ async function getTemplateDataWithExcel(req, res) {
       return res.status(404).json({ error: `No headers found for templateId ${templateId}` });
     }
 
+    // Remove headers the user doesn't want
+    const excludedSet = new Set(excludedHeadersName.map(normalize));
+    const filteredHeaders = headers.filter(h => !excludedSet.has(normalize(h.name)));
+
     const sheetData = await sequelize.query(`
         SELECT sd.id, sd."rowIndex", sd.value, sd."headerId"
         FROM "SheetData" sd
@@ -746,7 +750,7 @@ async function getTemplateDataWithExcel(req, res) {
         type: sequelize.QueryTypes.SELECT,
       });
 
-    const sortedHeaders = sortHeadersFlexibleMatch(headers);
+    const sortedHeaders = sortHeadersFlexibleMatch(filteredHeaders);
 
     // --- Inject duplicate SAI after Income_Level ---
     const saiHeader = sortedHeaders.find(h => h.name === 'SAI');
@@ -885,6 +889,10 @@ async function getTemplateDataWithExcelByRows(req, res) {
       return res.status(404).json({ error: `No headers found for templateId ${templateId}` });
     }
 
+    // Remove headers the user doesn't want
+    const excludedSet = new Set(excludedHeadersName.map(normalize));
+    const filteredHeaders = headers.filter(h => !excludedSet.has(normalize(h.name)));
+
     const sheetData = await sequelize.query(`
       SELECT sd.id, sd."rowIndex", sd.value, sd."headerId"
       FROM "SheetData" sd
@@ -902,7 +910,7 @@ async function getTemplateDataWithExcelByRows(req, res) {
       type: sequelize.QueryTypes.SELECT,
     });
 
-    const sortedHeaders = sortHeadersFlexibleMatch(headers);
+    const sortedHeaders = sortHeadersFlexibleMatch(filteredHeaders);
 
     // --- Inject duplicate SAI after Income_Level ---
     const saiHeader = sortedHeaders.find(h => h.name === 'SAI');
@@ -1043,7 +1051,11 @@ async function exportDataWithConditions(req, res) {
       return res.status(404).json({ error: 'No headers found for the template' });
     }
 
-    const sortedHeaders = sortHeadersFlexibleMatch(allHeaders);
+    // Remove headers the user doesn't want
+    const excludedSet = new Set(excludedHeadersName.map(normalize));
+    const filteredHeaders = allHeaders.filter(h => !excludedSet.has(normalize(h.name)));
+
+    const sortedHeaders = sortHeadersFlexibleMatch(filteredHeaders);
     const allHeaderIds = sortedHeaders.map(h => h.id);
 
     // 🔹 Step 2: Get max row index

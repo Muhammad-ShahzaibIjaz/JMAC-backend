@@ -46,6 +46,7 @@ const desiredOrder = [
   "Y/N Student_Cancelled",
   "Date_Of_Cancellation",
   "Y/N Student_Enrolled",
+  "Y/N Direct_Admit_Student",
   "Date_Term_Starts",
   "Admission_Counselor",
   "Recruitment_Territory",
@@ -514,6 +515,7 @@ const desiredOrderType = [
   "Date",
   "Y/N",
   "Date",
+  "Y/N",
   "Y/N",
   "Date",
   "text",
@@ -1070,6 +1072,7 @@ const ynFlags = [
   "Y/N Stealth_App",
   "Y/N Student_Applied",
   "Y/N Student_Admitted",
+  "Y/N Direct_Admit_Student",
   "Y/N Student_Readmitted",
   "Y/N Student_Confirmed",
   "Y/N Student_Cancelled",
@@ -1133,6 +1136,28 @@ const REQUIRED_HEADERS = [
   'Total_Institutional_Unfunded_Gift'
 ];
 
+const excludedHeadersName = [
+  'Y/N Student_Inquired',
+  'Y/N Student_Applied',
+  'Y/N Student_Admitted',
+  'Y/N Student_Readmitted',
+  'Y/N Student_Confirmed',
+  'Y/N Student_Cancelled',
+  'Y/N Early_Admit_Student',
+  'Y/N Early_Enrollment_Decision',
+  'Y/N Early_Aid',
+  'Y/N ACT_Official',
+  'Y/N SAT_Official',
+  'Y/N Is_College_Data_Self-reported/Transcript',
+  'Y/N Selected_For_Verification',
+  'Y/N Is_ISIR_Valid',
+  'Y/N Is_SAI_Estimated',
+  'First_Term_College_GPA',
+  'Y/N Student_Is_PELL_Eligible',
+  'First_Year_College_GPA',
+  'Y/N Student_Persisted_To_Second_Term',
+  'Y/N Student_Persisted_To_Second_Fall',
+];
 
 module.exports = {
   desiredOrder,
@@ -1140,5 +1165,6 @@ module.exports = {
   requiredHeadersName,
   desiredOrderType,
   ynFlags,
-  REQUIRED_HEADERS
+  REQUIRED_HEADERS,
+  excludedHeadersName
 };
