@@ -4,7 +4,7 @@ const { createLog } = require("../utils/auditLogger");
 const { getUserName } = require('./userController');
 
 const createCampusGoal = async (req, res) => {
-    const { templateId, goalName, goalYear = null, populationGoals = {}, goalType = 'awarding', totalPopulationMappings = [] } = req.body;
+    const { templateId, goalName, goalYear = null, sheetId = null, populationGoals = {}, goalType = 'awarding', totalPopulationMappings = [] } = req.body;
     const username = await getUserName(req.userId);
     try {
         if (!templateId || !goalName) {
@@ -21,6 +21,7 @@ const createCampusGoal = async (req, res) => {
             templateId,
             goalName,
             goalYear,
+            sheetId, // lock the data snapshot this goal was built from
             populationGoals,
             goalType,
             totalPopulationMappings
@@ -47,7 +48,7 @@ const createCampusGoal = async (req, res) => {
 const updateCampusGoal = async (req, res) => {
     const { goalId } = req.params;
     // goalType/goalYear accepted (optional) so an awarding goal keeps its type/year on update.
-    const { goalName, goalYear, populationGoals, goalType, totalPopulationMappings = [] } = req.body;
+    const { goalName, goalYear, sheetId, populationGoals, goalType, totalPopulationMappings = [] } = req.body;
     const username = await getUserName(req.userId);
     try {
         const campusGoal = await CampusGoal.findByPk(goalId);
@@ -56,6 +57,8 @@ const updateCampusGoal = async (req, res) => {
         }
         campusGoal.goalName = goalName || campusGoal.goalName;
         campusGoal.goalYear = goalYear !== undefined ? goalYear : campusGoal.goalYear;
+        // The snapshot lock only sets if provided; never clobber an existing lock.
+        campusGoal.sheetId = sheetId !== undefined && sheetId !== null ? sheetId : campusGoal.sheetId;
         campusGoal.populationGoals = populationGoals || campusGoal.populationGoals;
         campusGoal.goalType = goalType || campusGoal.goalType;
         campusGoal.totalPopulationMappings = totalPopulationMappings || campusGoal.totalPopulationMappings;

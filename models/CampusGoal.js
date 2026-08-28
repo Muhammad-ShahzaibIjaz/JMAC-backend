@@ -36,6 +36,13 @@ const CampusGoal = sequelize.define(
       type: DataTypes.STRING(4),
       allowNull: true,
     },
+    // Locks the data snapshot (Sheet) this goal's 2026 actuals were built from,
+    // so re-opening the goal always reads the SAME base-year data even if the
+    // campus "Current Snapshot" later changes. Nullable for pre-existing rows.
+    sheetId: {
+      type: DataTypes.UUID,
+      allowNull: true,
+    },
     populationGoals: {
       type: DataTypes.JSONB,
       allowNull: false,

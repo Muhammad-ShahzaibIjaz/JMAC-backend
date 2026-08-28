@@ -20,6 +20,9 @@ const AVERAGE_METRICS = [
   { key: 'avgInstTotalGift', header: 'Total_Institutional_Gift' },
   { key: 'avgNetTuitionRevenue', header: 'Net_Tuition_Revenue' },
   { key: 'avgTuitionFeeRevenue', header: 'Net_Tuition/Fee_Revenue' },
+  // Avg. Tuition & Fees Discount, straight from the NACUBO_Discount_Rate header
+  // (already a percent, e.g. 70.33), averaged over net confirmed.
+  { key: 'avgNacuboDiscountRate', header: 'NACUBO_Discount_Rate' },
 ];
 
 const SUM_METRICS = [
