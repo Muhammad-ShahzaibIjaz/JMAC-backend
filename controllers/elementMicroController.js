@@ -18,6 +18,9 @@ const AVERAGE_METRICS = [
   { key: 'pctNeedMetWithGift', header: '%_Of_Need_Met_W/Gift_Aid' },
   { key: 'avgInstMeritGift', header: 'Total_Institutional_Merit_Gift' },
   { key: 'avgInstTotalGift', header: 'Total_Institutional_Gift' },
+  // Avg. Total Gift (all gift aid), averaged over net confirmed — the 2026
+  // value for the new "Avg. Total Gift" row.
+  { key: 'avgTotalGift', header: 'Total_Gift_Aid' },
   { key: 'avgNetTuitionRevenue', header: 'Net_Tuition_Revenue' },
   { key: 'avgTuitionFeeRevenue', header: 'Net_Tuition/Fee_Revenue' },
   // Avg. Tuition & Fees Discount, straight from the NACUBO_Discount_Rate header
