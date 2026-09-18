@@ -368,50 +368,60 @@ async function getQualifiedHeaders(req, res) {
       return res.status(400).json({ error: 'Template ID is required and must be a non-empty string' });
     }
 
-    // Fetch headers for the template
     const headers = await Header.findAll({ where: { templateId } });
     if (!headers || headers.length === 0) {
       return res.status(404).json({ error: 'No headers found for this template' });
     }
 
     const sampleSize = 30;
+    const headerIds = headers.map(h => h.id);
 
-    // Parallel sampling of SheetData using raw SQL
-    const headerSamples = await Promise.all(headers.map(header =>
-      sequelize.query(`
-        SELECT "value"
-        FROM "SheetData"
-        WHERE "headerId" = :headerId
-        AND "value" IS NOT NULL
-        AND UPPER("value") != 'NULL'
-        LIMIT :limit
-      `, {
-        replacements: { headerId: header.id, limit: sampleSize * 2 }, // oversample to ensure uniqueness
-        type: sequelize.QueryTypes.SELECT,
-      }).then(rows => ({
-        header,
-        values: rows.map(r => r.value?.trim()).filter(Boolean),
-      }))
-    ));
+    // Single batched query: get up to sampleSize distinct non-empty values per header
+    const sampleRows = await sequelize.query(`
+      SELECT "headerId", "value"
+      FROM (
+        SELECT
+          "headerId",
+          "value",
+          ROW_NUMBER() OVER (PARTITION BY "headerId" ORDER BY "value") AS rn
+        FROM (
+          SELECT DISTINCT "headerId", TRIM("value") AS "value"
+          FROM "SheetData"
+          WHERE "headerId" IN (:headerIds)
+            AND "value" IS NOT NULL
+            AND TRIM("value") != ''
+            AND UPPER(TRIM("value")) != 'NULL'
+        ) dist
+      ) ranked
+      WHERE rn <= :sampleSize
+    `, {
+      replacements: { headerIds, sampleSize },
+      type: sequelize.QueryTypes.SELECT,
+    });
+
+    // Group sampled values by headerId
+    const valuesByHeader = new Map();
+    for (const row of sampleRows) {
+      if (!valuesByHeader.has(row.headerId)) {
+        valuesByHeader.set(row.headerId, []);
+      }
+      valuesByHeader.get(row.headerId).push(row.value);
+    }
+
+    // Build a quick lookup for headers
+    const headerMap = new Map(headers.map(h => [h.id, h]));
 
     const qualifiedHeaders = [];
 
-    for (const { header, values } of headerSamples) {
-      const uniqueSet = new Set();
-      for (const val of values) {
-        uniqueSet.add(val);
-        if (uniqueSet.size >= sampleSize) break;
-      }
+    for (const [headerId, uniqueValues] of valuesByHeader) {
+      const header = headerMap.get(headerId);
+      if (!header || uniqueValues.length === 0) continue;
 
-      const uniqueValues = Array.from(uniqueSet);
-      if (uniqueValues.length === 0) continue;
-
-      const numericSample = uniqueValues.filter(val => /^-?\d+(\.\d+)?$/.test(val));
-      const numericConfidence = numericSample.length / uniqueValues.length;
-      const isLikelyNumeric = numericConfidence > 0.8;
+      const numericCount = uniqueValues.filter(val => /^-?\d+(\.\d+)?$/.test(val)).length;
+      const numericConfidence = numericCount / uniqueValues.length;
 
       let inferredType = 'category';
-      if (isLikelyNumeric) {
+      if (numericConfidence > 0.8) {
         inferredType = 'numeric';
       } else if (uniqueValues.every(val => !isNaN(Date.parse(val)))) {
         inferredType = 'date';
