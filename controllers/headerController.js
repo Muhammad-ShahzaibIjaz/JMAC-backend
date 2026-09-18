@@ -6,7 +6,7 @@ const sequelize = require('../config/database');
 const { v4: uuidv4 } = require('uuid');
 const { exportHeader } = require('../services/excelService');
 const { DataTypes } = require('sequelize');
-const { desiredOrderType } = require('../utils/headerOrderList');
+const { desiredOrderType, desiredOrder } = require('../utils/headerOrderList');
 const desiredOrder = require('../utils/headerOrderList').desiredOrder;
 const { createLog } = require("../utils/auditLogger");
 const { getUserName } = require('./userController');
@@ -360,6 +360,10 @@ async function getQualifiedHeadersFromDB(templateId) {
 //   }
 // }
 
+function normalizedHeader(name) {
+  return name?.toLowerCase().trim() ?? '';
+}
+
 async function getQualifiedHeaders(req, res) {
   try {
     const { id: templateId } = req.params;
@@ -376,7 +380,6 @@ async function getQualifiedHeaders(req, res) {
     const sampleSize = 30;
     const headerIds = headers.map(h => h.id);
 
-    // Single batched query: get up to sampleSize distinct non-empty values per header
     const sampleRows = await sequelize.query(`
       SELECT "headerId", "value"
       FROM (
@@ -399,7 +402,6 @@ async function getQualifiedHeaders(req, res) {
       type: sequelize.QueryTypes.SELECT,
     });
 
-    // Group sampled values by headerId
     const valuesByHeader = new Map();
     for (const row of sampleRows) {
       if (!valuesByHeader.has(row.headerId)) {
@@ -408,7 +410,6 @@ async function getQualifiedHeaders(req, res) {
       valuesByHeader.get(row.headerId).push(row.value);
     }
 
-    // Build a quick lookup for headers
     const headerMap = new Map(headers.map(h => [h.id, h]));
 
     const qualifiedHeaders = [];
@@ -437,6 +438,14 @@ async function getQualifiedHeaders(req, res) {
     if (qualifiedHeaders.length === 0) {
       return res.status(404).json({ error: 'No qualified headers with usable data' });
     }
+
+    // Sort: desiredOrder first, then everything else
+    const orderMap = new Map(desiredOrder.map((name, i) => [normalizedHeader(name), i]));
+    qualifiedHeaders.sort((a, b) => {
+      const aIdx = orderMap.get(normalizedHeader(a.name)) ?? Infinity;
+      const bIdx = orderMap.get(normalizedHeader(b.name)) ?? Infinity;
+      return aIdx - bIdx;
+    });
 
     res.status(200).json(qualifiedHeaders);
 
