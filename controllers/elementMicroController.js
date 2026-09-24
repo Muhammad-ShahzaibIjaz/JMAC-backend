@@ -37,6 +37,26 @@ const FEDERAL_WORK_AID_HEADER = 'Total_Federal_Work_Aid';
 const AWARD_CODE_HEADERS = Array.from({ length: 20 }, (_, i) => `Awd_CR${i + 1}`);
 const AWARD_AMOUNT_HEADERS = Array.from({ length: 20 }, (_, i) => `Awd_Amt${i + 1}`);
 
+
+// A key may combine several patterns (Other Gift).
+const AWARD_PATTERN_SUMS = [
+  { key: 'sumNeedGift', patterns: [/^IN.G$/] },
+  { key: 'sumMeritGift', patterns: [/^IM.G$/] },
+  { key: 'sumHonorsGift', patterns: [/^IH.G$/] },
+  { key: 'sumPerformanceGift', patterns: [/^IT.G$/] },
+  { key: 'sumOtherGift', patterns: [/^II.G$/, /^IA.G$/, /^IP.G$/, /^IQ.G$/, /^IO.G$/] },
+  { key: 'sumUnfundedInstGift', patterns: [/^I.UG$/] },
+  { key: 'sumFundedInstGift', patterns: [/^I.FG$/] },
+];
+
+// Direct-charge revenue header sums (over net confirmed) for the summary.
+const REVENUE_SUM_METRICS = [
+  { key: 'sumTuitionRevenue', header: '2_Semester_Tuition' },
+  { key: 'sumFeeRevenue', header: '2_Semester_Fees' },
+  { key: 'sumRoomRevenue', header: '2_Semester_Room' },
+  { key: 'sumMealsRevenue', header: '2_Semester_Meals' },
+];
+
 const ELEMENT_NUMBER_HEADER = 'Element_Number';
 
 const toNumber = (v) => {
@@ -95,6 +115,8 @@ const getElementMatrixMicroData = async (req, res) => {
     neededHeaderNames.add(FEDERAL_WORK_AID_HEADER);
     AWARD_CODE_HEADERS.forEach((h) => neededHeaderNames.add(h));
     AWARD_AMOUNT_HEADERS.forEach((h) => neededHeaderNames.add(h));
+    // Revenue direct-charge headers for the Award Plan Summary.
+    REVENUE_SUM_METRICS.forEach((m) => neededHeaderNames.add(m.header));
  
     const headers = await Header.findAll({
       where: { templateId, name: { [Op.in]: Array.from(neededHeaderNames) } },
@@ -138,12 +160,18 @@ const getElementMatrixMicroData = async (req, res) => {
     const acc = {};
     const ensure = (el) => {
       if (!acc[el]) {
-        acc[el] = { admitted: 0, netConfirmed: 0, sums: {}, totals: {}, nonGiftAid: { sum: 0, count: 0 } };
+        acc[el] = { admitted: 0, netConfirmed: 0, sums: {}, totals: {}, nonGiftAid: { sum: 0, count: 0 }, awardSums: {}, revSums: {} };
         AVERAGE_METRICS.forEach((m) => {
           acc[el].sums[m.key] = { sum: 0, count: 0 };
         });
         SUM_METRICS.forEach((m) => {
           acc[el].totals[m.key] = 0;
+        });
+        AWARD_PATTERN_SUMS.forEach((m) => {
+          acc[el].awardSums[m.key] = 0;
+        });
+        REVENUE_SUM_METRICS.forEach((m) => {
+          acc[el].revSums[m.key] = 0;
         });
       }
       return acc[el];
@@ -199,6 +227,31 @@ const getElementMatrixMicroData = async (req, res) => {
         }
         bucket.nonGiftAid.sum += federalWorkAid + fnflTotal;
         bucket.nonGiftAid.count += 1;
+
+        // Award-code pattern sums (institutional aid by type). Reuse the same
+        // Awd_CR / Awd_Amt scan; a code contributes to a key if it matches any
+        // of that key's patterns. A single code can only be one 4-char string,
+        // so it lands in at most one key here.
+        for (let i = 0; i < 20; i++) {
+          const codeRaw = row[AWARD_CODE_HEADERS[i]];
+          if (codeRaw == null) continue;
+          const code = String(codeRaw).trim();
+          if (!code) continue;
+          const amt = toNumber(row[AWARD_AMOUNT_HEADERS[i]]);
+          if (amt === null) continue;
+          for (const m of AWARD_PATTERN_SUMS) {
+            if (m.patterns.some((p) => p.test(code))) {
+              bucket.awardSums[m.key] += amt;
+              break;
+            }
+          }
+        }
+
+        // Direct-charge revenue sums over net confirmed.
+        for (const m of REVENUE_SUM_METRICS) {
+          const n = toNumber(row[m.header]);
+          if (n !== null) bucket.revSums[m.key] += n;
+        }
       }
     }
  
@@ -227,7 +280,15 @@ const getElementMatrixMicroData = async (req, res) => {
       // avgInstTotalGift and avgNeed are already computed above.
       out.pctNeedMetWithInstGift =
         out.avgNeed > 0 ? (out.avgInstTotalGift / out.avgNeed) * 100 : 0;
- 
+
+      // Award Plan Summary: institutional-aid-by-type sums and revenue sums.
+      for (const m of AWARD_PATTERN_SUMS) {
+        out[m.key] = b.awardSums[m.key];
+      }
+      for (const m of REVENUE_SUM_METRICS) {
+        out[m.key] = b.revSums[m.key];
+      }
+
       elements[element] = out;
     }
  
