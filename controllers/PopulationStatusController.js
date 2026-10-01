@@ -5,6 +5,8 @@ const { evaluateConditions } = require('../services/evaluation');
 const { generateMultiYearExcelFile } = require('../services/SheetService');
 const { desiredOrder, REQUIRED_HEADERS, excludedHeadersName } = require('../utils/headerOrderList');
 const { geocodeStudents } = require('../utils/coordinateFinder');
+const { FUND_CODE_LAYOUT, FUND_CODE_VIEW_NAMES } = require('../utils/fundcodecategories');
+const { getFundCodeStatsByTemplateId } = require('../services/getfundcodestatsbytemplateid');
 
 const savePopulationStatus = async (req, res) => {
     const { templateId, statusName, selectedStatuses, targetHeader } = req.body;
@@ -1751,26 +1753,47 @@ const calculateAvgSAIAndNeed = async (sheetId, templateId, admittedRowIndexes) =
 };
 
 const getAwardStats = async (req, res) => {
-  const { selectedDate, previousYearDate, twoYearsAgoDate, templateId, populationRuleId, financialBandId='', academicBandId='', isAllStudent=false } = req.body;
+  const {
+    selectedDate,
+    previousYearDate,
+    twoYearsAgoDate,
+    templateId,
+    populationRuleId,
+    financialBandId = '',
+    academicBandId = '',
+    isAllStudent = false,
+    viewType = 'award',
+  } = req.body;
+ 
   try {
     if (!selectedDate || !templateId || !populationRuleId) {
       return res.status(400).json({ error: 'All fields are required' });
     }
+ 
+    const isFundCodeView = viewType === 'fundCode';
+ 
     const selectedYear = new Date(selectedDate).getFullYear();
     const previousYear = selectedYear - 1;
     const twoYearsAgo = selectedYear - 2;
+ 
     const sheetIds = {
       [selectedYear]: await getSheetIdBySubmissionDate(selectedDate, templateId),
       [previousYear]: await getSheetIdBySubmissionDate(previousYearDate, templateId),
       [twoYearsAgo]: await getSheetIdBySubmissionDate(twoYearsAgoDate, templateId),
     };
+ 
     const allStatuses = await getStatusesByTemplateId(templateId);
     const rawSheetIds = Object.values(sheetIds);
     const validSheetIds = rawSheetIds.filter(id => id);
-    const allAwards = await getAwardsByTemplateId(templateId, validSheetIds);
+ 
+    // Row set depends on the view: dynamic award codes vs. fixed fund code rows.
+    const allRowKeys = isFundCodeView
+      ? FUND_CODE_VIEW_NAMES
+      : await getAwardsByTemplateId(templateId, validSheetIds);
+ 
     const zeroedAwardStats = {};
-    allAwards.forEach(award => {
-      zeroedAwardStats[award] = {
+    allRowKeys.forEach(key => {
+      zeroedAwardStats[key] = {
         acceptedAmount: 0,
         acceptedCount: 0,
         pendingAmount: 0,
@@ -1778,128 +1801,149 @@ const getAwardStats = async (req, res) => {
         totalAmount: 0,
       };
     });
+ 
+    // Single switch point for the two aggregation strategies.
+    const collectStats = (tplId, rowIndexes) =>
+      isFundCodeView
+        ? getFundCodeStatsByTemplateId(tplId, rowIndexes)
+        : getAwardAmountsByTemplateId(tplId, rowIndexes);
+ 
+    const emptyYearResult = yearLabel => ({
+      yearLabel,
+      result: {
+        statuses: allStatuses.map(status => ({
+          statusName: status.statusName,
+          awards: zeroedAwardStats,
+          avgNeed: 0,
+          avgSAI: 0,
+        })),
+      },
+    });
+ 
+    const buildStatusCounts = async (sheetId, matchingRows) => {
+      const statusCounts = [];
+      for (const status of allStatuses) {
+        const { selectedStatuses, targetHeader, statusName } = status;
+        const { rowIndexes } = await calculateStatusStudents(
+          sheetId,
+          selectedStatuses,
+          targetHeader,
+          templateId,
+          matchingRows
+        );
+        const awardStats = await collectStats(templateId, rowIndexes);
+        const { AvgSAI, AvgNeed } = await calculateAvgSAIAndNeed(sheetId, templateId, rowIndexes);
+        statusCounts.push({ statusName, awards: awardStats, avgSAI: AvgSAI, avgNeed: AvgNeed });
+      }
+      return statusCounts;
+    };
+ 
     let yearPromises;
+ 
     if (!isAllStudent) {
       const { conditions, headers } = await getRuleConditionsAndHeaders(populationRuleId);
+ 
       yearPromises = Object.entries(sheetIds).map(async ([yearLabel, sheetId]) => {
-        if (sheetId === null) {
-          return {
-            yearLabel,
-            result: {
-              statuses: allStatuses.map(status => ({ statusName: status.statusName, awards: zeroedAwardStats, avgNeed: 0, avgSAI: 0})),
-            }
-          };
-        }
-        let matchingRows;
-        matchingRows = await applyPopulationRule(templateId, sheetId, conditions, headers);
-
-        if (matchingRows.length === 0) {
-          return {
-            yearLabel,
-            result: {
-              statuses: allStatuses.map(status => ({ statusName: status.statusName, awards: zeroedAwardStats, avgNeed: 0, avgSAI: 0})),
-            }
-          };
-        }
+        if (sheetId === null) return emptyYearResult(yearLabel);
+ 
+        let matchingRows = await applyPopulationRule(templateId, sheetId, conditions, headers);
+        if (matchingRows.length === 0) return emptyYearResult(yearLabel);
+ 
         if (financialBandId !== '') {
-          const { conditions, headers } = await getRuleConditionsAndHeaders(financialBandId);
-          matchingRows = await applyNeedBracket(templateId, sheetId, conditions, headers, matchingRows);
+          const fb = await getRuleConditionsAndHeaders(financialBandId);
+          matchingRows = await applyNeedBracket(
+            templateId,
+            sheetId,
+            fb.conditions,
+            fb.headers,
+            matchingRows
+          );
         }
         if (academicBandId !== '') {
-          const { conditions, headers } = await getRuleConditionsAndHeaders(academicBandId);
-          matchingRows = await applyNeedBracket(templateId, sheetId, conditions, headers, matchingRows);
+          const ab = await getRuleConditionsAndHeaders(academicBandId);
+          matchingRows = await applyNeedBracket(
+            templateId,
+            sheetId,
+            ab.conditions,
+            ab.headers,
+            matchingRows
+          );
         }
-        const statusCounts = [];
-        if (matchingRows.length > 0) {
-          for (const status of allStatuses) {
-            const { selectedStatuses, targetHeader, statusName } = status;
-            const { count, rowIndexes } = await calculateStatusStudents(sheetId, selectedStatuses, targetHeader, templateId, matchingRows);
-            const awardStats = await getAwardAmountsByTemplateId(templateId, rowIndexes);
-            const { AvgSAI, AvgNeed } = await calculateAvgSAIAndNeed(sheetId, templateId, rowIndexes);
-            statusCounts.push({ statusName, awards: awardStats, avgSAI: AvgSAI, avgNeed: AvgNeed });
-          }
-
-          return {
-            yearLabel,
-            result: {
-              statuses: statusCounts,
-            }
-          };
-        } else {
-          return {
-            yearLabel,
-            result: {
-              statuses: allStatuses.map(status => ({ statusName: status.statusName, awards: zeroedAwardStats, avgNeed: 0, avgSAI: 0})),
-            }
-          };
+ 
+        if (matchingRows.length === 0) return emptyYearResult(yearLabel);
+ 
+        return {
+          yearLabel,
+          result: { statuses: await buildStatusCounts(sheetId, matchingRows) },
         };
       });
-
     } else {
       yearPromises = Object.entries(sheetIds).map(async ([yearLabel, sheetId]) => {
-        if (sheetId === null) {
-          return {
-            yearLabel,
-            result: {
-              statuses: allStatuses.map(status => ({ statusName: status.statusName, awards: zeroedAwardStats, avgNeed: 0, avgSAI: 0})),
-            }
-          };
-        }
-        let matchingRows;
-        matchingRows = (
+        if (sheetId === null) return emptyYearResult(yearLabel);
+ 
+        let matchingRows = (
           await SheetData.findAll({
             where: { sheetId },
             attributes: [[sequelize.fn('DISTINCT', sequelize.col('rowIndex')), 'rowIndex']],
             raw: true,
           })
         ).map(r => r.rowIndex);
-        const statusCounts = [];
-        if (matchingRows.length > 0) {
-          if (financialBandId !== '') {
-            const { conditions, headers } = await getRuleConditionsAndHeaders(financialBandId);
-            matchingRows = await applyNeedBracket(templateId, sheetId, conditions, headers, matchingRows);
-          }
-          if (academicBandId !== '') {
-            const { conditions, headers } = await getRuleConditionsAndHeaders(academicBandId);
-            matchingRows = await applyNeedBracket(templateId, sheetId, conditions, headers, matchingRows);
-          }
-
-          for (const status of allStatuses) {
-            const { selectedStatuses, targetHeader, statusName } = status;
-            const { count, rowIndexes } = await calculateStatusStudents(sheetId, selectedStatuses, targetHeader, templateId, matchingRows);
-            const awardStats = await getAwardAmountsByTemplateId(templateId, rowIndexes);
-            const { AvgSAI, AvgNeed } = await calculateAvgSAIAndNeed(sheetId, templateId, rowIndexes);
-            statusCounts.push({ statusName, awards: awardStats, avgSAI: AvgSAI, avgNeed: AvgNeed });
-          }
-
-          return {
-            yearLabel,
-            result: {
-              statuses: statusCounts,
-            }
-          };
-        } else {
-          return {
-            yearLabel,
-            result: {
-              statuses: allStatuses.map(status => ({ statusName: status.statusName, awards: zeroedAwardStats, avgNeed: 0, avgSAI: 0})),
-            }
-          };
+ 
+        if (matchingRows.length === 0) return emptyYearResult(yearLabel);
+ 
+        if (financialBandId !== '') {
+          const fb = await getRuleConditionsAndHeaders(financialBandId);
+          matchingRows = await applyNeedBracket(
+            templateId,
+            sheetId,
+            fb.conditions,
+            fb.headers,
+            matchingRows
+          );
+        }
+        if (academicBandId !== '') {
+          const ab = await getRuleConditionsAndHeaders(academicBandId);
+          matchingRows = await applyNeedBracket(
+            templateId,
+            sheetId,
+            ab.conditions,
+            ab.headers,
+            matchingRows
+          );
+        }
+ 
+        if (matchingRows.length === 0) return emptyYearResult(yearLabel);
+ 
+        return {
+          yearLabel,
+          result: { statuses: await buildStatusCounts(sheetId, matchingRows) },
         };
       });
     }
+ 
     const yearResults = await Promise.all(yearPromises);
+ 
     const results = {};
-      yearResults.forEach(({ yearLabel, result }) => {
-        results[yearLabel] = result;
+    yearResults.forEach(({ yearLabel, result }) => {
+      results[yearLabel] = result;
     });
-
-    res.status(200).json(results);
+ 
+    // Non-year metadata. Kept under a reserved key so the existing
+    // Object.entries(results) year loop on the frontend must skip it.
+    const payload = {
+      ...results,
+      meta: {
+        viewType: isFundCodeView ? 'fundCode' : 'award',
+        layout: isFundCodeView ? FUND_CODE_LAYOUT : null,
+      },
+    };
+ 
+    res.status(200).json(payload);
   } catch (err) {
-    console.error("Error while getting award stats:", err);
+    console.error('Error while getting award stats:', err);
     return res.status(500).json({ error: 'Internal server error' });
   }
-}
+};
 
 const getStealthMatchedRows = async (templateId, sheetId, matchingRows) => {
   const stealthHeader = await Header.findOne({
