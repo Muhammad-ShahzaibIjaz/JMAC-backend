@@ -30,10 +30,14 @@ const Campus = require('./Campus');
 const Note = require('./Note');
 const CustomField = require('./CustomField');
 const OperationProgressLog = require('./OperationProgressLog');
+const BandLabel = require('./BandLabel');
 const sequelize = require('../config/database');
 
 Campus.hasMany(Template, { foreignKey: 'campusId', onDelete: 'CASCADE' });
 Template.belongsTo(Campus, { foreignKey: 'campusId', onDelete: 'CASCADE' });
+
+BandLabel.belongsTo(Template, { foreignKey: 'templateId', onDelete: 'CASCADE' });
+Template.hasMany(BandLabel, { foreignKey: 'templateId', onDelete: 'CASCADE' });
 
 Campus.hasMany(Note, { foreignKey: 'campusId', onDelete: 'CASCADE', as: "notes" });
 Note.belongsTo(Campus, { foreignKey: 'campusId', onDelete: 'CASCADE' });
@@ -167,5 +171,6 @@ module.exports = {
   Note,
   CustomField,
   OperationProgressLog,
+  BandLabel,
   CampusPermission,
 };

@@ -45,12 +45,15 @@ const ipedRoutes = require("./routes/ipedRoutes");
 const operationlogRoutes = require("./routes/operationlogRoutes");
 const onboardingRoutes = require("./routes/OnboardingRoutes");
 const elementMicroRoutes = require("./routes/elementMicroRoutes");
+const bandlabelRoutes = require("./routes/bandlabelRoutes");
 
 
 
 
 
 
+
+app.use("/api", bandlabelRoutes);
 app.use("/api", elementMicroRoutes);
 app.use("/api", onboardingRoutes);
 app.use("/api", operationlogRoutes);
