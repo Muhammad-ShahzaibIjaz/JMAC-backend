@@ -43,8 +43,13 @@ const AWARD_PATTERN_SUMS = [
   { key: 'sumNeedGift', patterns: [/^IN.G$/] },
   { key: 'sumMeritGift', patterns: [/^IM.G$/] },
   { key: 'sumHonorsGift', patterns: [/^IH.G$/] },
-  { key: 'sumPerformanceGift', patterns: [/^IT.G$/] },
-  { key: 'sumOtherGift', patterns: [/^II.G$/, /^IA.G$/, /^IP.G$/, /^IQ.G$/, /^IO.G$/] },
+  { key: 'sumPerformanceGift', patterns: [/^IT.G$/, /^IA.G$/] },
+  // Previously folded into Other Gift; now their own summary lines.
+  { key: 'sumEliteGift', patterns: [/^IP.G$/] },
+  { key: 'sumInternationalMerit', patterns: [/^II.G$/] },
+  { key: 'sumQualifiedGift', patterns: [/^IQ.G$/] },
+  // Other Gift is now IO*G only.
+  { key: 'sumOtherGift', patterns: [/^IO.G$/] },
   { key: 'sumUnfundedInstGift', patterns: [/^I.UG$/] },
   { key: 'sumFundedInstGift', patterns: [/^I.FG$/] },
 ];
