@@ -12,10 +12,15 @@ const {
  * Reads, for each of the 20 award slots:
  *   Awd_CR{n}     -> the cross-reference / fund code  (e.g. "IM1G")
  *   Awd_Amt{n}    -> the amount
- *   Awd_Status{n} -> accepted | pending
+ *   Awd_Status{n} -> accepted | pending | (any other / blank)
  *
  * Returns:
  *   { [viewName]: { acceptedAmount, acceptedCount, pendingAmount, pendingCount, totalAmount } }
+ *
+ * totalAmount counts EVERY matched award regardless of status, so it lines up
+ * with the Award Plan Summary (goals) numbers, which apply no status filter.
+ * The acceptedAmount / pendingAmount splits stay status-specific for their own
+ * charts; amounts in any other status add to totalAmount only.
  *
  * Every View Name from the config is present (zero-filled) so the chart keeps
  * a stable row set across the three years.
@@ -94,8 +99,11 @@ const getFundCodeStatsByTemplateId = async (templateId, rowIndexes = []) => {
         const fundCode = crVal?.trim();
         if (!fundCode || fundCode.toUpperCase() === 'NULL') continue;
 
+        // NOTE: no status gate here. A matched award counts toward totalAmount
+        // whatever its status (accepted, pending, offered, declined, blank, ...)
+        // so the insight Total matches the Award Plan Summary. The accepted /
+        // pending splits below are the only status-specific numbers.
         const status = statusVal?.trim()?.toLowerCase();
-        if (!['accepted', 'pending'].includes(status)) continue;
 
         const amount = parseFloat(amtVal) || 0;
 
@@ -110,10 +118,11 @@ const getFundCodeStatsByTemplateId = async (templateId, rowIndexes = []) => {
           if (status === 'accepted') {
             bucket.acceptedAmount += amount;
             bucket.acceptedCount += 1;
-          } else {
+          } else if (status === 'pending') {
             bucket.pendingAmount += amount;
             bucket.pendingCount += 1;
           }
+          // Total includes accepted, pending, and every other status.
           bucket.totalAmount += amount;
         }
       }
