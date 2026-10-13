@@ -2152,7 +2152,7 @@ const getExportableStudentData = async (req, res) => {
     }
     // Remove headers the user doesn't want
     const excludedSet = new Set(excludedHeadersName.map(normalize));
-    const filteredHeaders = headers.filter(h => !excludedSet.has(normalize(h.name)));
+    const filteredHeaders = allHeaders.filter(h => !excludedSet.has(normalize(h.name)));
     const sortedHeaders = sortHeadersFlexibleMatch(filteredHeaders);
     const headerMap = Object.fromEntries(sortedHeaders.map(h => [h.id, h.name]));
 
