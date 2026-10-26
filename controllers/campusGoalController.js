@@ -11,10 +11,12 @@ const createCampusGoal = async (req, res) => {
             return res.status(400).json({ message: 'templateId, goalName are required.' });
         }
 
-        // A goal name may repeat across years, so uniqueness is per (template, name, year).
-        const isExisting = await CampusGoal.findOne({ where: { templateId, goalName, goalYear } });
+        // A goal name may repeat across years AND across goal types (an awarding
+        // "No Increase" and a consolidated "No Increase" are different goals), so
+        // uniqueness is per (template, name, year, goalType).
+        const isExisting = await CampusGoal.findOne({ where: { templateId, goalName, goalYear, goalType } });
         if (isExisting) {
-            return res.status(400).json({ message: 'Campus goal with the same name already exists for this template and year.' });
+            return res.status(400).json({ message: `A ${goalType} goal with the same name already exists for this template and year.` });
         }
         const newCampusGoal = await CampusGoal.create({
             id: uuidv4(),
