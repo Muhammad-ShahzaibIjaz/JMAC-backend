@@ -4542,13 +4542,13 @@ async function calculateAwards(templateId, sheetId, acceptedStatuses, logCtx) {
       where: { templateId, name: requiredHeadersName },
       transaction
     });
- 
+
     const headerMap = Object.fromEntries(headers.map(h => [h.name, h.id]));
     const requiredHeaderIds = headers.map(h => h.id);
     const awardHeaderIds = Object.fromEntries(
       Object.keys(awardTypePatterns).map(name => [name, headerMap[name]])
     );
- 
+
     const sheetData = await SheetData.findAll({
       where: {
         headerId: { [Op.in]: requiredHeaderIds },
@@ -4558,83 +4558,104 @@ async function calculateAwards(templateId, sheetId, acceptedStatuses, logCtx) {
       raw: true,
       transaction
     });
- 
+
     if (sheetData.length === 0) {
       await transaction.rollback();
       return;
     }
- 
+
     const sheetDataMap = {};
     for (const cell of sheetData) {
       sheetDataMap[`${cell.rowIndex}_${cell.headerId}`] = cell.value;
     }
- 
+
     const rowIndexes = [...new Set(sheetData.map(d => d.rowIndex))];
     const acceptedStatusSet = new Set(acceptedStatuses.map(s => s.toLowerCase()));
- 
+
     const operationLog = await OperationLog.create({
       templateId,
       sheetId,
       operationType: 'CALCULATION',
       transaction
     });
- 
+
     const updates = [];
     const snapshots = [];
     const fnflSums = [];
- 
+
     // Accumulate totals across all rows per award type
     const globalAwardSums = Object.fromEntries(
       Object.keys(awardTypePatterns).map(name => [name, 0])
     );
- 
+
     for (const rowIndex of rowIndexes) {
       const rowData = {};
       for (const headerId of requiredHeaderIds) {
         rowData[headerId] = sheetDataMap[`${rowIndex}_${headerId}`];
       }
- 
+
       const awardSums = Object.fromEntries(
         Object.keys(awardTypePatterns).map(name => [name, 0])
       );
       let fnflTotal = 0;
       let hasFNFLFlag = false;
- 
-      for (let i = 1; i <= 20; i++) {
+
+      // Process a single award slot: pattern-match, accumulate sums + FNFL.
+      // Returns true if the slot held a REAL (accepted, numeric, non-zero) award.
+      const processSlot = (i) => {
         const cd = rowData[headerMap[`Awd_CR${i}`]];
         const amtRaw = rowData[headerMap[`Awd_Amt${i}`]];
         const status = rowData[headerMap[`Awd_Status${i}`]];
- 
-        if (!cd || !acceptedStatusSet.has(status?.toLowerCase())) continue;
- 
+
+        if (!cd || !acceptedStatusSet.has(status?.toLowerCase())) return false;
+
         const amt = parseFloat(amtRaw);
-        if (isNaN(amt)) continue;
- 
+        if (isNaN(amt)) return false;
+
         for (const [awardName, pattern] of Object.entries(awardTypePatterns)) {
           if (pattern.test(cd)) {
             awardSums[awardName] += amt;
             globalAwardSums[awardName] += amt;
           }
         }
- 
+
         if (/^FNFL$/.test(cd)) {
           fnflTotal += amt;
           hasFNFLFlag = true;
         }
+
+        return amt !== 0;
+      };
+
+      // ── Pass 1: regular awards, slots 1–19 ──────────────────────────────
+      let hasLowerAward = false;
+      for (let i = 1; i <= 19; i++) {
+        if (processSlot(i)) hasLowerAward = true;
       }
- 
+
+      // ── Pass 2: IMUG block, slots 20–23 ─────────────────────────────────
+      // Per Jen: only count the IMUG when the student has NO real award in
+      // 1–19 (all zero/null). If 1–19 already has amounts, skip 20–23 so we
+      // don't double-award. When counted, these flow into the merit/need
+      // totals through the same awardTypePatterns matching.
+      if (!hasLowerAward) {
+        for (let i = 20; i <= 23; i++) {
+          processSlot(i);
+        }
+      }
+
       if (hasFNFLFlag) {
         fnflSums.push({ rowIndex: parseInt(rowIndex), amount: fnflTotal });
         hasFNFLFlag = false;
       }
- 
+
       for (const [awardName, total] of Object.entries(awardSums)) {
         const headerId = awardHeaderIds[awardName];
         if (!headerId) continue;
- 
+
         const newValue = total.toString();
         const originalValue = sheetDataMap[`${rowIndex}_${headerId}`] ?? null;
- 
+
         updates.push({ rowIndex: parseInt(rowIndex), headerId, sheetId, value: newValue });
         snapshots.push({
           operationLogId: operationLog.id,
@@ -4647,21 +4668,21 @@ async function calculateAwards(templateId, sheetId, acceptedStatuses, logCtx) {
         });
       }
     }
- 
+
     if (updates.length > 0) {
       await SheetData.bulkCreate(updates, { updateOnDuplicate: ['value'], transaction });
     }
     if (snapshots.length > 0) {
       await SheetDataSnapshot.bulkCreate(snapshots, { validate: false, transaction });
     }
- 
+
     await transaction.commit();
- 
+
     // ── Log one line per award type AFTER the transaction commits ─────────────
     for (const [col, pattern] of Object.entries(awardTypePatterns)) {
       await log(`${col} → if any award matched this pattern ${pattern} and it's status is ${acceptedStatuses.join(', ')} take it's amount`, 'SUCCESS');
     }
- 
+
     return fnflSums;
   } catch (error) {
     await transaction.rollback();
