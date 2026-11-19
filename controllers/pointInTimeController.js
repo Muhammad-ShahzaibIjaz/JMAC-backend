@@ -16,30 +16,33 @@ const {
  *    selectedSheet). We plot the funnel counts FROM EACH SUBMISSION at the week
  *    of its submissionDate, on a fixed Oct -> Sep axis.
  *
- *    Stage membership is the consultant's PopulationStatus config
- *    (statusName + selectedStatuses on the funnel header) — the same rule
- *    calculateStatusStudents uses: a student is in a status when their funnel
- *    value is in that status' selectedStatuses. We do NOT use the date columns
- *    for Admits / Confirmed / Net Confirmed / Cancelled / Pending.
+ *    Stage membership is the consultant's PopulationStatus config (statusName +
+ *    selectedStatuses on the funnel header) — the same rule
+ *    calculateStatusStudents uses. We do NOT use the date columns for
+ *    Admits / Confirmed / Net Confirmed / Cancelled / Pending.
  *
  *    Date columns are used ONLY for MELT per submission:
  *      - sheet has confirmation-date data -> admission AND confirmation AND
  *        cancellation date all present;
  *      - otherwise -> funnel stage is a "Withdrawn Deposit-Cancel" status.
  *
- *  AXIS: fixed Oct -> Sep. Week 1 = the first Friday of October (computed, not
- *  hardcoded) through the following September. Oct–Dec submissions belong to
- *  that Oct's cycle; Jan–Sep to the previous Oct's cycle. Three lines = current
- *  cycle + prior two, aligned by week index, labelled by the current cycle's
- *  Fridays. Empty weeks are null.
+ *  YEAR LABELLING: a cycle runs Oct -> Sep and is labelled by its END year (the
+ *  enrolment year). A submission in Oct–Dec belongs to NEXT year's cycle; one in
+ *  Jan–Sep belongs to the current year's cycle. So a submission dated Sep 2026
+ *  is the 2026 cycle (Oct 2025 -> Sep 2026).
+ *
+ *  AXIS: fixed Oct -> Sep. Week 1 = the first Friday of October (computed), and
+ *  each Friday is the "end of week". Points are snapped to their week for
+ *  cross-year alignment, but every real submission's ACTUAL date is carried in
+ *  `<year>_date` so the UI can show the true submission date on hover.
  *
  *  PERFORMANCE: one applyPopulationRule + ONE SheetData fetch per submission.
- *  Every status count and Melt are computed in memory from that single fetch
- *  (no per-status round-trips), and submissions run with bounded concurrency.
+ *  Every status count and Melt are computed in memory; submissions are deduped
+ *  to one per (year, week) and run with bounded concurrency.
  * ============================================================================
  */
 
-const CONCURRENCY = 5; // parallel submissions in flight; tune to the pg pool
+const CONCURRENCY = 5;
 
 const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
@@ -77,17 +80,21 @@ function stripTime(d) {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate());
 }
 
-/** Recruitment-cycle start year: Oct–Dec -> that year; Jan–Sep -> previous year. */
-function cycleOf(date) {
+const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const ymd = (v) => { const d = parseDate(v); return d ? iso(d) : String(v).slice(0, 10); };
+
+/** Cycle END year (enrolment year): Oct–Dec -> next year; Jan–Sep -> same year. */
+function cycleEndYearOf(date) {
   const d = date instanceof Date ? date : new Date(date);
-  return d.getMonth() >= 9 ? d.getFullYear() : d.getFullYear() - 1; // 9 = October
+  return d.getMonth() >= 9 ? d.getFullYear() + 1 : d.getFullYear(); // 9 = October
 }
 
-/** Friday "end of week" dates: first Friday on/after Oct 1 (computed) -> Sep 30 next year. */
-function buildCycleFridays(cycleYear) {
-  const start = new Date(cycleYear, 9, 1); // Oct 1
+/** Friday "end of week" dates for cycle ending in `endYear`: first Friday on/after
+ *  Oct 1 of (endYear-1), through Sep 30 of endYear. */
+function buildCycleFridays(endYear) {
+  const start = new Date(endYear - 1, 9, 1); // Oct 1 of previous year
   while (start.getDay() !== 5) start.setDate(start.getDate() + 1); // 5 = Friday
-  const end = new Date(cycleYear + 1, 8, 30); // Sep 30 next year
+  const end = new Date(endYear, 8, 30); // Sep 30 of end year
   const fridays = [];
   const cur = new Date(start);
   while (cur <= end) {
@@ -106,21 +113,17 @@ function weekOf(date, fridays) {
   return fridays.length;
 }
 
-const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-
 const MELT_LABEL = 'Melt';
 
 async function mapWithConcurrency(items, limit, fn) {
-  const results = new Array(items.length);
   let cursor = 0;
   const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
     while (cursor < items.length) {
       const i = cursor++;
-      results[i] = await fn(items[i], i);
+      await fn(items[i], i);
     }
   });
   await Promise.all(workers);
-  return results;
 }
 
 // -----------------------------------------------------------------------------
@@ -146,7 +149,7 @@ const getPointInTimeData = async (req, res) => {
       });
     }
 
-    const currentCycle = cycleOf(submissions[submissions.length - 1].submissionDate);
+    const currentCycle = cycleEndYearOf(submissions[submissions.length - 1].submissionDate);
     const years = [currentCycle - 2, currentCycle - 1, currentCycle];
     const yearSet = new Set(years);
 
@@ -176,15 +179,12 @@ const getPointInTimeData = async (req, res) => {
     const stageHeaderName = (allStatuses.find((s) => s.targetHeader) || {}).targetHeader || 'Admissions_Funnel_Stage';
     const stageHeaderId = nameToId[stageHeaderName] || resolveHeaderId(allHeaders, [stageHeaderName]);
 
-    // Deposit-cancel funnel values = Confirmed ∩ Cancelled selectedStatuses (+ hints).
     const confirmedValsNorm = new Set((byName['confirmed']?.selectedStatuses || []).map(norm));
     const depositCancelNorm = new Set(
       (byName['cancelled']?.selectedStatuses || []).map(norm).filter((v) => confirmedValsNorm.has(v))
     );
     DEPOSIT_CANCEL_HINTS.forEach((h) => depositCancelNorm.add(h));
 
-    // One line per configured status. Pre-resolve target header id + an exact-match
-    // Set of its selectedStatuses (same matching calculateStatusStudents uses).
     const KNOWN = [
       { key: 'admitted',     label: 'Admits' },
       { key: 'confirmed',    label: 'Confirmed' },
@@ -223,7 +223,6 @@ const getPointInTimeData = async (req, res) => {
     pushIf('Pending');
     for (const p of plan) if (!stages.includes(p.label)) stages.push(p.label);
 
-    // Header ids we need from each submission sheet (statuses + melt), fetched once.
     const fetchIds = new Set();
     plan.forEach((p) => { if (p.targetHeaderId) fetchIds.add(p.targetHeaderId); });
     if (meltEnabled) {
@@ -233,18 +232,26 @@ const getPointInTimeData = async (req, res) => {
     const fetchIdArr = Array.from(fetchIds);
 
     const perYear = {};
+    const dateByWeek = {};
     years.forEach((y) => {
       perYear[y] = {};
       stages.forEach((st) => { perYear[y][st] = new Array(N).fill(null); });
+      dateByWeek[y] = new Array(N).fill(null);
     });
 
-    const relevant = submissions.filter((s) => yearSet.has(cycleOf(s.submissionDate)));
+    // One submission per (year, week): latest wins (submissions are ASC).
+    const cellByKey = new Map();
+    for (const s of submissions) {
+      const cy = cycleEndYearOf(s.submissionDate);
+      if (!yearSet.has(cy)) continue;
+      const week = weekOf(s.submissionDate, fridaysByYear[cy]);
+      if (!week || week > N) continue;
+      cellByKey.set(`${cy}-${week}`, { sub: s, cy, idx: week - 1 });
+    }
+    const cells = Array.from(cellByKey.values());
 
-    await mapWithConcurrency(relevant, CONCURRENCY, async (sub) => {
-      const cy = cycleOf(sub.submissionDate);
-      const week = weekOf(sub.submissionDate, fridaysByYear[cy]);
-      if (!week || week > N) return;
-      const idx = week - 1;
+    await mapWithConcurrency(cells, CONCURRENCY, async ({ sub, cy, idx }) => {
+      dateByWeek[cy][idx] = ymd(sub.submissionDate);
       const sheetId = sub.selectedSheet;
 
       const matchingRows = await applyPopulationRule(templateId, sheetId, conditions, headers);
@@ -253,7 +260,6 @@ const getPointInTimeData = async (req, res) => {
         return;
       }
 
-      // ONE fetch for everything this submission needs.
       const rows = fetchIdArr.length
         ? await SheetData.findAll({
             where: { sheetId, rowIndex: { [Op.in]: matchingRows }, headerId: { [Op.in]: fetchIdArr } },
@@ -262,7 +268,6 @@ const getPointInTimeData = async (req, res) => {
           })
         : [];
 
-      // rowVals: rowIndex -> { headerId -> value }
       const rowVals = new Map();
       let hasConfData = false;
       for (const r of rows) {
@@ -272,7 +277,6 @@ const getPointInTimeData = async (req, res) => {
         if (meltEnabled && r.headerId === dateHeaderIds.confirmation && parseDate(r.value)) hasConfData = true;
       }
 
-      // Status counts (exact membership match), in memory.
       for (const p of plan) {
         if (!p.targetHeaderId) { perYear[cy][p.label][idx] = 0; continue; }
         let count = 0;
@@ -283,7 +287,6 @@ const getPointInTimeData = async (req, res) => {
         perYear[cy][p.label][idx] = count;
       }
 
-      // Melt from the same rows.
       if (meltEnabled) {
         let melt = 0;
         for (const rowIndex of matchingRows) {
@@ -299,10 +302,9 @@ const getPointInTimeData = async (req, res) => {
       }
     });
 
-    // A submission's count holds until the next submission, so each year's line is
-    // carried forward: once a value is known it fills every later week to the end
-    // (leading weeks, before the first submission, stay null). `<year>_pt` keeps
-    // the real submission values so the chart can dot only the actual data points.
+    // A submission's count holds until the next submission: carry each year's
+    // value forward (leading weeks stay null). `<year>_pt` keeps real values for
+    // dotting; `<year>_date` keeps the real submission date for the tooltip.
     const data = {};
     for (const stage of stages) {
       const filled = {};
@@ -328,6 +330,7 @@ const getPointInTimeData = async (req, res) => {
         for (const year of years) {
           row[String(year)] = filled[year][i];
           row[`${year}_pt`] = points[year][i];
+          row[`${year}_date`] = dateByWeek[year][i]; // actual submission date (real points only)
         }
         data[stage].push(row);
       }
