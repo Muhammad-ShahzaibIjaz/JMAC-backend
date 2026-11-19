@@ -2760,5 +2760,7 @@ module.exports = {
     getPreviousCensusStats,
     getRuleConditionsAndHeaders,
     applyPopulationRule,
-    getSheetIdBySubmissionDate
+    getSheetIdBySubmissionDate,
+    getStatusesByTemplateId,
+    calculateStatusStudents
 };

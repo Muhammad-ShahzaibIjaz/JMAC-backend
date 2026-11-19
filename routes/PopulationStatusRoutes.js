@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const populationStatusController = require('../controllers/PopulationStatusController');
+const pointInTimeController = require('../controllers/pointInTimeController');
 const { verifyToken, verifyUserActive } = require('../middlewares/authMiddleware');
 
 router.post('/save-status', verifyToken, verifyUserActive, populationStatusController.savePopulationStatus);
@@ -22,5 +23,6 @@ router.post('/stealth-headcount-by-year', verifyToken, verifyUserActive, populat
 router.post('/exportable-student-data', verifyToken, verifyUserActive, populationStatusController.getExportableStudentData);
 router.post('/data-by-state-county', verifyToken, verifyUserActive, populationStatusController.getDatabyStateCounty);
 router.post('/previous-census-stats', populationStatusController.getPreviousCensusStats);
+router.post('/point-in-time', verifyToken, verifyUserActive, pointInTimeController.getPointInTimeData);
 
 module.exports = router;
