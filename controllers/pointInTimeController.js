@@ -299,12 +299,36 @@ const getPointInTimeData = async (req, res) => {
       }
     });
 
+    // A submission's count holds until the next submission, so each year's line is
+    // carried forward: once a value is known it fills every later week to the end
+    // (leading weeks, before the first submission, stay null). `<year>_pt` keeps
+    // the real submission values so the chart can dot only the actual data points.
     const data = {};
     for (const stage of stages) {
+      const filled = {};
+      const points = {};
+      for (const year of years) {
+        const src = perYear[year][stage];
+        const f = new Array(N).fill(null);
+        const p = new Array(N).fill(null);
+        let last = null;
+        for (let i = 0; i < N; i++) {
+          const v = src[i];
+          p[i] = v;
+          if (v !== null && v !== undefined) last = v;
+          f[i] = last;
+        }
+        filled[year] = f;
+        points[year] = p;
+      }
+
       data[stage] = [];
       for (let i = 0; i < N; i++) {
         const row = { week: i + 1, date: iso(labelFridays[i]) };
-        for (const year of years) row[String(year)] = perYear[year][stage][i];
+        for (const year of years) {
+          row[String(year)] = filled[year][i];
+          row[`${year}_pt`] = points[year][i];
+        }
         data[stage].push(row);
       }
     }
