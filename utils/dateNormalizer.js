@@ -74,34 +74,43 @@ function isConvertibleSerial(n) {
  * Decide whether a column's number-format code represents a date.
  * Used so we convert date-typed cells even when the header name is not obviously
  * "date-like". Guards against percent / general / plain-number formats.
+ *
+ * IMPORTANT: a raw Excel number-format string contains parts that are NOT
+ * date/number tokens but can still hold the letters d/m/y:
+ *   - bracketed tokens: [Red], [Blue], [$-409], [>100]   ("Red" has a 'd'!)
+ *   - quoted literals:  "$", "Date: "
+ *   - escaped chars:    \( \) \-
+ * The old version tested the whole string for a 'd' or 'y', so a currency
+ * format like  "$"#,##0_);[Red]\("$"#,##0\)  was misread as a DATE because of
+ * the 'd' in [Red]. That turned dollar amounts (14000) into serial dates
+ * (04-30-1938). We now strip those noise parts first, and only look at the
+ * positive section of the format, before testing for real date tokens.
  */
 function isDateNumberFormat(z) {
   if (!z || typeof z !== 'string') return false;
   let fmt = z.trim();
   if (fmt === '' || fmt === 'General' || fmt === '@') return false;
 
-  // Only look at the positive section of the format (Excel sections are
-  // positive;negative;zero;text separated by ';'). The negative section is
-  // where "[Red]" usually lives.
+  // Excel format sections are: positive;negative;zero;text (separated by ';').
+  // Only the positive section describes the normal value; [Red] etc. usually
+  // live in the negative section, so looking at the first section alone already
+  // removes a lot of noise.
   fmt = fmt.split(';')[0];
 
-  // Strip the parts of a format code that are NOT date/number tokens but can
-  // still contain the letters d/m/y:
-  //   - [Red], [Blue], [$-409], [>100] ... bracketed color/locale/condition tokens
-  //   - "literal text"  (e.g. "$", "Date: ")
-  //   - \x escaped single chars (e.g. \( \) )
+  // Remove parts that are not date/number tokens but can contain d/m/y letters.
   fmt = fmt
     .replace(/\[[^\]]*\]/g, '')   // [Red], [$-409], [>0] ...
-    .replace(/"[^"]*"/g, '')      // quoted literals
-    .replace(/\\./g, '');         // escaped chars like \( \)
+    .replace(/"[^"]*"/g, '')      // "quoted literals" like "$"
+    .replace(/\\./g, '');         // escaped single chars: \( \) \-
 
-  if (fmt === '' ) return false;
+  if (fmt === '') return false;
   if (fmt.includes('%')) return false;
 
-  // A currency/number format now has no date letters left ("$"#,##0 -> #,##0).
-  // A real date format keeps its tokens (mm-dd-yyyy, d/m/yy, yyyy ...).
-  // Require a 'd' or 'y' (day/year) AND confirm with the broader d/m/y test —
-  // 'm' alone is ambiguous (minutes), so it can't trigger on its own.
+  // After stripping, a currency/number format has no date letters left
+  // ("$"#,##0 -> #,##0), while a real date format keeps its tokens
+  // (mm-dd-yyyy, d/m/yy, yyyy ...). Require a 'd' (day) or 'y' (year); 'm'
+  // alone is ambiguous (it can mean minutes in a time format), so it is not
+  // allowed to trigger on its own.
   return /[dy]/i.test(fmt) && /[dmy]/i.test(fmt);
 }
 
