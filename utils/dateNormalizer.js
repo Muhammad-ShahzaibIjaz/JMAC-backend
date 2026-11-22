@@ -77,10 +77,31 @@ function isConvertibleSerial(n) {
  */
 function isDateNumberFormat(z) {
   if (!z || typeof z !== 'string') return false;
-  const fmt = z.trim();
+  let fmt = z.trim();
   if (fmt === '' || fmt === 'General' || fmt === '@') return false;
+
+  // Only look at the positive section of the format (Excel sections are
+  // positive;negative;zero;text separated by ';'). The negative section is
+  // where "[Red]" usually lives.
+  fmt = fmt.split(';')[0];
+
+  // Strip the parts of a format code that are NOT date/number tokens but can
+  // still contain the letters d/m/y:
+  //   - [Red], [Blue], [$-409], [>100] ... bracketed color/locale/condition tokens
+  //   - "literal text"  (e.g. "$", "Date: ")
+  //   - \x escaped single chars (e.g. \( \) )
+  fmt = fmt
+    .replace(/\[[^\]]*\]/g, '')   // [Red], [$-409], [>0] ...
+    .replace(/"[^"]*"/g, '')      // quoted literals
+    .replace(/\\./g, '');         // escaped chars like \( \)
+
+  if (fmt === '' ) return false;
   if (fmt.includes('%')) return false;
-  // Must contain date tokens: day or year (month alone can be minutes in time fmts).
+
+  // A currency/number format now has no date letters left ("$"#,##0 -> #,##0).
+  // A real date format keeps its tokens (mm-dd-yyyy, d/m/yy, yyyy ...).
+  // Require a 'd' or 'y' (day/year) AND confirm with the broader d/m/y test —
+  // 'm' alone is ambiguous (minutes), so it can't trigger on its own.
   return /[dy]/i.test(fmt) && /[dmy]/i.test(fmt);
 }
 
