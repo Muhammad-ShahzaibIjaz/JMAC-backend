@@ -10,6 +10,11 @@ const crypto = require("crypto");
 const copySheetData = require("../utils/copySheetData");
 const { desiredOrder } = require("../utils/headerOrderList");
 const { Op, QueryTypes } = require('sequelize');
+const {
+    detectDateColumns,
+    detectDateColumnsByName,
+    normalizeDateColumnsInData,
+} = require("../utils/dateNormalizer");
 
 // ============ HELPER FUNCTIONS ============
 
@@ -47,8 +52,11 @@ async function parseLargeCSV(filePath) {
 }
 
 function readExcelFast(filePath) {
+    // cellNF:true keeps number-format codes so we can detect date columns.
+    // raw stays effectively on (we read values as-is) but we convert dates
+    // ourselves via dateNormalizer rather than relying on SheetJS formatting.
     return XLSX.readFile(filePath, {
-        raw: true, cellDates: false, cellNF: false, cellText: false
+        raw: true, cellDates: false, cellNF: true, cellText: false
     });
 }
 
@@ -70,7 +78,7 @@ function findFirstNonEmptyRow(jsonData, startFrom = 0) {
 
 function processDataRowsFast(jsonData, headerPosition = null, isRowSkipped = false) {
     if (!jsonData || !Array.isArray(jsonData) || jsonData.length < 1) {
-        return { headers: [], data: [] };
+        return { headers: [], data: [], headerRowIndex: -1 };
     }
 
     const baseHeaderRowIndex = headerPosition !== null
@@ -79,7 +87,7 @@ function processDataRowsFast(jsonData, headerPosition = null, isRowSkipped = fal
     const headerRowIndex = baseHeaderRowIndex + (isRowSkipped ? 1 : 0);
 
     if (headerRowIndex === -1 || headerRowIndex >= jsonData.length) {
-        return { headers: [], data: [] };
+        return { headers: [], data: [], headerRowIndex: -1 };
     }
 
     const headers = jsonData[headerRowIndex] || [];
@@ -98,7 +106,7 @@ function processDataRowsFast(jsonData, headerPosition = null, isRowSkipped = fal
         data.push(row);
     }
 
-    return { headers, data };
+    return { headers, data, headerRowIndex };
 }
 
 // ============ CORE MAPPING & MERGING LOGIC ============
@@ -391,6 +399,15 @@ async function headerProcessorFast(files) {
                     data = processed.data;
                 }
 
+                // ---- DATE NORMALIZATION (CSV) ----
+                // CSV has no cell formats, so detect date columns by header name
+                // only, then normalize serials/text dates to MM-DD-YYYY.
+                const csvDateCols = detectDateColumnsByName(headers);
+                if (csvDateCols.size > 0) {
+                    data = normalizeDateColumnsInData(data, csvDateCols);
+                    console.log(`   📅 Normalized ${csvDateCols.size} date column(s) [name-based]`);
+                }
+
                 const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
                 console.log(`   ✅ Extracted ${headers.length} headers and ${data.length} rows in ${elapsed}s`);
 
@@ -411,10 +428,30 @@ async function headerProcessorFast(files) {
                     const processed = processDataRowsFast(jsonData);
 
                     if (processed.headers.length > 0) {
+                        // ---- DATE NORMALIZATION (XLSX) ----
+                        // Detect date columns from the worksheet (header name +
+                        // number format), then normalize to MM-DD-YYYY and strip
+                        // any time component. Unrecoverable foreign-encoded
+                        // integers are left untouched.
+                        let normalizedData = processed.data;
+                        let dateCols;
+                        try {
+                            dateCols = detectDateColumns(
+                                worksheet,
+                                processed.headerRowIndex >= 0 ? processed.headerRowIndex : 0
+                            );
+                        } catch (e) {
+                            dateCols = detectDateColumnsByName(processed.headers);
+                        }
+                        if (dateCols.size > 0) {
+                            normalizedData = normalizeDateColumnsInData(processed.data, dateCols);
+                            console.log(`   📅 Normalized ${dateCols.size} date column(s) in ${sheetName}`);
+                        }
+
                         sheets.push({
                             sheetName,
                             headers: processed.headers,
-                            data: processed.data
+                            data: normalizedData
                         });
                     }
                 }

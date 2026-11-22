@@ -1,6 +1,11 @@
 const XLSX = require('xlsx');
 const fs = require("fs");
 const { v4: uuidv4 } = require("uuid");
+const {
+  detectDateColumns,
+  detectDateColumnsByName,
+  normalizeDateColumnsInData,
+} = require("../utils/dateNormalizer");
 
 function isRowEmpty(row) {
   if (!row || !Array.isArray(row)) return true;
@@ -18,25 +23,26 @@ function findFirstNonEmptyRow(jsonData, startFrom = 0) {
 
 function processDataRows(jsonData, headerOrientation='horizontal', headerPosition=null, isRowSkipped=false ,maxConsecutiveEmptyRows=10) {
   if (!jsonData || !Array.isArray(jsonData) || jsonData.length < 1) {
-    return { headers: [], data: [] };
+    return { headers: [], data: [], headerRowIndex: -1 };
   }
 
   let headers = [];
   let data = [];
+  let headerRowIndex = -1;
 
   if (headerOrientation === 'horizontal') {
     // Handle horizontal headers (normal row)
     console.time("Finding header row");
     const baseHeaderRowIndex = headerPosition !== null ? Number(headerPosition) : findFirstNonEmptyRow(jsonData);
     console.timeEnd("Finding header row");
-    const headerRowIndex = baseHeaderRowIndex + (isRowSkipped ? 1 : 0);
-    
+    headerRowIndex = baseHeaderRowIndex + (isRowSkipped ? 1 : 0);
+
     if (headerRowIndex === -1 || headerRowIndex >= jsonData.length || !Array.isArray(jsonData[headerRowIndex])) {
-      return { headers: [], data: [] };
+      return { headers: [], data: [], headerRowIndex: -1 };
     }
 
     headers = jsonData[headerRowIndex].filter(cell => cell !== null && cell !== undefined);
-    
+
     // Process data rows
     console.time("Processing data rows");
     let consecutiveEmptyRows = 0;
@@ -67,14 +73,14 @@ function processDataRows(jsonData, headerOrientation='horizontal', headerPositio
     const headerColIndex = baseHeaderColIndex + (isRowSkipped ? 1 : 0);
 
     if (headerColIndex === -1 || headerColIndex >= jsonData[0].length) {
-      return { headers: [], data: [] };
+      return { headers: [], data: [], headerRowIndex: -1 };
     }
- 
+
     // Extract headers from the effective column
     headers = jsonData
       .map(row => Array.isArray(row) ? row[headerColIndex] : null)
       .filter(h => h != null);
-    
+
     // Process data columns
     console.time("Processing data columns");
     for (let col = headerColIndex + 1; col < jsonData[0].length; col++) {
@@ -86,9 +92,10 @@ function processDataRows(jsonData, headerOrientation='horizontal', headerPositio
     console.timeEnd("Processing data columns");
   }
 
-  return { 
+  return {
     headers,
-    data
+    data,
+    headerRowIndex, // exposed so the caller can detect date columns from the worksheet
   };
 }
 
@@ -102,14 +109,21 @@ async function headerProcessor(files, headerOrientation='horizontal', headerPosi
     }
 
     try {
-      // Read file from disk
+      // Read file from disk.
+      //
+      // IMPORTANT: we read WITHOUT raw:true and WITH cellNF:true so that:
+      //   - SheetJS preserves each cell's number-format code (cell.z), which we
+      //     use to reliably detect date columns, and
+      //   - date values arrive as real numbers/strings we can normalize.
+      // Date normalization itself (serial -> MM-DD-YYYY, time stripping) is done
+      // explicitly below via dateNormalizer, NOT left to SheetJS formatting.
       let workbook;
       console.time(`Processing ${file.originalname}`);
       if (file.originalname.endsWith(".csv")) {
         const csvData = fs.readFileSync(file.path, "utf8");
         workbook = XLSX.read(csvData, { type: "string", raw: true });
       } else {
-        workbook = XLSX.readFile(file.path);
+        workbook = XLSX.readFile(file.path, { cellNF: true, cellText: false });
       }
       console.timeEnd(`Processing ${file.originalname}`);
 
@@ -123,18 +137,39 @@ async function headerProcessor(files, headerOrientation='horizontal', headerPosi
           return null;
         }
         console.time(`Extracting data from sheet ${sheetName} in ${file.originalname}`);
-        const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: null, raw: false});
+        // raw:true keeps Excel serials as numbers so we can convert them ourselves.
+        const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: null, raw: true });
         console.timeEnd(`Extracting data from sheet ${sheetName} in ${file.originalname}`);
         console.time(`Processing data from sheet ${sheetName} in ${file.originalname}`);
-        const { headers, data } = processDataRows(jsonData, headerOrientation, headerPosition, isRowSkipped);
+        const { headers, data, headerRowIndex } = processDataRows(jsonData, headerOrientation, headerPosition, isRowSkipped);
         console.timeEnd(`Processing data from sheet ${sheetName} in ${file.originalname}`);
-        console.log(`Extracted ${headers.length} headers and ${data.length} data rows from sheet ${sheetName} in ${file.originalname}`);
+
+        // ---- DATE NORMALIZATION ----
+        // Detect date columns from the worksheet (header name + number format),
+        // then normalize every date cell to MM-DD-YYYY (dropping any time part).
+        // Only applies to horizontal sheets, where columns map 1:1 to data cols.
+        let normalizedData = data;
+        if (headerOrientation === 'horizontal' && headers.length > 0) {
+          let dateCols;
+          try {
+            dateCols = detectDateColumns(worksheet, headerRowIndex >= 0 ? headerRowIndex : 0);
+          } catch (e) {
+            // Fallback to name-only detection if worksheet scan fails
+            dateCols = detectDateColumnsByName(headers);
+          }
+          if (dateCols.size > 0) {
+            normalizedData = normalizeDateColumnsInData(data, dateCols);
+            console.log(`Normalized ${dateCols.size} date column(s) in sheet ${sheetName} of ${file.originalname}`);
+          }
+        }
+
+        console.log(`Extracted ${headers.length} headers and ${normalizedData.length} data rows from sheet ${sheetName} in ${file.originalname}`);
         return {
           sheetName,
           headers,
-          data: headers.length > 0 ? data : [],
+          data: headers.length > 0 ? normalizedData : [],
         };
-      }).filter((sheet) => sheet.headers.length > 0);
+      }).filter((sheet) => sheet && sheet.headers.length > 0);
 
       if (sheets.length === 0) {
         throw new Error(`No valid sheets with headers found in ${file.originalname}`);
