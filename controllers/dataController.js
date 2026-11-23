@@ -4600,46 +4600,58 @@ async function calculateAwards(templateId, sheetId, acceptedStatuses, logCtx) {
       let fnflTotal = 0;
       let hasFNFLFlag = false;
 
-      // Process a single award slot: pattern-match, accumulate sums + FNFL.
-      // Returns true if the slot held a REAL (accepted, numeric, non-zero) award.
-      const processSlot = (i) => {
+      // Read a slot into { cd, amt } if it's an accepted, numeric award;
+      // otherwise null. Shared by the FNFL scan and the award-sum passes.
+      const readSlot = (i) => {
         const cd = rowData[headerMap[`Awd_CR${i}`]];
         const amtRaw = rowData[headerMap[`Awd_Amt${i}`]];
         const status = rowData[headerMap[`Awd_Status${i}`]];
 
-        if (!cd || !acceptedStatusSet.has(status?.toLowerCase())) return false;
+        if (!cd || !acceptedStatusSet.has(status?.toLowerCase())) return null;
 
         const amt = parseFloat(amtRaw);
-        if (isNaN(amt)) return false;
+        if (isNaN(amt)) return null;
+
+        return { cd, amt };
+      };
+
+      // Award-sum accumulation for one slot. Returns true if it held a REAL
+      // (non-zero) award. FNFL is handled separately in its own scan below.
+      const processSlot = (i) => {
+        const slot = readSlot(i);
+        if (!slot) return false;
 
         for (const [awardName, pattern] of Object.entries(awardTypePatterns)) {
-          if (pattern.test(cd)) {
-            awardSums[awardName] += amt;
-            globalAwardSums[awardName] += amt;
+          if (pattern.test(slot.cd)) {
+            awardSums[awardName] += slot.amt;
+            globalAwardSums[awardName] += slot.amt;
           }
         }
 
-        if (/^FNFL$/.test(cd)) {
-          fnflTotal += amt;
-          hasFNFLFlag = true;
-        }
-
-        return amt !== 0;
+        return slot.amt !== 0;
       };
 
-      // ── Pass 1: regular awards, slots 1–19 ──────────────────────────────
-      let hasLowerAward = false;
-      for (let i = 1; i <= 19; i++) {
-        if (processSlot(i)) hasLowerAward = true;
+      // ── FNFL: always scanned across ALL slots 1–23, independent of the
+      // award gate. FNFL must be found whether the upper or lower block wins.
+      for (let i = 1; i <= 23; i++) {
+        const slot = readSlot(i);
+        if (slot && /^FNFL$/.test(slot.cd)) {
+          fnflTotal += slot.amt;
+          hasFNFLFlag = true;
+        }
       }
 
-      // ── Pass 2: IMUG block, slots 20–23 ─────────────────────────────────
-      // Per Jen: only count the IMUG when the student has NO real award in
-      // 1–19 (all zero/null). If 1–19 already has amounts, skip 20–23 so we
-      // don't double-award. When counted, these flow into the merit/need
-      // totals through the same awardTypePatterns matching.
-      if (!hasLowerAward) {
-        for (let i = 20; i <= 23; i++) {
+      // ── Pass 1: UPPER block, slots 21–23 (primary) ───────────────────────
+      let hasUpperAward = false;
+      for (let i = 21; i <= 23; i++) {
+        if (processSlot(i)) hasUpperAward = true;
+      }
+
+      // ── Pass 2: LOWER block, slots 1–20 (fallback) ───────────────────────
+      // Only counted when there is NO real award in 21–23, so we don't
+      // double-award. FNFL above is unaffected by this gate.
+      if (!hasUpperAward) {
+        for (let i = 1; i <= 20; i++) {
           processSlot(i);
         }
       }
