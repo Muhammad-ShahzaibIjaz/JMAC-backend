@@ -812,7 +812,7 @@ const getStatusesByTemplateId = async (templateId) => {
 
 const getAwardsByTemplateId = async (templateId, sheetIds = []) => {
   try {
-    const headerKeys = Array.from({ length: 20 }, (_, i) => `Awd_Cd${i + 1}`);
+    const headerKeys = Array.from({ length: 23 }, (_, i) => `Awd_Cd${i + 1}`);
 
     const headers = await Header.findAll({
       where: {
@@ -1614,9 +1614,9 @@ const getFAFSAFilerSummary = async (req, res) => {
 
 const getAwardAmountsByTemplateId = async (templateId, rowIndexes = []) => {
   try {
-    const awardKeys = Array.from({ length: 20 }, (_, i) => `Awd_Cd${i + 1}`);
-    const amountKeys = Array.from({ length: 20 }, (_, i) => `Awd_Amt${i + 1}`);
-    const statusKeys = Array.from({ length: 20 }, (_, i) => `Awd_Status${i + 1}`);
+    const awardKeys = Array.from({ length: 23 }, (_, i) => `Awd_Cd${i + 1}`);
+    const amountKeys = Array.from({ length: 23 }, (_, i) => `Awd_Amt${i + 1}`);
+    const statusKeys = Array.from({ length: 23 }, (_, i) => `Awd_Status${i + 1}`);
 
     const headers = await Header.findAll({
       where: {
@@ -1654,7 +1654,7 @@ const getAwardAmountsByTemplateId = async (templateId, rowIndexes = []) => {
     const awardStats = {};
 
     for (const rowIndex of rowIndexes) {
-      for (let i = 0; i < 20; i++) {
+      for (let i = 0; i < 23; i++) {
         const cdKey = `Awd_Cd${i + 1}`;
         const amtKey = `Awd_Amt${i + 1}`;
         const statusKey = `Awd_Status${i + 1}`;

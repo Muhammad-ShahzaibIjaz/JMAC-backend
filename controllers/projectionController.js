@@ -212,9 +212,9 @@ const getAverageRevenueAndDiscount = async (templateId, sheetId, enrolledRowInde
 
 const getGiftAndLoanTotals = async (templateId, sheetId, enrolledRowIndexes) => {
   // Step 1: Build header names dynamically
-  const crHeaders = Array.from({ length: 20 }, (_, i) => `Awd_CR${i + 1}`);
-  const statusHeaders = Array.from({ length: 20 }, (_, i) => `Awd_Status${i + 1}`);
-  const amtHeaders = Array.from({ length: 20 }, (_, i) => `Awd_Amt${i + 1}`);
+  const crHeaders = Array.from({ length: 23 }, (_, i) => `Awd_CR${i + 1}`);
+  const statusHeaders = Array.from({ length: 23 }, (_, i) => `Awd_Status${i + 1}`);
+  const amtHeaders = Array.from({ length: 23 }, (_, i) => `Awd_Amt${i + 1}`);
 
   const allHeaders = [...crHeaders, ...statusHeaders, ...amtHeaders];
 
@@ -265,7 +265,7 @@ const getGiftAndLoanTotals = async (templateId, sheetId, enrolledRowIndexes) => 
   let totalWorkAndLoan = 0;
 
   for (const [rowIndex, data] of Object.entries(rowMap)) {
-    for (let i = 1; i <= 20; i++) {
+    for (let i = 1; i <= 23; i++) {
       const status = (data[`Awd_Status${i}`] || '').trim();
       const cr = (data[`Awd_CR${i}`] || '').trim();
       const amt = parseFloat(data[`Awd_Amt${i}`]);

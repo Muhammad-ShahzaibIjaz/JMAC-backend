@@ -34,8 +34,8 @@ const SUM_METRICS = [
 
 const NON_GIFT_AID_KEY = 'avgNonGiftAid';
 const FEDERAL_WORK_AID_HEADER = 'Total_Federal_Work_Aid';
-const AWARD_CODE_HEADERS = Array.from({ length: 20 }, (_, i) => `Awd_CR${i + 1}`);
-const AWARD_AMOUNT_HEADERS = Array.from({ length: 20 }, (_, i) => `Awd_Amt${i + 1}`);
+const AWARD_CODE_HEADERS = Array.from({ length: 23 }, (_, i) => `Awd_CR${i + 1}`);
+const AWARD_AMOUNT_HEADERS = Array.from({ length: 23 }, (_, i) => `Awd_Amt${i + 1}`);
 
 
 // A key may combine several patterns (Other Gift).

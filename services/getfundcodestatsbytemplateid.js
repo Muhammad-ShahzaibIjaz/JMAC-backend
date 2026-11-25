@@ -43,9 +43,9 @@ const getFundCodeStatsByTemplateId = async (templateId, rowIndexes = []) => {
   try {
     if (!rowIndexes.length) return emptyStats();
 
-    const crKeys = Array.from({ length: 20 }, (_, i) => `Awd_CR${i + 1}`);
-    const amountKeys = Array.from({ length: 20 }, (_, i) => `Awd_Amt${i + 1}`);
-    const statusKeys = Array.from({ length: 20 }, (_, i) => `Awd_Status${i + 1}`);
+    const crKeys = Array.from({ length: 23 }, (_, i) => `Awd_CR${i + 1}`);
+    const amountKeys = Array.from({ length: 23 }, (_, i) => `Awd_Amt${i + 1}`);
+    const statusKeys = Array.from({ length: 23 }, (_, i) => `Awd_Status${i + 1}`);
 
     const headers = await Header.findAll({
       where: {

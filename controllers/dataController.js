@@ -4632,7 +4632,7 @@ async function calculateAwards(templateId, sheetId, acceptedStatuses, logCtx) {
       };
 
       // ── FNFL: always scanned across ALL slots 1–23, independent of the
-      // award gate. FNFL must be found whether the upper or lower block wins.
+      // award gate. FNFL must be found whether the lower or upper block wins.
       for (let i = 1; i <= 23; i++) {
         const slot = readSlot(i);
         if (slot && /^FNFL$/.test(slot.cd)) {
@@ -4641,17 +4641,20 @@ async function calculateAwards(templateId, sheetId, acceptedStatuses, logCtx) {
         }
       }
 
-      // ── Pass 1: UPPER block, slots 21–23 (primary) ───────────────────────
-      let hasUpperAward = false;
-      for (let i = 21; i <= 23; i++) {
-        if (processSlot(i)) hasUpperAward = true;
+      // ── Pass 1: LOWER block, slots 1–20 (primary) ────────────────────────
+      // If the student has any real award here, this is what we use.
+      let hasLowerAward = false;
+      for (let i = 1; i <= 20; i++) {
+        if (processSlot(i)) hasLowerAward = true;
       }
 
-      // ── Pass 2: LOWER block, slots 1–20 (fallback) ───────────────────────
-      // Only counted when there is NO real award in 21–23, so we don't
-      // double-award. FNFL above is unaffected by this gate.
-      if (!hasUpperAward) {
-        for (let i = 1; i <= 20; i++) {
+      // ── Pass 2: UPPER block, slots 21–23 (fallback) ──────────────────────
+      // Only counted when there is NO real award in 1–20, so we don't
+      // double-award. (Per Dan: if the student has a regular award in 1–20,
+      // ignore 21–23; only use 21–23 when 1–20 is empty.) FNFL above is
+      // unaffected by this gate.
+      if (!hasLowerAward) {
+        for (let i = 21; i <= 23; i++) {
           processSlot(i);
         }
       }
@@ -6709,7 +6712,7 @@ async function evaluatePellRowsSmart({ templateId, sheetId, pellSource, criteria
     const pellHeaders = [];
     const statusHeaders = [];
 
-    for (let i = 1; i <= 20; i++) {
+    for (let i = 1; i <= 23; i++) {
       const pellName = `Awd_${pellSource}${i}`;
       const statusName = `Awd_Status${i}`;
 
@@ -6986,7 +6989,7 @@ async function getNullAwardRows(templateId, sheetId) {
     const awardHeaders = await Header.findAll({
       where: {
         templateId,
-        name: Array.from({ length: 20 }, (_, i) => `Awd_Cd${i + 1}`)
+        name: Array.from({ length: 23 }, (_, i) => `Awd_Cd${i + 1}`)
       },
       transaction
     });
@@ -7266,7 +7269,7 @@ async function getAllStatusValues(req, res) {
     }
 
     // Build header names dynamically: Awd_Status1 ... Awd_Status20
-    const headerNames = Array.from({ length: 20 }, (_, i) => `Awd_Status${i + 1}`);
+    const headerNames = Array.from({ length: 23 }, (_, i) => `Awd_Status${i + 1}`);
 
     const result = await SheetData.findAll({
       attributes: ['value'],
